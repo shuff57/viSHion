@@ -1,0 +1,5 @@
+bakeoff/bin/
+bakeoff/models/
+bakeoff/out/
+bakeoff/truth.json
+bakeoff/photos/

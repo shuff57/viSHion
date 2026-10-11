@@ -1,0 +1,1755 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<title>Handwriting OCR</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%232F6BEA'/%3E%3Cpath d='M9 22c3-1 4-9 7-9s2 8 7 7' fill='none' stroke='white' stroke-width='2.4' stroke-linecap='round'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/regular/style.css">
+<script src="https://cdn.jsdelivr.net/npm/markdown-it@14.1.0/dist/markdown-it.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
+<style>
+  /* Calm workbench. One accent, one radius scale (10 controls, 16 surfaces), system theme by default. */
+  body {
+    color-scheme: dark;
+    --bg: #111113;
+    --surface: #1a1a1d;
+    --raised: #242428;
+    --sunken: #151517;
+    --fg: #f2f2f4;
+    --muted: #a8a8b0;
+    --dim: #8a8a93;
+    --line: rgba(255,255,255,.09);
+    --line-strong: rgba(255,255,255,.22);
+    --accent: #6aa1ff;
+    --on-accent: #0a1020;
+    --warn: #e0b45c;
+    --shadow: 0 1px 0 rgba(255,255,255,.04) inset, 0 12px 32px rgba(0,0,0,.35);
+    --r-ctl: 10px;
+    --r-box: 16px;
+    --ease: cubic-bezier(.16, 1, .3, 1);
+  }
+  @media (prefers-color-scheme: light) {
+    body:not(.dark) {
+      color-scheme: light;
+      --bg: #f4f4f6;
+      --surface: #ffffff;
+      --raised: #eeeef1;
+      --sunken: #f8f8fa;
+      --fg: #16161a;
+      --muted: #55555e;
+      --dim: #686872;
+      --line: rgba(0,0,0,.09);
+      --line-strong: rgba(0,0,0,.26);
+      --accent: #2f6bea;
+      --on-accent: #ffffff;
+      --warn: #8a6410;
+      --shadow: 0 1px 2px rgba(20,20,30,.06), 0 12px 32px rgba(20,20,30,.08);
+    }
+  }
+  body.light {
+    color-scheme: light;
+    --bg: #f4f4f6;
+    --surface: #ffffff;
+    --raised: #eeeef1;
+    --sunken: #f8f8fa;
+    --fg: #16161a;
+    --muted: #55555e;
+    --dim: #686872;
+    --line: rgba(0,0,0,.09);
+    --line-strong: rgba(0,0,0,.26);
+    --accent: #2f6bea;
+    --on-accent: #ffffff;
+    --warn: #8a6410;
+    --shadow: 0 1px 2px rgba(20,20,30,.06), 0 12px 32px rgba(20,20,30,.08);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; height: 100vh; height: 100dvh; overflow: hidden;
+    font-family: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
+    font-size: 14px; line-height: 1.45;
+    background: var(--bg); color: var(--fg);
+    -webkit-font-smoothing: antialiased;
+  }
+  button, select, input, textarea { font: inherit; color: inherit; }
+  button { cursor: pointer; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  [hidden] { display: none !important; }
+
+  /* shared controls */
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    background: var(--raised); color: var(--fg); border: 1px solid var(--line);
+    border-radius: var(--r-ctl); padding: 7px 13px; font-size: 13px; font-weight: 500;
+    transition: background .15s, border-color .15s, transform .12s var(--ease), opacity .15s;
+  }
+  .btn:hover { border-color: var(--line-strong); }
+  .btn:active { transform: scale(.97); }
+  .btn:disabled { color: var(--dim); cursor: not-allowed; opacity: .6; transform: none; }
+  .btn.primary { background: var(--accent); color: var(--on-accent); border-color: transparent; font-weight: 600; }
+  .btn.primary:hover { filter: brightness(1.06); }
+  .btn.primary:disabled { background: var(--raised); color: var(--dim); opacity: .7; }
+  .btn.ghost { background: transparent; border-style: dashed; border-color: var(--line-strong); color: var(--muted); }
+  .btn.ghost:hover { color: var(--fg); border-color: var(--accent); }
+  .btn.small { padding: 5px 10px; font-size: 12px; }
+  input, select, textarea {
+    background: var(--sunken); border: 1px solid var(--line-strong);
+    border-radius: var(--r-ctl); padding: 8px 10px; font-size: 13px; width: 100%;
+    transition: border-color .15s;
+  }
+  input:hover, select:hover, textarea:hover { border-color: var(--muted); }
+  .hint { font-size: 12px; color: var(--dim); }
+  .label { font-size: 12.5px; font-weight: 600; color: var(--muted); margin: 10px 0 0; }
+
+  #app { display: flex; height: 100%; }
+
+  /* rail */
+  #rail {
+    width: 56px; flex: 0 0 56px; display: flex; flex-direction: column; align-items: center;
+    padding: 12px 0; gap: 6px; border-right: 1px solid var(--line); background: var(--bg);
+  }
+  .rail-btn {
+    width: 38px; height: 38px; border-radius: var(--r-ctl); border: 0; background: transparent;
+    color: var(--muted); font-size: 20px; display: flex; align-items: center; justify-content: center; padding: 0;
+    transition: background .15s, color .15s, transform .12s var(--ease);
+  }
+  .rail-btn:hover, .rail-btn.active { background: var(--raised); color: var(--fg); }
+  .rail-btn:active { transform: scale(.94); }
+  .rail-spacer { flex: 1; }
+
+  /* drawer */
+  #drawer {
+    width: 288px; flex: 0 0 288px; background: var(--surface); border-right: 1px solid var(--line);
+    display: flex; flex-direction: column; overflow: hidden;
+    transition: width .28s var(--ease), flex-basis .28s var(--ease);
+  }
+  body.drawer-closed #drawer { width: 0; flex-basis: 0; border-right: 0; }
+  .drawer-inner { width: 288px; display: flex; flex-direction: column; height: 100%; padding: 14px; gap: 8px; overflow-y: auto; }
+  #newSession { justify-content: flex-start; width: 100%; }
+  #sessionList { display: flex; flex-direction: column; gap: 2px; }
+  .sess {
+    display: flex; align-items: center; gap: 6px; padding: 8px 10px; border-radius: var(--r-ctl);
+    cursor: pointer; font-size: 13px; color: var(--muted); border: 1px solid transparent;
+    transition: background .15s, color .15s;
+  }
+  .sess:hover { background: var(--raised); color: var(--fg); }
+  .sess.active { background: var(--raised); color: var(--fg); border-color: var(--line); }
+  .sess .sess-main { flex: 1; min-width: 0; }
+  .sess .sess-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sess .sess-del {
+    background: transparent; border: 0; color: var(--dim); font-size: 15px; line-height: 1;
+    padding: 2px 6px; border-radius: 6px; visibility: hidden;
+  }
+  .sess:hover .sess-del, .sess .sess-del:focus-visible { visibility: visible; }
+  .sess .sess-del:hover { color: var(--fg); background: var(--sunken); }
+  #prompt { resize: vertical; min-height: 96px; line-height: 1.5; }
+  #topicEditor {
+    display: flex; flex-direction: column; gap: 8px;
+    padding: 10px; border: 1px solid var(--line); border-radius: var(--r-ctl); background: var(--sunken);
+  }
+  #topicsJson { min-height: 140px; font-family: Consolas, "Cascadia Mono", monospace; font-size: 12px; }
+  #topicEditor .row { display: flex; gap: 8px; }
+  .drawer-foot { margin-top: auto; padding-top: 10px; border-top: 1px solid var(--line); }
+
+  /* main */
+  #main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  #tabs { display: flex; gap: 6px; padding: 12px 16px 4px; overflow-x: auto; flex: 0 0 auto; }
+  #tabs:empty { display: none; }
+  .tab {
+    display: inline-flex; align-items: center; gap: 6px; padding: 6px 11px;
+    background: transparent; border: 1px solid var(--line); border-radius: var(--r-ctl);
+    font-size: 12.5px; color: var(--muted); white-space: nowrap; max-width: 230px;
+    cursor: pointer; transition: background .15s, color .15s, border-color .15s;
+  }
+  .tab:hover { color: var(--fg); background: var(--surface); }
+  .tab.active { color: var(--fg); background: var(--surface); border-color: var(--line-strong); }
+  .tab .tab-name { overflow: hidden; text-overflow: ellipsis; }
+  .tab .tab-x { background: transparent; border: 0; color: var(--dim); font-size: 14px; line-height: 1; padding: 0 3px; border-radius: 4px; }
+  .tab .tab-x:hover { color: var(--fg); }
+  #content { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 8px 16px 16px; }
+
+  /* hero + drop */
+  #hero {
+    flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 8px; padding-bottom: 6vh; text-align: center;
+  }
+  #hero h1 { font-size: 34px; font-weight: 650; letter-spacing: -.02em; line-height: 1.1; margin: 0; }
+  #hero .sub { font-size: 15px; color: var(--muted); margin: 0 0 20px; max-width: 52ch; }
+  #drop {
+    width: 100%; max-width: 720px; min-height: 190px; border-radius: var(--r-box);
+    background: var(--surface); border: 1.5px dashed var(--line-strong);
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px;
+    cursor: pointer; padding: 28px; box-shadow: var(--shadow);
+    transition: border-color .2s, background .2s, transform .35s var(--ease);
+  }
+  #drop:hover { border-color: var(--accent); }
+  #drop.drag { border-color: var(--accent); border-style: solid; transform: scale(1.015); background: var(--raised); }
+  #drop .drop-icon { font-size: 34px; color: var(--accent); line-height: 1; }
+  #drop .drop-main { font-size: 15px; font-weight: 600; }
+  #drop .drop-sub { font-size: 12.5px; color: var(--dim); max-width: 56ch; }
+
+  /* workspace */
+  #workspace { flex: 1; min-height: 0; display: none; flex-direction: column; gap: 12px; }
+  #workspace.on { display: flex; }
+  #stage { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; flex: 1; min-height: 0; }
+  @media (max-width: 900px) { #stage { grid-template-columns: 1fr; } }
+  .pane {
+    background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-box);
+    display: flex; flex-direction: column; min-width: 0; overflow: hidden; box-shadow: var(--shadow);
+  }
+  .pane-head {
+    font-size: 13px; font-weight: 600; padding: 11px 14px; border-bottom: 1px solid var(--line);
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  }
+  .pane-head .grow { flex: 1; }
+  .chip {
+    background: var(--raised); color: var(--muted); border-radius: 8px;
+    font-size: 11.5px; font-weight: 500; padding: 3px 8px;
+  }
+  .pane-body { flex: 1; overflow-y: auto; min-height: 0; }
+
+  #docPaneBody { flex: 1; overflow: hidden; min-height: 0; position: relative; cursor: pointer; background: var(--sunken); }
+  #preview { width: 100%; height: 100%; object-fit: contain; display: none; background: var(--sunken); position: relative; z-index: 1; }
+  #docEmpty {
+    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    text-align: center; padding: 24px; color: var(--dim); font-size: 13px; z-index: 0;
+  }
+  #boxOverlay { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 4; display: none; }
+  #docPaneBody.hasimg #boxOverlay, #docPaneBody.hovering #boxOverlay { display: block; }
+  #replaceBtn {
+    position: absolute; right: 12px; bottom: 12px; display: none; z-index: 5;
+    box-shadow: var(--shadow);
+  }
+  #docPaneBody.hasimg:hover #replaceBtn { display: inline-flex; }
+
+  /* transcript */
+  #transcript {
+    padding: 16px 18px; font-size: 15px; line-height: 1.7; color: var(--fg); width: 100%; max-width: 100%;
+  }
+  #transcript:empty::before { content: "The transcript appears here once you press Transcribe."; color: var(--dim); font-size: 13px; }
+  #transcript > * { max-width: 100%; }
+  #transcript p { margin: 6px 0; white-space: pre-wrap; word-break: break-word; }
+  #transcript h1 { font-size: 22px; font-weight: 650; margin: 16px 0 8px; border-bottom: 1px solid var(--line); padding-bottom: 6px; }
+  #transcript h2 { font-size: 18px; font-weight: 600; margin: 14px 0 6px; }
+  #transcript h3 { font-size: 15px; font-weight: 600; margin: 12px 0 4px; }
+  #transcript strong { font-weight: 700; }
+  #transcript em { font-style: italic; }
+  #transcript del { text-decoration: line-through; color: var(--dim); }
+  #transcript code { font-family: Consolas, "Cascadia Mono", monospace; font-size: .88em; background: var(--raised); padding: 1px 5px; border-radius: 6px; }
+  #transcript pre { max-width: 100%; overflow-x: auto; background: var(--raised); padding: 12px 16px; border-radius: var(--r-ctl); font-family: Consolas, "Cascadia Mono", monospace; font-size: .88em; line-height: 1.6; margin: 8px 0; border: 1px solid var(--line); }
+  #transcript pre code { background: none; padding: 0; }
+  #transcript blockquote { border-left: 3px solid var(--accent); margin: 8px 0; padding: 4px 16px; color: var(--muted); font-style: italic; }
+  #transcript ul, #transcript ol { padding-left: 24px; margin: 6px 0; }
+  #transcript li { margin: 3px 0; }
+  #transcript li::marker { color: var(--dim); }
+  #transcript hr { border: none; border-top: 1px solid var(--line); margin: 14px 0; }
+  #transcript table { border-collapse: collapse; margin: 10px 0; font-size: .9em; width: 100%; }
+  #transcript th, #transcript td { border: 1px solid var(--line); padding: 5px 10px; text-align: left; }
+  #transcript th { background: var(--raised); font-weight: 600; }
+  #transcript .ocr-textline { cursor: pointer; padding: 1px 3px; border-radius: 4px; transition: background .12s; }
+  #transcript .ocr-textline:hover, #transcript .ocr-textline.active { background: color-mix(in srgb, var(--accent) 16%, transparent); }
+  #transcript .katex { font-size: 1.1em; }
+  #transcript .katex-display { margin: 12px 0; padding: 10px; background: var(--raised); border-radius: var(--r-ctl); overflow-x: auto; border: 1px solid var(--line); }
+  #transcript .katex-display .katex { font-size: 1.3em; }
+  #transcript .katex-error { color: var(--warn); font-family: Consolas, monospace; font-size: .85em; background: var(--raised); padding: 2px 6px; border-radius: 6px; }
+
+  #suggest {
+    display: flex; flex-direction: column; gap: 8px;
+    padding: 10px 14px; border-bottom: 1px solid var(--line); background: var(--raised); font-size: 12.5px;
+  }
+  .sug-row { display: flex; align-items: center; gap: 8px; font-family: Consolas, "Cascadia Mono", monospace; flex-wrap: wrap; }
+  .sug-row button { padding: 3px 10px; font-size: 11.5px; font-weight: 600; border-radius: 8px; }
+  .sug-apply { background: var(--accent); color: var(--on-accent); border: 0; }
+  .sug-dismiss { background: var(--sunken); color: var(--muted); border: 1px solid var(--line); }
+  .sug-word { color: var(--warn); }
+  .sug-term { color: var(--fg); font-weight: 700; }
+  .sug-conf { color: var(--accent); }
+  #transcriptFoot { padding: 10px 14px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; border-top: 1px solid var(--line); }
+  #stats { font-size: 12px; color: var(--muted); font-family: Consolas, "Cascadia Mono", monospace; }
+
+  /* action bar */
+  #actionbar {
+    position: relative; overflow: hidden;
+    display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+    background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-box);
+    padding: 10px 12px; box-shadow: var(--shadow);
+  }
+  #actionbar .sep { width: 1px; align-self: stretch; background: var(--line); margin: 2px 4px; }
+  #pageGroup { display: flex; align-items: center; gap: 6px; }
+  #pageGroup .bnav { padding: 6px 8px; font-size: 16px; }
+  #batchPos { font-size: 12.5px; color: var(--muted); font-weight: 600; white-space: nowrap; padding: 0 4px; }
+  #batchDots { display: flex; gap: 5px; align-items: center; margin-left: 4px; }
+  .bdot { width: 8px; height: 8px; border-radius: 50%; background: transparent; border: 1.5px solid var(--line-strong); padding: 0; cursor: pointer; transition: transform .2s var(--ease), background .2s; }
+  .bdot:hover { transform: scale(1.3); }
+  .bdot.done { background: var(--muted); border-color: var(--muted); }
+  .bdot.cur { background: var(--accent); border-color: var(--accent); }
+  #status { font-size: 12.5px; color: var(--muted); margin-left: auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* indeterminate bar while a transcription runs (run button is disabled for the duration) */
+  #actionbar::after {
+    content: ""; position: absolute; left: 0; bottom: 0; height: 2px; width: 100%;
+    background: var(--accent); transform: scaleX(0); transform-origin: left; opacity: 0;
+  }
+  #actionbar:has(#run:disabled)::after { opacity: 1; transform: scaleX(.25); }
+
+  /* settings */
+  #settingsOverlay {
+    position: fixed; inset: 0; background: rgba(8,8,12,.55); z-index: 50;
+    display: flex; align-items: center; justify-content: center; backdrop-filter: blur(4px);
+  }
+  #settingsCard {
+    background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-box);
+    width: 460px; max-width: 92vw; max-height: 85vh; overflow-y: auto; padding: 22px;
+    display: flex; flex-direction: column; gap: 14px; box-shadow: var(--shadow);
+  }
+  #settingsCard h2 { font-size: 17px; margin: 0; }
+  .set-row { display: flex; flex-direction: column; gap: 6px; }
+  .set-row label { font-size: 12.5px; font-weight: 600; color: var(--muted); }
+  #settingsClose { align-self: flex-end; }
+  #file { display: none; }
+
+  /* motion: every effect marks a state change or an arrival; all of it drops out under reduced motion */
+  @media (prefers-reduced-motion: no-preference) {
+    @keyframes rise { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
+    @keyframes pop { from { opacity: 0; transform: scale(.96) translateY(8px); } to { opacity: 1; transform: none; } }
+    @keyframes sweep { 0% { transform: translateX(-100%) scaleX(.25); } 100% { transform: translateX(400%) scaleX(.25); } }
+    @keyframes fade { from { opacity: 0; } to { opacity: 1; } }
+    #hero > * { animation: rise .7s var(--ease) both; }
+    #hero > :nth-child(2) { animation-delay: .07s; }
+    #hero > :nth-child(3) { animation-delay: .14s; }
+    #workspace.on .pane { animation: rise .6s var(--ease) both; }
+    #workspace.on .pane:nth-child(2) { animation-delay: .08s; }
+    #workspace.on #actionbar { animation: rise .6s var(--ease) .16s both; }
+    #settingsOverlay:not([hidden]) { animation: fade .18s ease both; }
+    #settingsOverlay:not([hidden]) #settingsCard { animation: pop .32s var(--ease) both; }
+    #actionbar:has(#run:disabled)::after { width: 25%; transform: none; animation: sweep 1.4s ease-in-out infinite; }
+    .sess, .tab { animation: fade .25s ease both; }
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <aside id="rail">
+    <button id="menuBtn" class="rail-btn active" title="Toggle sidebar" aria-label="Toggle sidebar"><i class="ph ph-sidebar-simple"></i></button>
+    <div class="rail-spacer"></div>
+    <button id="gearBtn" class="rail-btn" title="Settings" aria-label="Settings"><i class="ph ph-gear-six"></i></button>
+  </aside>
+  <aside id="drawer">
+    <div class="drawer-inner">
+      <button id="newSession" class="btn"><i class="ph ph-plus"></i> New session</button>
+      <div class="label">Sessions</div>
+      <div id="sessionList"></div>
+      <div class="label">Topic</div>
+      <select id="topicSelect" aria-label="Topic"></select>
+      <div id="topicHint" class="hint"></div>
+      <div id="topicEditor" hidden>
+        <div class="hint">Edit topics as JSON: {"Name": {"description": "...", "terms": ["..."]}}</div>
+        <textarea id="topicsJson" spellcheck="false" aria-label="Topics JSON"></textarea>
+        <div class="row">
+          <button id="topicSave" class="btn primary small">Save</button>
+          <button id="topicClose" class="btn small">Close</button>
+        </div>
+      </div>
+      <div class="label">Prompt</div>
+      <textarea id="prompt" spellcheck="false" aria-label="Prompt">Transcribe all the text in this image verbatim, exactly as written. Preserve line breaks, spelling, and abbreviations. Do not correct or normalize anything.</textarea>
+      <div class="drawer-foot hint">Qwen3-VL-8B on :8188, judge on :8189</div>
+    </div>
+  </aside>
+  <div id="main">
+    <div id="tabs"></div>
+    <div id="content">
+      <div id="hero">
+        <h1>Handwriting OCR</h1>
+        <p class="sub">Turn handwritten pages into typed text. Everything runs on this machine.</p>
+        <div id="drop" role="button" tabindex="0">
+          <i class="ph ph-upload-simple drop-icon"></i>
+          <span class="drop-main">Click, drag and drop, or paste a page with Ctrl+V</span>
+          <span class="drop-sub">Select several images at once to transcribe a batch.</span>
+        </div>
+      </div>
+      <div id="workspace">
+        <div id="stage">
+          <div class="pane">
+            <div class="pane-head">
+              <span>Document</span>
+              <span class="grow"></span>
+              <span class="chip" id="fileNameChip" hidden></span>
+            </div>
+            <div id="docPaneBody">
+              <div id="docEmpty">Load a page to see it here</div>
+              <img id="preview" alt="Uploaded handwritten page">
+              <canvas id="boxOverlay"></canvas>
+              <button id="replaceBtn" class="btn small">Replace page</button>
+            </div>
+          </div>
+          <div class="pane">
+            <div class="pane-head">
+              <span>Transcript</span>
+              <span class="grow"></span>
+              <span class="chip" id="judgeChip" title="Change in Settings">judge: auto</span>
+            </div>
+            <div class="pane-body">
+              <div id="suggest" hidden></div>
+              <div id="transcript"></div>
+            </div>
+            <div id="transcriptFoot">
+              <button id="formatToggle" class="btn small">Formatted</button>
+              <button id="copy" class="btn small">Copy</button>
+              <button id="viewToggle" class="btn small" hidden>Show original</button>
+              <span id="stats"></span>
+            </div>
+          </div>
+        </div>
+        <div id="actionbar">
+          <button id="run" class="btn primary">Transcribe</button>
+          <button id="stop" class="btn" disabled>Stop</button>
+          <span class="sep"></span>
+          <div id="pageGroup">
+            <button id="prevBtn" class="btn bnav" title="Previous page" aria-label="Previous page"><i class="ph ph-caret-left"></i></button>
+            <span id="batchPos">Page 1 of 1</span>
+            <button id="nextBtn" class="btn bnav" title="Next page" aria-label="Next page"><i class="ph ph-caret-right"></i></button>
+            <div id="batchDots"></div>
+          </div>
+          <button id="queueBtn" class="btn" title="Transcribe every untranscribed page in this batch">Transcribe all pages</button>
+          <button id="addPagesBtn" class="btn ghost" title="Add more images to this batch"><i class="ph ph-plus"></i> Add pages</button>
+          <span class="sep"></span>
+          <span id="status">Drop a document to begin</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<input id="file" type="file" accept="image/*" multiple>
+<div id="settingsOverlay" hidden>
+  <div id="settingsCard" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+    <h2 id="settingsTitle">Settings</h2>
+    <div class="set-row">
+      <label for="themeMode">Theme</label>
+      <select id="themeMode">
+        <option value="system">Follow system</option>
+        <option value="dark">Dark</option>
+        <option value="light">Light</option>
+      </select>
+    </div>
+    <div class="set-row">
+      <label for="endpoint">OCR server</label>
+      <input id="endpoint" value="http://localhost:8188" spellcheck="false">
+    </div>
+    <div class="set-row">
+      <label for="judgeModeSetting">Term judge</label>
+      <select id="judgeModeSetting">
+        <option value="auto">Auto (TypeSafe, then local, then heuristic)</option>
+        <option value="typesafe">TypeSafe jev only</option>
+        <option value="local">Local model only</option>
+        <option value="heuristic">Heuristic only</option>
+      </select>
+    </div>
+    <div class="set-row">
+      <label for="typesafeKey">TypeSafe jev API key (used when present)</label>
+      <input id="typesafeKey" type="password" placeholder="sk-..." spellcheck="false">
+    </div>
+    <div class="set-row">
+      <label for="localJudgeUrl">Local judge endpoint</label>
+      <input id="localJudgeUrl" type="text" value="http://localhost:8189/v1/chat/completions" spellcheck="false">
+    </div>
+    <button id="settingsClose" class="btn primary">Done</button>
+  </div>
+</div>
+<script>
+const $ = id => document.getElementById(id);
+const drop = $('drop'), file = $('file'), preview = $('preview');
+const docPaneBody = $('docPaneBody'), docEmpty = $('docEmpty');
+const transcript = $('transcript'), status = $('status'), stats = $('stats');
+let ctrl = null;
+const SIM_THRESHOLD = 0.72;
+const PREFILTER_THRESHOLD = 0.60;
+const MIN_CONFIDENCE = 0.5;
+const TOPICS_KEY = 'ocr_topics_v1';
+const JUDGE_KEY = 'ocr_judge_v1';
+const SESS_KEY = 'ocr_sessions_v2';
+const ACT_KEY = 'ocr_active_v1';
+const THEME_KEY = 'ocr_theme';
+const TYPESAFE_URL = 'https://api.typesafe.ai/v1/systemone';
+const BUILTIN_TOPICS = {
+  'General': {
+    'description': 'Any handwritten document; transcribe as written.',
+    'terms': []
+  },
+  'Medical': {
+    'description': 'Handwritten medical notes; expect drug names and clinical abbreviations.',
+    'terms': ['hypertension', 'diabetes mellitus', 'electrocardiogram', 'metformin', 'dosage', 'q.d.', 'b.i.d.', 'refraction', 'keratometry']
+  },
+  'Math/Education': {
+    'description': 'Handwritten math or teaching notes; expect mathematical notation and terminology.',
+    'terms': ['quadratic formula', 'asymptote', 'derivative', 'integral', 'piecewise', 'factor', 'inequality', 'Pythagorean theorem', 'denominator']
+  }
+};
+let topics = {};
+let currentTopic = '';
+let lastRaw = '';
+let preRaw = '';
+let appliedDiff = [];
+let showOriginal = false;
+let correctedText = '';
+let correctedTextParts = [];
+let suggestions = [];
+let fileName = '';
+let openToken = 0;
+
+const imgStore = (() => {
+  const mem = new Map();
+  const hasIDB_flag = typeof indexedDB !== 'undefined';
+  let dbp = null;
+  if (hasIDB_flag) {
+    dbp = new Promise((resolve, reject) => {
+      const req = indexedDB.open('ocr_images', 1);
+      req.onupgradeneeded = () => req.result.createObjectStore('images');
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    }).catch(() => null);
+  }
+  return {
+    async put(id, dataUrl) {
+      mem.set(id, dataUrl);
+      if (!dbp) return;
+      try {
+        const db = await dbp;
+        if (!db) return;
+        await new Promise((res, rej) => {
+          const tx = db.transaction('images', 'readwrite');
+          tx.objectStore('images').put(dataUrl, id);
+          tx.oncomplete = res; tx.onerror = () => rej(tx.error);
+        });
+      } catch {}
+    },
+    async get(id) {
+      if (mem.has(id)) return mem.get(id);
+      if (!dbp) return null;
+      try {
+        const db = await dbp;
+        if (!db) return null;
+        return await new Promise((res, rej) => {
+          const tx = db.transaction('images', 'readonly');
+          const rq = tx.objectStore('images').get(id);
+          rq.onsuccess = () => res(rq.result || null);
+          rq.onerror = () => rej(rq.error);
+        });
+      } catch { return null; }
+    },
+    async del(id) {
+      mem.delete(id);
+      if (!dbp) return;
+      try {
+        const db = await dbp;
+        if (!db) return;
+        const tx = db.transaction('images', 'readwrite');
+        tx.objectStore('images').delete(id);
+      } catch {}
+    }
+  };
+})();
+
+function loadTopics() {
+  let parsed = null;
+  try {
+    const raw = localStorage.getItem(TOPICS_KEY);
+    if (raw) parsed = JSON.parse(raw);
+  } catch { parsed = null; }
+  if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) topics = parsed;
+  else topics = JSON.parse(JSON.stringify(BUILTIN_TOPICS));
+  currentTopic = Object.keys(topics)[0] || '';
+}
+
+function saveTopics() {
+  try { localStorage.setItem(TOPICS_KEY, JSON.stringify(topics)); } catch { setStatus('could not save topics'); }
+}
+
+function renderTopicSelect() {
+  const sel = $('topicSelect');
+  sel.textContent = '';
+  const names = Object.keys(topics);
+  if (names.length) currentTopic = names.includes(currentTopic) ? currentTopic : names[0];
+  else currentTopic = '';
+  for (const name of names) {
+    const opt = document.createElement('option');
+    opt.value = name; opt.textContent = name;
+    sel.appendChild(opt);
+  }
+  const manage = document.createElement('option');
+  manage.value = 'manage'; manage.textContent = 'Manage topics…';
+  sel.appendChild(manage);
+  sel.value = currentTopic;
+  const t = topics[currentTopic];
+  $('topicHint').textContent = t
+    ? (t.terms && t.terms.length ? (t.terms.length + ' terms') : 'no terms')
+    : '';
+}
+
+function activeTopicData() {
+  return currentTopic && topics[currentTopic] ? topics[currentTopic] : null;
+}
+
+function domainContextText() {
+  const t = activeTopicData();
+  if (!t || !t.terms || !t.terms.length) return '';
+  return 'Domain context: ' + (t.description || '') + '. Glossary - when these appear in the handwriting, transcribe them with exactly this spelling: ' + t.terms.join('; ') + '.';
+}
+
+$('topicSelect').onchange = () => {
+  if ($('topicSelect').value === 'manage') {
+    $('topicsJson').value = JSON.stringify(topics, null, 2);
+    $('topicEditor').hidden = false;
+    renderTopicSelect();
+  } else {
+    currentTopic = $('topicSelect').value;
+    $('topicEditor').hidden = true;
+    renderTopicSelect();
+    persistCurrent();
+  }
+};
+
+$('topicSave').onclick = () => {
+  try {
+    const parsed = JSON.parse($('topicsJson').value);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('not an object');
+    topics = parsed;
+    currentTopic = Object.keys(topics)[0] || '';
+    saveTopics();
+    $('topicEditor').hidden = true;
+  } catch (e) { setStatus('topics JSON invalid - ' + e.message); }
+  renderTopicSelect();
+};
+
+$('topicClose').onclick = () => { $('topicEditor').hidden = true; renderTopicSelect(); };
+
+const judgeCfg = { mode: 'auto', key: '', localUrl: 'http://localhost:8189/v1/chat/completions' };
+
+function updateJudgeChip() {
+  const el = $('judgeChip');
+  if (el) el.textContent = 'judge: ' + judgeCfg.mode;
+}
+
+function loadJudgeCfg() {
+  try {
+    const raw = localStorage.getItem(JUDGE_KEY);
+    if (raw) {
+      const p = JSON.parse(raw);
+      if (p && typeof p === 'object') {
+        if (p.mode) judgeCfg.mode = p.mode;
+        if (typeof p.key === 'string') judgeCfg.key = p.key;
+        if (typeof p.localUrl === 'string' && p.localUrl) judgeCfg.localUrl = p.localUrl;
+      }
+    }
+  } catch {}
+  $('judgeModeSetting').value = judgeCfg.mode;
+  $('typesafeKey').value = judgeCfg.key;
+  $('localJudgeUrl').value = judgeCfg.localUrl;
+  updateJudgeChip();
+}
+
+function saveJudgeCfg() {
+  judgeCfg.mode = $('judgeModeSetting').value;
+  judgeCfg.key = $('typesafeKey').value;
+  judgeCfg.localUrl = $('localJudgeUrl').value || 'http://localhost:8189/v1/chat/completions';
+  try { localStorage.setItem(JUDGE_KEY, JSON.stringify(judgeCfg)); } catch {}
+  updateJudgeChip();
+}
+
+$('judgeModeSetting').onchange = saveJudgeCfg;
+$('typesafeKey').onchange = saveJudgeCfg;
+$('localJudgeUrl').onchange = saveJudgeCfg;
+
+function applyTheme(t) {
+  if (document.body && document.body.classList) { document.body.classList.toggle('light', t === 'light'); document.body.classList.toggle('dark', t === 'dark'); }
+}
+
+function loadTheme() {
+  let t = 'system';
+  try { t = localStorage.getItem(THEME_KEY) || 'system'; } catch {}
+  $('themeMode').value = t;
+  applyTheme(t);
+}
+
+$('themeMode').onchange = () => {
+  const t = $('themeMode').value;
+  applyTheme(t);
+  try { localStorage.setItem(THEME_KEY, t); } catch {}
+};
+
+$('gearBtn').onclick = () => { $('settingsOverlay').hidden = false; };
+$('settingsClose').onclick = () => { $('settingsOverlay').hidden = true; };
+$('settingsOverlay').onclick = e => { if (e.target === $('settingsOverlay')) $('settingsOverlay').hidden = true; };
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && !$('settingsOverlay').hidden) $('settingsOverlay').hidden = true;
+});
+
+$('menuBtn').onclick = () => {
+  if (document.body && document.body.classList) document.body.classList.toggle('drawer-closed');
+};
+
+let sessions = [];
+let activeId = null;
+
+function loadSessions() {
+  try { sessions = JSON.parse(localStorage.getItem(SESS_KEY)) || []; } catch { sessions = []; }
+  if (!Array.isArray(sessions)) sessions = [];
+  try { activeId = localStorage.getItem(ACT_KEY); } catch { activeId = null; }
+  if (!sessions.find(s => s.id === activeId)) activeId = sessions.length ? sessions[0].id : null;
+}
+
+function saveSessions() {
+  try { localStorage.setItem(SESS_KEY, JSON.stringify(sessions)); }
+  catch { setStatus('storage full - could not save sessions'); }
+}
+
+function fmtDate(ts) {
+  const d = new Date(ts);
+  return d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+function renderSessionList() {
+  const box = $('sessionList');
+  box.textContent = '';
+  for (const s of sessions) {
+    const row = document.createElement('div');
+    row.className = 'sess' + (s.id === activeId ? ' active' : '');
+    const main = document.createElement('div');
+    main.className = 'sess-main';
+    const nm = document.createElement('div');
+    nm.className = 'sess-name';
+    nm.textContent = s.name || 'Untitled';
+    nm.title = fmtDate(s.updated || s.created || Date.now());
+    main.append(nm);
+    const del = document.createElement('button');
+    del.className = 'sess-del';
+    del.textContent = '✕';
+    del.onclick = e => { e.stopPropagation(); deleteSession(s.id); };
+    row.append(main, del);
+    row.onclick = () => openSession(s.id);
+    box.appendChild(row);
+  }
+}
+
+function renderTabs() {
+  const box = $('tabs');
+  box.textContent = '';
+  for (const s of sessions) {
+    const tab = document.createElement('div');
+    tab.className = 'tab' + (s.id === activeId ? ' active' : '');
+    const nm = document.createElement('span');
+    nm.className = 'tab-name';
+    nm.textContent = s.name || 'Untitled';
+    nm.title = (s.name || 'Untitled') + ' · ' + fmtDate(s.updated || s.created || Date.now());
+    const x = document.createElement('button');
+    x.className = 'tab-x';
+    x.textContent = '✕';
+    x.title = 'Close session';
+    x.onclick = e => { e.stopPropagation(); deleteSession(s.id); };
+    tab.append(nm, x);
+    tab.onclick = () => openSession(s.id);
+    box.appendChild(tab);
+  }
+  const plus = document.createElement('div');
+  plus.className = 'tab';
+  plus.textContent = '+ New session';
+  plus.onclick = newSession;
+  box.appendChild(plus);
+}
+
+function renderSessionViews() { renderSessionList(); renderTabs(); }
+
+function ensureActive() {
+  if (activeId && sessions.find(s => s.id === activeId)) return;
+  activeId = 's' + Date.now() + Math.floor(Math.random() * 1000);
+  sessions.unshift({
+    id: activeId,
+    name: fileName || 'Untitled',
+    created: Date.now(),
+    updated: Date.now(),
+    hasImage: false, preRaw: '', lastRaw: '', appliedDiff: [],
+    topic: currentTopic, prompt: $('prompt').value
+  });
+}
+
+function persistCurrent() {
+  if (!preview.src && !lastRaw && !appliedDiff.length) return;
+  ensureActive();
+  const s = sessions.find(x => x.id === activeId);
+  if (!s) return;
+  s.name = fileName || s.name || 'Untitled';
+  s.updated = Date.now();
+  s.hasImage = !!preview.src;
+  s.preRaw = preRaw;
+  s.lastRaw = lastRaw;
+  s.appliedDiff = appliedDiff;
+  s.topic = currentTopic;
+  s.prompt = $('prompt').value;
+  if (preview.src) imgStore.put(activeId, preview.src);
+  saveSessions();
+  try { localStorage.setItem(ACT_KEY, activeId); } catch {}
+  renderSessionViews();
+}
+
+function updateEmptyState() {
+  const empty = !preview.src && !lastRaw;
+  $('hero').hidden = !empty;
+  $('workspace').classList.toggle('on', !empty);
+  docEmpty.style.display = preview.src ? 'none' : 'flex';
+  docPaneBody.classList.toggle('hasimg', !!preview.src);
+}
+
+function clearWorkspace() {
+  preview.src = ''; preview.style.display = 'none';
+  boxData = [];
+  $('replaceBtn').style.display = 'none';
+  $('fileNameChip').hidden = true;
+  clearBoxOverlay();
+  preRaw = ''; lastRaw = ''; appliedDiff = []; correctedTextParts = []; correctedText = '';
+  suggestions = []; renderSuggestions();
+  showOriginal = false;
+  $('viewToggle').hidden = true;
+  $('viewToggle').textContent = 'Show original';
+  transcript.textContent = '';
+  stats.textContent = '';
+  fileName = '';
+  updateEmptyState();
+}
+
+function openSession(id) {
+  if (id === activeId) {
+    const bi = batchIds.findIndex(b => b.id === id);
+    if (bi >= 0) { batchPos = bi; updateBatchBar(); }
+    return Promise.resolve();
+  }
+  persistCurrent();
+  const s = sessions.find(x => x.id === id);
+  if (!s) return Promise.resolve();
+  activeId = id;
+  const bi = batchIds.findIndex(b => b.id === id);
+  if (bi >= 0) batchPos = bi;
+  clearWorkspace();
+  currentTopic = topics[s.topic] ? s.topic : currentTopic;
+  renderTopicSelect();
+  if (s.prompt) $('prompt').value = s.prompt;
+  preRaw = s.preRaw || '';
+  lastRaw = s.lastRaw || preRaw;
+  appliedDiff = Array.isArray(s.appliedDiff) ? s.appliedDiff : [];
+  const token = ++openToken;
+  return imgStore.get(id).then(img => {
+    if (token === openToken && img) {
+      preview.src = img;
+      preview.style.display = 'block';
+      $('fileNameChip').textContent = s.name || '';
+      $('fileNameChip').hidden = !$('fileNameChip').textContent;
+      fileName = s.name || '';
+      updateEmptyState();
+      updateBatchBar();
+    }
+    showOriginal = false;
+    renderTranscript();
+    $('viewToggle').hidden = appliedDiff.length === 0;
+    renderSuggestions();
+    updateEmptyState();
+    saveSessions();
+    try { localStorage.setItem(ACT_KEY, activeId); } catch {}
+    renderSessionViews();
+    const list = batchSessionList();
+    setStatus(list.length > 1
+      ? 'page ' + (batchPos + 1) + ' of ' + list.length + ': ' + (s.name || 'Untitled')
+      : 'session: ' + (s.name || 'Untitled'));
+  });
+}
+
+function openSessionFromBatch(i) {
+  batchPos = i;
+  const s = batchSessionList()[i];
+  if (s) openSession(s.id);
+}
+
+function newSession() {
+  persistCurrent();
+  activeId = null;
+  batchIds = [];
+  batchPos = 0;
+  clearWorkspace();
+  try { localStorage.removeItem(ACT_KEY); } catch {}
+  renderSessionViews();
+  updateBatchBar();
+  setStatus('new session - drop one page or a batch');
+}
+
+async function deleteSession(id) {
+  sessions = sessions.filter(s => s.id !== id);
+  batchIds = batchIds.filter(b => b.id !== id);
+  batchIds.forEach((b, idx) => b.order = idx);
+  batchPos = Math.max(0, Math.min(batchPos, batchIds.length - 1));
+  await imgStore.del(id);
+  if (activeId === id) {
+    activeId = null;
+    clearWorkspace();
+    try { localStorage.removeItem(ACT_KEY); } catch {}
+    renderTranscript();
+  }
+  saveSessions();
+  renderSessionViews();
+  updateBatchBar();
+}
+
+$('newSession').onclick = newSession;
+
+loadSessions();
+loadJudgeCfg();
+loadTheme();
+renderSessionViews();
+
+function setStatus(s) { status.textContent = s; }
+
+let batchIds = [];
+let batchPos = 0;
+
+function showImage(dataUrl, name) {
+  fileName = name || fileName || '';
+  preview.src = dataUrl;
+  preview.style.display = 'block';
+  $('replaceBtn').style.display = 'none';
+  $('fileNameChip').textContent = fileName;
+  $('fileNameChip').hidden = !fileName;
+  persistCurrent();
+  if (activeId && !batchIds.find(b => b.id === activeId)) {
+    batchIds = [{ id: activeId, order: 0 }];
+    batchPos = 0;
+  }
+  updateEmptyState();
+  resizeBoxOverlay();
+  if (lastRaw) autoDrawBoxes(lastRaw);
+  updateBatchBar();
+  setStatus('page ready - hit Transcribe, or + Add pages for a batch');
+}
+
+function loadImage(f) {
+  if (!f || !f.type.startsWith('image/')) { setStatus('not an image'); return; }
+  persistCurrent();
+  batchIds = [];
+  batchPos = 0;
+  const r = new FileReader();
+  r.onload = () => showImage(r.result, f.name || '');
+  r.readAsDataURL(f);
+}
+
+function createBatchSessions(imgs, append) {
+  persistCurrent();
+  if (!append) batchIds = [];
+  const baseOrder = append ? batchIds.length : 0;
+  const newEntries = [];
+  let pending = imgs.length;
+  imgs.forEach((f, i) => {
+    const r = new FileReader();
+    r.onload = () => {
+      const id = 's' + Date.now() + '_' + Math.floor(Math.random() * 1000000) + '_' + i;
+      const order = baseOrder + i;
+      newEntries.push({ id, order });
+      sessions.unshift({
+        id,
+        name: f.name || 'Page ' + (order + 1),
+        created: Date.now(), updated: Date.now(),
+        hasImage: true, preRaw: '', lastRaw: '', appliedDiff: [],
+        topic: currentTopic, prompt: $('prompt').value
+      });
+      imgStore.put(id, r.result);
+      pending--;
+      if (!pending) {
+        newEntries.sort((a, b) => a.order - b.order);
+        batchIds = append ? batchIds.concat(newEntries) : newEntries;
+        batchIds.sort((a, b) => a.order - b.order);
+        batchIds.forEach((b, idx) => b.order = idx);
+        saveSessions();
+        renderSessionViews();
+        openSessionFromBatch(append ? baseOrder : 0);
+        if (imgs.length > 1 || append) {
+          const total = batchIds.length;
+          setStatus('batch: ' + total + ' pages - use the arrows to flip pages, Transcribe all pages when ready');
+        }
+      }
+    };
+    r.readAsDataURL(f);
+  });
+}
+
+function loadImageMulti(files, append) {
+  const imgs = [...(files || [])].filter(f => f.type && f.type.startsWith('image/'));
+  if (!imgs.length) { setStatus('no images in selection'); return; }
+  if (imgs.length === 1 && !append) { loadImage(imgs[0]); return; }
+  createBatchSessions(imgs, !!append);
+}
+
+function batchSessionList() {
+  const list = batchIds.map(b => sessions.find(s => s.id === b.id)).filter(Boolean);
+  if (list.length) return list;
+  const cur = sessions.find(s => s.id === activeId);
+  return cur ? [cur] : sessions.slice(0, 1);
+}
+
+function updateBatchBar() {
+  const list = batchSessionList();
+  batchPos = Math.max(0, Math.min(batchPos, Math.max(0, list.length - 1)));
+  const cur = list[batchPos];
+  $('batchPos').textContent = list.length > 1
+    ? 'Page ' + (batchPos + 1) + ' of ' + list.length + (cur && cur.name ? ' - ' + cur.name : '')
+    : (cur && cur.name ? cur.name : 'Page 1 of 1');
+  const dots = $('batchDots');
+  dots.textContent = '';
+  dots.style.display = list.length > 1 ? '' : 'none';
+  list.forEach((s, i) => {
+    const d = document.createElement('button');
+    d.className = 'bdot' + (i === batchPos ? ' cur' : '') + (s.lastRaw ? ' done' : '');
+    d.title = (s.name || ('Page ' + (i + 1))) + (s.lastRaw ? ' · transcribed' : ' · pending');
+    d.setAttribute('aria-label', d.title);
+    d.onclick = () => gotoBatch(i);
+    dots.appendChild(d);
+  });
+  $('prevBtn').disabled = list.length <= 1 || batchPos === 0;
+  $('nextBtn').disabled = list.length <= 1 || batchPos === list.length - 1;
+  const remaining = list.filter(s => !s.lastRaw).length;
+  const qb = $('queueBtn');
+  qb.disabled = !!queuing || list.length <= 1;
+  qb.textContent = list.length > 1
+    ? (remaining ? 'Transcribe all pages (' + remaining + ' left)' : 'All pages transcribed ✓')
+    : 'Transcribe all pages';
+  qb.title = list.length > 1
+    ? 'Transcribe every untranscribed page in this batch, in order'
+    : 'Load 2+ pages (multi-select, drag several files, or + Add pages) to enable batch transcribe';
+}
+
+function gotoBatch(i) {
+  const list = batchSessionList();
+  if (i < 0 || i >= list.length) return;
+  batchPos = i;
+  updateBatchBar();
+  if (list[i]) openSession(list[i].id);
+}
+
+$('prevBtn').onclick = () => gotoBatch(batchPos - 1);
+$('nextBtn').onclick = () => gotoBatch(batchPos + 1);
+
+let queuing = false;
+$('queueBtn').onclick = async () => {
+  if (queuing) return;
+  const list = batchSessionList();
+  if (list.length <= 1) { setStatus('batch needs 2+ pages - use + Add pages or multi-select'); return; }
+  queuing = true;
+  updateBatchBar();
+  for (let i = 0; i < batchSessionList().length; i++) {
+    const cur = batchSessionList()[i];
+    if (cur && !cur.lastRaw) {
+      batchPos = i;
+      await openSession(cur.id);
+      updateBatchBar();
+      await ocr(true);
+    }
+    updateBatchBar();
+  }
+  queuing = false;
+  updateBatchBar();
+  setStatus('batch complete - ' + batchSessionList().length + ' pages transcribed');
+};
+$('addPagesBtn').onclick = () => file.click();
+
+let fileAppendMode = false;
+drop.onclick = () => { fileAppendMode = false; file.click(); };
+drop.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); drop.click(); } });
+docPaneBody.onclick = e => { if (e.target === docEmpty || e.target === preview || e.target === docPaneBody) { fileAppendMode = true; file.click(); } };
+$('replaceBtn').onclick = e => { e.stopPropagation(); fileAppendMode = false; file.click(); };
+file.onchange = () => { loadImageMulti(file.files, fileAppendMode && !!preview.src); file.value = ''; fileAppendMode = false; };
+for (const target of [drop, docPaneBody]) {
+  target.addEventListener('dragover', e => { e.preventDefault(); target.classList.add('drag'); });
+  target.addEventListener('dragleave', () => target.classList.remove('drag'));
+  target.addEventListener('drop', e => {
+    e.preventDefault(); target.classList.remove('drag');
+    const appending = target === docPaneBody && !!preview.src;
+    loadImageMulti(e.dataTransfer.files, appending);
+  });
+}
+document.onpaste = e => {
+  const items = [...(e.clipboardData?.items || [])].filter(i => i.type.startsWith('image/'));
+  if (!items.length) return;
+  if (items.length === 1) {
+    if (preview.src) loadImageMulti([items[0].getAsFile()], true);
+    else loadImage(items[0].getAsFile());
+  } else {
+    loadImageMulti(items.map(i => i.getAsFile()), !!preview.src);
+  }
+};
+
+let boxData = [];
+let hoverLine = 0;
+
+function resizeBoxOverlay() {
+  const canvas = $('boxOverlay');
+  if (!canvas || !preview.src) return;
+  const parent = canvas.parentElement;
+  canvas.width = parent.clientWidth;
+  canvas.height = parent.clientHeight;
+  if (boxData.length) drawAllBoxes();
+}
+
+function getImgScale() {
+  if (!preview.src || !preview.naturalWidth) return { sx: 1, sy: 1, ox: 0, oy: 0, w: 0, h: 0 };
+  const canvas = $('boxOverlay');
+  if (!canvas || !canvas.width) return { sx: 1, sy: 1, ox: 0, oy: 0, w: 0, h: 0 };
+  const img = preview;
+  const sx = canvas.width / img.naturalWidth;
+  const sy = canvas.height / img.naturalHeight;
+  const s = Math.min(sx, sy);
+  const ox = (canvas.width - img.naturalWidth * s) / 2;
+  const oy = (canvas.height - img.naturalHeight * s) / 2;
+  return { sx: s, sy: s, ox, oy, w: canvas.width, h: canvas.height };
+}
+
+function autoDrawBoxes(text) {
+  try {
+  if (!text || !preview.src) return;
+  const lines = text.split('\n').filter(l => l.trim());
+  if (!lines.length) return;
+  boxData = [];
+  const sc = getImgScale();
+  if (sc.w === 0) return;
+  const pad = 6;
+  const approxH = Math.max(16, Math.floor((sc.w - pad * 2) / lines.length));
+  lines.forEach(function(l, i) {
+    boxData.push({ x: 0, y: pad + i * approxH, w: sc.w, h: Math.max(12, approxH - pad), label: l.trim().slice(0, 40), r: 3 });
+  });
+  } catch(e) {}
+}
+
+function accentHex() { return getComputedStyle(document.body).getPropertyValue('--accent').trim() || '#6aa1ff'; }
+function showLineBox(idx) {
+  if (idx < 0 || idx >= boxData.length) return;
+  const canvas = $('boxOverlay');
+  if (!canvas || !preview.src) return;
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  const sc = getImgScale();
+  if (sc.w === 0) return;
+  const b = boxData[idx];
+  const x = sc.ox + b.x * sc.sx;
+  const y = sc.oy + b.y * sc.sy;
+  const w = b.w * sc.sx;
+  const h = b.h * sc.sy;
+  ctx.strokeStyle = accentHex();
+  ctx.lineWidth = 3;
+  ctx.fillStyle = accentHex() + '1F';
+  ctx.beginPath();
+  ctx.roundRect(x, y, w, h, Math.max(3, b.r * sc.sx));
+  ctx.fill();
+  ctx.stroke();
+}
+
+function clearBoxOverlay() {
+  hideBoxOverlay();
+  boxData = [];
+}
+
+function hideBoxOverlay() {
+  const canvas = $('boxOverlay');
+  if (canvas) {
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+  }
+}
+
+function drawAllBoxes() {
+  const canvas = $('boxOverlay');
+  if (!canvas || !boxData.length || !preview.src) return;
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  const sc = getImgScale();
+  if (sc.w === 0) return;
+  boxData.forEach(function(b) {
+    const x = sc.ox + b.x * sc.sx;
+    const y = sc.oy + b.y * sc.sy;
+    const w = b.w * sc.sx;
+    const h = b.h * sc.sy;
+    ctx.strokeStyle = accentHex();
+    ctx.lineWidth = 3;
+    ctx.fillStyle = accentHex() + '0F';
+    ctx.beginPath();
+    ctx.roundRect(x, y, w, h, Math.max(3, b.r * sc.sx));
+    ctx.fill();
+    ctx.stroke();
+  });
+}
+
+function renderStats(j) {
+  const t = j.timings, u = j.usage;
+  const parts = [];
+  if (t && t.prompt_n != null) parts.push('prefill ' + t.prompt_n + ' tok @ ' + t.prompt_per_second.toFixed(0) + ' t/s');
+  if (t && t.predicted_n != null) parts.push('gen ' + t.predicted_n + ' tok @ ' + t.predicted_per_second.toFixed(1) + ' t/s');
+  if (u && u.prompt_tokens != null && !parts.length) parts.push('prompt ' + u.prompt_tokens + ' tok, gen ' + u.completion_tokens + ' tok');
+  if (parts.length) stats.textContent = parts.join(' · ');
+}
+
+function escHtml(s) {
+  return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+}
+
+function normWord(w) {
+  return w.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
+}
+
+function lev(a, b) {
+  const m = a.length, n = b.length;
+  if (!m) return n;
+  if (!n) return m;
+  let prev = new Array(n + 1);
+  for (let j = 0; j <= n; j++) prev[j] = j;
+  for (let i = 1; i <= m; i++) {
+    const cur = [i];
+    for (let j = 1; j <= n; j++) {
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    }
+    prev = cur;
+  }
+  return prev[n];
+}
+
+function bestTermMatch(norm, terms, threshold) {
+  let best = null;
+  for (const term of terms) {
+    const tn = normWord(term);
+    if (!tn) continue;
+    const dist = lev(norm, tn);
+    const ratio = 1 - dist / Math.max(norm.length, tn.length);
+    if (ratio >= threshold && (!best || ratio > best.ratio)) best = { term, ratio };
+  }
+  return best;
+}
+
+function glossaryCandidates(raw, threshold) {
+  const topic = activeTopicData();
+  const terms = topic && Array.isArray(topic.terms) ? topic.terms.filter(t => normWord(t)) : [];
+  if (!raw || !terms.length) return [];
+  const tokens = raw.split(/(\s+)/);
+  const words = [];
+  for (let i = 0; i < tokens.length; i++) {
+    if (i % 2 === 0) {
+      const norm = normWord(tokens[i]);
+      if (norm) words.push({ idx: i, norm });
+    }
+  }
+  const replaced = new Array(tokens.length).fill(false);
+  const matches = [];
+  const maxN = Math.min(4, words.length);
+  for (let n = maxN; n >= 1; n--) {
+    for (let s = 0; s + n <= words.length; s++) {
+      const e = s + n - 1;
+      let busy = false;
+      for (let k = s; k <= e; k++) if (replaced[words[k].idx]) { busy = true; break; }
+      if (busy) continue;
+      const joined = words.slice(s, e + 1).map(w => w.norm).join('');
+      if (!joined) continue;
+      const m = bestTermMatch(joined, terms, n === 1 ? threshold : Math.max(threshold, SIM_THRESHOLD));
+      if (m) matches.push({ start: words[s].idx, end: words[e].idx, term: m.term, ratio: m.ratio, n });
+    }
+  }
+  matches.sort((a, b) => (b.n - a.n) || (b.ratio - a.ratio));
+  const applied = [];
+  for (const m of matches) {
+    if (m.end < m.start) continue;
+    let free = true;
+    for (let k = m.start; k <= m.end; k++) if (replaced[k]) { free = false; break; }
+    if (!free) continue;
+    for (let k = m.start; k <= m.end; k++) replaced[k] = true;
+    applied.push(m);
+  }
+  return applied.map(m => ({
+    orig: tokens.slice(m.start, m.end + 1).join(''),
+    term: m.term,
+    ratio: Math.round(m.ratio * 100)
+  }));
+}
+
+function contextWindow(raw, needle) {
+  const i = raw.indexOf(needle);
+  if (i < 0) return raw.slice(0, 400);
+  const a = Math.max(0, i - 100), b = Math.min(raw.length, i + needle.length + 100);
+  return raw.slice(a, b);
+}
+
+function validConfidence(v) {
+  return typeof v === 'number' && isFinite(v) && v >= 0 && v <= 1;
+}
+
+async function judgeTypesafe(cands, raw) {
+  if (!judgeCfg.key) throw new Error('no TypeSafe key');
+  const questions = {};
+  cands.forEach((c, i) => {
+    questions['w' + i] = {
+      type: 'choice',
+      criteria: { 'keep': 'keep as written', [c.term]: 'domain-specific term' }
+    };
+  });
+  const state = cands.length === 1 ? contextWindow(raw, cands[0].orig) : raw.slice(0, 2000);
+  const res = await fetch(TYPESAFE_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + judgeCfg.key },
+    body: JSON.stringify({ model: 'jev-latest', state, questions })
+  });
+  if (!res.ok) throw new Error('typesafe HTTP ' + res.status);
+  const j = await res.json();
+  const out = cands.map((c, i) => {
+    let a = null;
+    for (const holder of [j, j.answers, j.results, j.data]) {
+      if (holder && typeof holder === 'object' && holder['w' + i]) { a = holder['w' + i]; break; }
+    }
+    if (!a) throw new Error('missing answer w' + i);
+    const choice = a.choice != null ? a.choice : (a.value != null ? a.value : null);
+    let conf = a.confidence;
+    if (!validConfidence(conf) && a.probabilities && typeof a.probabilities === 'object') {
+      const vals = Object.values(a.probabilities).filter(validConfidence);
+      if (vals.length) conf = Math.max(...vals);
+    }
+    if (!validConfidence(conf)) throw new Error('no usable confidence w' + i);
+    const pick = choice === 'keep' || choice == null ? null : choice;
+    return { orig: c.orig, term: pick || c.term, keep: pick == null, conf, src: 'jev' };
+  });
+  return out;
+}
+
+async function judgeLocal(cands, raw) {
+  const topic = activeTopicData();
+  const domain = topic ? (topic.description || '') + (topic.terms && topic.terms.length ? ' Terms: ' + topic.terms.join('; ') : '') : '';
+  const judgments = await Promise.all(cands.map(async c => {
+    const body = {
+      messages: [
+        { role: 'system', content: 'You are a domain-term judge. Reply ONLY with compact JSON: {"pick":"<one candidate string exactly, or KEEP>","confidence":<0..1>}' },
+        { role: 'user', content: JSON.stringify({ state: contextWindow(raw, c.orig), suspect: c.orig, candidates: ['KEEP', c.term], domain }) }
+      ],
+      temperature: 0, max_tokens: 60,
+      response_format: { type: 'json_object' }
+    };
+    const res = await fetch(judgeCfg.localUrl, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    if (!res.ok) throw new Error('local judge HTTP ' + res.status);
+    const j = await res.json();
+    const content = j.choices?.[0]?.message?.content || '';
+    let p;
+    try { p = JSON.parse(content); } catch { throw new Error('local judge bad JSON'); }
+    const pick = typeof p.pick === 'string' ? p.pick : '';
+    const conf = typeof p.confidence === 'number' ? p.confidence : null;
+    if (!pick || !validConfidence(conf)) throw new Error('local judge malformed');
+    const keep = /keep/i.test(pick);
+    return { orig: c.orig, term: c.term, keep, conf, src: 'local' };
+  }));
+  return judgments;
+}
+
+function judgeHeuristic(cands) {
+  return cands.map(c => ({ orig: c.orig, term: c.term, keep: false, conf: null, src: 'heuristic' }));
+}
+
+function renderSuggestions() {
+  const box = $('suggest');
+  box.textContent = '';
+  if (!suggestions.length) { box.hidden = true; return; }
+  box.hidden = false;
+  let hidden = 0;
+  suggestions.forEach((s, i) => {
+    if (s.conf != null && s.conf < MIN_CONFIDENCE) { hidden++; return; }
+    const row = document.createElement('div');
+    row.className = 'sug-row';
+    const label = document.createElement('span');
+    const confTxt = s.conf != null ? ' <span class="sug-conf">conf ' + s.conf.toFixed(2) + ' · ' + escHtml(s.src) + '</span>' : '';
+    label.innerHTML = '<span class="sug-word">' + escHtml(s.orig) + '</span> &rarr; <span class="sug-term">' + escHtml(s.term) + '</span>' + confTxt;
+    const yes = document.createElement('button');
+    yes.className = 'sug-apply'; yes.textContent = 'Apply';
+    yes.onclick = () => applySuggestion(i);
+    const no = document.createElement('button');
+    no.className = 'sug-dismiss'; no.textContent = 'dismiss';
+    no.onclick = () => { suggestions.splice(i, 1); renderSuggestions(); };
+    row.append(label, yes, no);
+    box.appendChild(row);
+  });
+  if (hidden) {
+    const note = document.createElement('div');
+    note.className = 'hint';
+    note.textContent = hidden + ' low-confidence suggestion(s) hidden';
+    box.appendChild(note);
+  }
+}
+
+function applySuggestion(i) {
+  const s = suggestions[i];
+  if (!s || !lastRaw) return;
+  lastRaw = lastRaw.replace(s.orig, s.term);
+  appliedDiff.push({ orig: s.orig, term: s.term });
+  suggestions.splice(i, 1);
+  renderSuggestions();
+  renderTranscript();
+  $('viewToggle').hidden = appliedDiff.length === 0;
+  setStatus('applied "' + s.term + '" - ' + suggestions.length + ' suggestion(s) left');
+  persistCurrent();
+}
+
+$('viewToggle').onclick = () => {
+  showOriginal = !showOriginal;
+  $('viewToggle').textContent = showOriginal ? 'Show corrections' : 'Show original';
+  renderTranscript();
+};
+
+let useFormatting = true;
+let md = null;
+
+function initMarkdown() {
+  if (md) return md;
+  md = window.markdownit({
+    html: false, linkify: true, breaks: true,
+    langPrefix: 'md-language-',
+    highlight: function(str, lang) {
+      if (lang) return '<pre class="md-blockcode" data-lang="' + escHtml(lang) + '"><code>' + escHtml(str) + '</code></pre>';
+      return '<pre class="md-blockcode"><code>' + escHtml(str) + '</code></pre>';
+    }
+  });
+  return md;
+}
+
+function rawToMarkdown(text) {
+  if (!text) return '';
+  var out = '';
+  var lines = text.split('\n');
+  var inList = false;
+  for (var i = 0; i < lines.length; i++) {
+    var l = lines[i];
+    if (l.trim() === '') { out += '\n'; inList = false; continue; }
+    if (/^\s*[-*]\s/.test(l)) {
+      if (!inList) { out += '\n'; inList = true; }
+      out += l.trim() + '\n';
+      continue;
+    }
+    inList = false;
+    if (/^\d+\.\s/.test(l.trim())) { out += l.trim() + '\n'; continue; }
+    var trimmed = l.trim();
+    if (trimmed.length > 0 && !/^#{1,6}\s/.test(trimmed)) {
+      if (/^\d+\.\s/.test(trimmed)) { out += trimmed + '\n'; }
+      else if (/^[-*]\s/.test(trimmed)) { out += trimmed + '\n'; }
+      else { out += trimmed + '\n'; }
+    } else {
+      out += l + '\n';
+    }
+  }
+  return out;
+}
+
+function convertFractions(text) {
+  if (!text) return '';
+  var out = '';
+  var lines = text.split('\n');
+  var inList = false;
+  for (var i = 0; i < lines.length; i++) {
+    var l = lines[i];
+    if (l.trim() === '') { out += '\n'; inList = false; continue; }
+    if (/^\s*[-*]\s/.test(l)) {
+      if (!inList) { out += '\n'; inList = true; }
+      out += l.trim() + '\n';
+      continue;
+    }
+    inList = false;
+    if (/^\d+\.\s/.test(l.trim())) { out += l.trim() + '\n'; continue; }
+    var trimmed = l.trim();
+    if (trimmed.length > 0 && !/^#{1,6}\s/.test(trimmed)) {
+      if (/^\d+\.\s/.test(trimmed)) { out += trimmed + '\n'; }
+      else if (/^[-*]\s/.test(trimmed)) { out += trimmed + '\n'; }
+      else { out += trimmed + '\n'; }
+    } else {
+      out += l + '\n';
+    }
+  }
+  return out;
+}
+
+function convertFractions(text) {
+  var s = text;
+  s = s.replace(/(\d+)\s+(\d+)\/(\d+)/g, function(m, w, n, d) { return w + ' \\frac{' + n + '}{' + d + '}'; });
+  s = s.replace(/\b(\d+)\/(\d+)\b/g, function(m, n, d) {
+    if (parseInt(d) === 100 && parseInt(n) < 100) return m;
+    return '\\frac{' + n + '}{' + d + '}';
+  });
+  s = s.replace(/(\w)\^(\d+)/g, '$1^{$2}');
+  s = s.replace(/√(\d+)/g, '\\sqrt{$1}');
+  s = s.replace(/√/g, '\\sqrt{');
+  s = s.replace(/(\d+)!/g, '{$1!}');
+  s = s.replace(/±/g, '\\pm');
+  s = s.replace(/×/g, '\\times');
+  s = s.replace(/÷/g, '\\div');
+  s = s.replace(/≈/g, '\\approx');
+  s = s.replace(/≤/g, '\\leq');
+  s = s.replace(/≥/g, '\\geq');
+  s = s.replace(/°/g, '^\\circ');
+  return s;
+}
+
+function formatToMarkdown(text) {
+  if (!text) return '';
+  var lines = text.split('\n');
+  var mdLines = [];
+  var paraBuf = [];
+  function flush() {
+    var t = paraBuf.join(' ').trim();
+    if (t.length) {
+      var md = convertFractions(t);
+      mdLines.push(md);
+    }
+    paraBuf = [];
+  }
+  for (var i = 0; i < lines.length; i++) {
+    var l = lines[i].trim();
+    if (!l) { flush(); continue; }
+    if (/^\d+\.\s/.test(l) || /^[-*]\s/.test(l)) {
+      flush(); mdLines.push(l); continue;
+    }
+    paraBuf.push(l);
+  }
+  flush();
+  return mdLines.join('\n');
+}
+
+function renderTranscript() {
+  correctedTextParts = [];
+  const raw = showOriginal || !appliedDiff.length ? preRaw || lastRaw : correctedText;
+  if (!raw) { transcript.innerHTML = ''; correctedText = ''; return; }
+  if (useFormatting) {
+    var markdownText = formatToMarkdown(raw);
+    try {
+      var html = initMarkdown().render(markdownText);
+      transcript.innerHTML = html;
+      if (window.renderMathInElement) {
+        window.renderMathInElement(transcript, {
+          delimiters: [{left: '$$', right: '$$', display: true}, {left: '$', right: '$', display: false}],
+          throwOnError: false
+        });
+      }
+    } catch(e) {
+      transcript.textContent = raw;
+    }
+    wrapTextLines(transcript);
+  } else {
+    transcript.textContent = raw;
+    correctedText = raw;
+    wrapTextLines(transcript);
+  }
+  linkTranscriptHover();
+  transcript.scrollTop = transcript.scrollHeight;
+}
+
+function wrapTextLines(el) {
+  el.querySelectorAll('.ocr-textline').forEach(function(s) { var t = s.firstChild; if (t) { s.parentNode.insertBefore(t, s); s.remove(); } });
+  var walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null, false);
+  var nodes = [];
+  var node;
+  while (node = walker.nextNode()) {
+    var p = node.parentElement;
+    if (node.textContent.trim() && p.tagName !== 'CODE' && p.tagName !== 'PRE' && !p.classList.contains('ocr-textline') && p.tagName !== 'SUP' && p.tagName !== 'KBD') {
+      nodes.push(node);
+    }
+  }
+  nodes.forEach(function(tn, i) {
+    if (tn.textContent.trim().length === 0 || tn.parentElement.classList.contains('ocr-textline')) return;
+    var span = document.createElement('span');
+    span.className = 'ocr-textline';
+    span.dataset.line = i;
+    span.style.cursor = 'pointer';
+    span.addEventListener('mouseenter', function() { showLineBox(parseInt(span.dataset.line)); });
+    span.addEventListener('mouseleave', function() { hideBoxOverlay(); });
+    var parent = tn.parentNode;
+    var ref = tn.nextSibling;
+    parent.insertBefore(span, ref);
+    span.appendChild(tn);
+  });
+}
+
+function linkTranscriptHover() {
+  transcript.addEventListener('mouseenter', function() { showLineBox(hoverLine); });
+  transcript.addEventListener('mouseleave', function() { hideBoxOverlay(); });
+}
+
+async function runJudgePipeline(raw) {
+  const cands = glossaryCandidates(raw, PREFILTER_THRESHOLD);
+  if (!cands.length) { suggestions = []; renderSuggestions(); return; }
+  const mode = judgeCfg.mode;
+  const order = mode === 'auto' ? ['typesafe', 'local', 'heuristic']
+    : mode === 'typesafe' ? ['typesafe', 'heuristic']
+    : mode === 'local' ? ['local', 'heuristic'] : ['heuristic'];
+  for (const backend of order) {
+    try {
+      let judged;
+      if (backend === 'typesafe') judged = await judgeTypesafe(cands, raw);
+      else if (backend === 'local') judged = await judgeLocal(cands, raw);
+      else judged = judgeHeuristic(cands);
+      judged.sort((a, b) => (b.conf ?? 0) - (a.conf ?? 0));
+      suggestions = judged;
+      renderSuggestions();
+      const used = judged[0] && judged[0].src ? judged[0].src : backend;
+      setStatus((status.textContent.split(' - ')[0] || 'done') + ' · judge: ' + used);
+      return;
+    } catch (e) {
+      setStatus('judge ' + backend + ' unavailable (' + String(e.message || e).slice(0, 60) + ') - falling back');
+    }
+  }
+  suggestions = judgeHeuristic(cands);
+  renderSuggestions();
+}
+
+loadTopics();
+renderTopicSelect();
+
+(async () => {
+  const s = sessions.find(x => x.id === activeId);
+  if (!s || (!s.preRaw && !s.hasImage)) { updateEmptyState(); return; }
+  currentTopic = topics[s.topic] ? s.topic : currentTopic;
+  renderTopicSelect();
+  if (s.prompt) $('prompt').value = s.prompt;
+  preRaw = s.preRaw || '';
+  lastRaw = s.lastRaw || preRaw;
+  appliedDiff = Array.isArray(s.appliedDiff) ? s.appliedDiff : [];
+  const img = await imgStore.get(activeId);
+  if (img) {
+    preview.src = img;
+    preview.style.display = 'block';
+    $('fileNameChip').textContent = s.name || '';
+    $('fileNameChip').hidden = !$('fileNameChip').textContent;
+  }
+  renderTranscript();
+  $('viewToggle').hidden = appliedDiff.length === 0;
+  updateEmptyState();
+  setStatus('session restored: ' + (s.name || 'Untitled'));
+})();
+
+async function ocr(silent) {
+  if (!preview.src) { if (!silent) setStatus('no document loaded'); return; }
+  const endpoint = $('endpoint').value.replace(/\/+$/, '') + '/v1/chat/completions';
+  const body = {
+    model: 'ocr', stream: true, temperature: 0, max_tokens: 2000,
+    stream_options: { include_usage: true },
+    messages: [{
+      role: 'user',
+      content: [
+        { type: 'image_url', image_url: { url: preview.src } },
+        { type: 'text', text: $('prompt').value + (domainContextText() ? '\n' + domainContextText() : '') }
+      ]
+    }]
+  };
+  ctrl = new AbortController();
+  lastRaw = ''; preRaw = '';
+  appliedDiff = []; correctedTextParts = []; correctedText = '';
+  showOriginal = false;
+  $('viewToggle').hidden = true;
+  $('viewToggle').textContent = 'Show original';
+  suggestions = [];
+  renderSuggestions();
+  transcript.textContent = ''; stats.textContent = '';
+  $('run').disabled = true; $('stop').disabled = false;
+  setStatus('transcribing…');
+  updateEmptyState();
+  const origin = endpoint.replace(/\/v1\/chat\/completions$/, '');
+  const t0b = performance.now();
+  let slotTimer = null, genCount = 0;
+  const pollSlots = async () => {
+    const elapsed = ((performance.now() - t0b) / 1000).toFixed(0);
+    try {
+      const sres = await fetch(origin + '/slots', { signal: ctrl.signal });
+      if (!sres.ok) return;
+      const slots = await sres.json();
+      const busy = (Array.isArray(slots) ? slots : []).find(s => s.is_processing);
+      if (busy && !got && busy.n_prompt_tokens > 32) {
+        const pct = Math.min(100, Math.round(100 * (busy.n_prompt_tokens_processed || 0) / busy.n_prompt_tokens));
+        setStatus('reading document… ' + pct + '% (' + (busy.n_prompt_tokens_processed || 0) + '/' + busy.n_prompt_tokens + ' tok)');
+      } else if (busy && !got) {
+        setStatus('reading document… encoding image · ' + elapsed + 's');
+      } else if (got) {
+        setStatus('writing… ' + genCount + ' tok');
+      }
+    } catch {
+      if (!got) setStatus('reading document… ' + elapsed + 's');
+    }
+  };
+  const slotTimerId = setInterval(pollSlots, 400);
+  pollSlots();
+  const t0 = performance.now();
+  let got = false;
+  try {
+    const res = await fetch(endpoint, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body), signal: ctrl.signal
+    });
+    if (!res.ok) throw new Error('HTTP ' + res.status + ' - ' + (await res.text()).slice(0, 200));
+    const reader = res.body.getReader(), dec = new TextDecoder();
+    let buf = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let nl;
+      while ((nl = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, nl).trim(); buf = buf.slice(nl + 1);
+        if (!line.startsWith('data:')) continue;
+        const data = line.slice(5).trim();
+        if (data === '[DONE]') continue;
+        let j; try { j = JSON.parse(data); } catch { continue; }
+        const delta = j.choices?.[0]?.delta?.content;
+        if (delta) {
+          if (!got) { got = true; setStatus('writing…'); }
+          genCount++;
+          lastRaw += delta;
+          transcript.textContent = lastRaw;
+          transcript.scrollTop = transcript.scrollHeight;
+        }
+        if (j.timings || j.usage) renderStats(j);
+      }
+    }
+    preRaw = lastRaw;
+    autoDrawBoxes(lastRaw);
+    renderTranscript();
+    clearInterval(slotTimerId);
+    slotTimer = null;
+    if (!silent) setStatus('done in ' + ((performance.now() - t0) / 1000).toFixed(1) + 's · ' + genCount + ' tok');
+    else setStatus('batch: ' + fileName + ' done (' + ((performance.now() - t0) / 1000).toFixed(1) + 's · ' + genCount + ' tok)');
+    persistCurrent();
+    updateBatchBar();
+    await runJudgePipeline(lastRaw);
+  } catch (e) {
+    if (e.name === 'AbortError') setStatus('stopped');
+    else { setStatus('error - see transcript'); transcript.textContent += '\n[ERROR] ' + e.message; }
+    if (silent) await new Promise(r => setTimeout(r, 1200));
+  } finally {
+    clearInterval(slotTimerId);
+    $('run').disabled = false; $('stop').disabled = true; ctrl = null;
+    renderTranscript();
+  }
+}
+
+$('run').onclick = ocr;
+window.addEventListener('resize', resizeBoxOverlay);
+$('stop').onclick = () => ctrl?.abort();
+$('formatToggle').onclick = () => {
+  useFormatting = !useFormatting;
+  $('formatToggle').textContent = useFormatting ? 'Formatted' : 'Raw';
+  renderTranscript();
+};
+$('copy').onclick = async () => {
+  const t = showOriginal ? (preRaw || lastRaw) : (appliedDiff.length ? correctedText : lastRaw);
+  try { await navigator.clipboard.writeText(t); setStatus('copied'); }
+  catch {
+    const ta = document.createElement('textarea');
+    ta.value = t; document.body.appendChild(ta); ta.select();
+    document.execCommand('copy'); ta.remove(); setStatus('copied');
+  }
+};
+if (window.renderMathInElement) {
+  try { renderMathInElement(document.body, { delimiters: [{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}], throwOnError: false }); } catch {}
+}
+</script>
+</body>
+</html>
