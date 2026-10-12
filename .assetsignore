@@ -13,3 +13,15 @@ tools
 HANDOFF.md
 README.md
 logo-options.html
+crates
+target
+spikes
+docs
+.github
+.cargo
+.wrangler
+Cargo.toml
+Cargo.lock
+rust-toolchain.toml
+dist
+*.rs

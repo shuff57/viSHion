@@ -35,6 +35,10 @@ node serve.mjs
 # CSP check: loads the app in Chrome, requires zero violations, drives the DOM twin,
 # and proves enforcement with a negative control. CHROME=<path> overrides the browser.
 node check.mjs
+
+# deploy-leak check: serves the repo root through the root wrangler.jsonc + .assetsignore and requires
+# that Cargo.*, crates/, target/, spikes/, docs/ are NOT served while the legacy app still is
+node check-assetsignore.mjs
 ```
 
 Windows default Chrome path is `C:/Program Files/Google/Chrome/Application/chrome.exe`; Linux `/usr/bin/google-chrome`.
@@ -45,8 +49,18 @@ Windows default Chrome path is `C:/Program Files/Google/Chrome/Application/chrom
 sha256 of every inline script in `index.html` to `script-src`. `connect-src` is untouched. The hash changes
 whenever the inline bootstrap script in `crates/app/web/index.html` changes, so always build through `build.mjs`.
 
+## Keyboard model (web)
+
+The canvas is `tabindex=-1` and `aria-hidden`: it takes pointer focus but is not in the Tab order and is not
+exposed to assistive tech. The hidden `#controls` twin buttons are the keyboard/AT surface, in on-screen
+reading order. eframe would swallow Tab on the canvas, so `ui/src/web.rs` keeps Tab away from it (capture
+listener) and the browser moves focus: no keyboard trap. `check.mjs` drives real Tab, Shift+Tab, Enter and
+Space, never `focus()`. A future egui text field must keep this property (Tab leaves it).
+
 ## Rules to keep
 
+- Real `project.json` has no `id` and keys are `slug/project.json`, `slug/pages/<id>.json`; `core::Project`
+  keeps the whole document in file order and `FsStore` accepts validated `/` keys and writes atomically.
 - Every interactive widget goes through `App::ctl()` so web gets a twin, focus ring and keyboard activation.
 - Do not use `std::time::Instant` or `SystemTime` in code that runs on wasm32 (it panics); use egui time.
 - `cargo test` must pass natively; wasm builds with `--target wasm32-unknown-unknown` (CI does both).

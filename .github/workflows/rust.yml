@@ -48,6 +48,10 @@ jobs:
           npm ci
           node build.mjs
 
+      - name: Deploy-leak check (.assetsignore keeps crates/, target/, Cargo.* out of the asset dir)
+        working-directory: crates/app/web
+        run: node check-assetsignore.mjs
+
       - name: CSP check (wrangler dev + Chrome, zero violations)
         working-directory: crates/app/web
         env:
