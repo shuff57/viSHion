@@ -1,6 +1,13 @@
-//! Native directory-backed store. Keys are flat file names (no separators, no `..`).
+//! Native directory-backed store. Keys are '/'-separated relative paths exactly like the JS app's
+//! `slug/project.json` and `slug/pages/<id>.json`. Segments may not be empty, `.`, `..`, or contain
+//! `\`, `:` or NUL, so a key can never leave the root. Writes are atomic: temp file in the same
+//! directory, then rename over the target.
 use crate::{Result, Store, StoreError};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+const TMP_PREFIX: &str = ".vishion-tmp-";
+static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
 pub struct FsStore {
     root: PathBuf,
@@ -12,15 +19,44 @@ impl FsStore {
     }
 
     fn path(&self, key: &str) -> Result<PathBuf> {
-        let bad = key.is_empty()
-            || key == "."
-            || key == ".."
-            || key.chars().any(|c| matches!(c, '/' | '\\' | '\0' | ':'));
-        if bad {
-            return Err(StoreError::InvalidKey(key.into()));
+        let mut p = self.root.clone();
+        for seg in key.split('/') {
+            let bad = seg.is_empty()
+                || seg == "."
+                || seg == ".."
+                || seg.starts_with(TMP_PREFIX)
+                || seg.chars().any(|c| matches!(c, '\\' | '\0' | ':'));
+            if bad {
+                return Err(StoreError::InvalidKey(key.into()));
+            }
+            p.push(seg);
         }
-        Ok(self.root.join(key))
+        Ok(p)
     }
+}
+
+fn walk(dir: &Path, rel: &str, out: &mut Vec<String>) -> std::io::Result<()> {
+    let rd = match std::fs::read_dir(dir) {
+        Ok(r) => r,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e),
+    };
+    for e in rd {
+        let e = e?;
+        let Some(name) = e.file_name().to_str().map(str::to_string) else {
+            continue;
+        };
+        if name.starts_with(TMP_PREFIX) {
+            continue;
+        }
+        let key = if rel.is_empty() { name } else { format!("{rel}/{name}") };
+        if e.file_type()?.is_dir() {
+            walk(&e.path(), &key, out)?;
+        } else {
+            out.push(key);
+        }
+    }
+    Ok(())
 }
 
 impl Store for FsStore {
@@ -34,25 +70,30 @@ impl Store for FsStore {
 
     async fn put(&self, key: &str, value: &[u8]) -> Result<()> {
         let p = self.path(key)?;
-        std::fs::create_dir_all(&self.root)?;
-        std::fs::write(p, value)?;
-        Ok(())
+        let dir = p.parent().unwrap_or(&self.root);
+        std::fs::create_dir_all(dir)?;
+        let tmp = dir.join(format!(
+            "{TMP_PREFIX}{}-{}",
+            std::process::id(),
+            TMP_SEQ.fetch_add(1, Ordering::Relaxed)
+        ));
+        let res = (|| {
+            let mut f = std::fs::File::create(&tmp)?;
+            std::io::Write::write_all(&mut f, value)?;
+            f.sync_all()?;
+            drop(f);
+            std::fs::rename(&tmp, &p)
+        })();
+        if res.is_err() {
+            let _ = std::fs::remove_file(&tmp);
+        }
+        Ok(res?)
     }
 
     async fn list(&self, prefix: &str) -> Result<Vec<String>> {
         let mut out = vec![];
-        let rd = match std::fs::read_dir(&self.root) {
-            Ok(r) => r,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(out),
-            Err(e) => return Err(e.into()),
-        };
-        for e in rd {
-            if let Some(n) = e?.file_name().to_str() {
-                if n.starts_with(prefix) {
-                    out.push(n.to_string());
-                }
-            }
-        }
+        walk(&self.root, "", &mut out)?;
+        out.retain(|k| k.starts_with(prefix));
         out.sort();
         Ok(out)
     }
@@ -98,6 +139,65 @@ mod tests {
         block_on(s.delete("a.json")).unwrap();
         assert_eq!(block_on(s.list("")).unwrap(), vec!["b.json"]);
         assert!(block_on(s.get("../x")).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn tmp_dir(tag: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("vishion-store-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        d
+    }
+
+    #[test]
+    fn legacy_slash_keys_nest_list_and_delete() {
+        let dir = tmp_dir("nest");
+        let s = FsStore::new(&dir);
+        block_on(s.put("quiz-1/project.json", b"{}")).unwrap();
+        block_on(s.put("quiz-1/pages/p1.json", b"{\"a\":1}")).unwrap();
+        block_on(s.put("quiz-2/project.json", b"{}")).unwrap();
+        assert!(dir.join("quiz-1").join("pages").join("p1.json").is_file());
+        assert_eq!(
+            block_on(s.get("quiz-1/pages/p1.json")).unwrap().as_deref(),
+            Some(&b"{\"a\":1}"[..])
+        );
+        assert_eq!(
+            block_on(s.list("quiz-1/")).unwrap(),
+            vec!["quiz-1/pages/p1.json", "quiz-1/project.json"]
+        );
+        assert_eq!(block_on(s.list("")).unwrap().len(), 3);
+        block_on(s.delete("quiz-1/pages/p1.json")).unwrap();
+        assert_eq!(block_on(s.get("quiz-1/pages/p1.json")).unwrap(), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn traversal_and_odd_keys_are_rejected() {
+        let dir = tmp_dir("bad");
+        let s = FsStore::new(&dir);
+        for k in [
+            "", "/", "/a", "a/", "a//b", "../x", "a/../b", "./a", "a\\b", "c:x", "a/\0", ".vishion-tmp-1-1",
+        ] {
+            assert!(block_on(s.put(k, b"x")).is_err(), "key {k:?} should be rejected");
+            assert!(block_on(s.get(k)).is_err(), "key {k:?} should be rejected");
+        }
+        assert!(!dir.exists(), "rejected keys must not create anything");
+    }
+
+    #[test]
+    fn put_overwrites_atomically_and_leaves_no_temp_files() {
+        let dir = tmp_dir("atomic");
+        let s = FsStore::new(&dir);
+        block_on(s.put("p/project.json", b"one")).unwrap();
+        block_on(s.put("p/project.json", b"two-longer")).unwrap();
+        assert_eq!(
+            block_on(s.get("p/project.json")).unwrap().as_deref(),
+            Some(&b"two-longer"[..])
+        );
+        let names: Vec<_> = std::fs::read_dir(dir.join("p"))
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .collect();
+        assert_eq!(names, vec!["project.json"]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
