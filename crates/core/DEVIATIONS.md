@@ -32,9 +32,13 @@ later phase. Quirks of the JS (for example `$&` in a glossary term being expande
   wasm32). That covers every script, punctuation, symbols, emoji, ignorables, kana/final-form folding and digit
   runs. One gap in ICU4X is closed by `src/hanfold.rs`: node's ICU orders Han ideographs by radical-stroke, ICU4X
   by code point, so each Han char is replaced by the char ICU4X ranks where node ranks it (generated from node by
-  `tools/parity/han.js` + `tests/gen_han.rs`). Verified: 300 000 random pairs over the BMP and planes 1 to 2
+  `tools/parity/han.js` + `tests/gen_han.rs`). A second gap is node's ICU identical-prefix skip: after a
+  common prefix, a supplementary-plane digit (U+1CCF0.., U+1D7CE.., U+1FBF0..) is not merged into a preceding
+  digit run unless the other side's next char is digit/mark-like ("unsafe backward"); `jsx::icu_equal_prefix_skip`
+  strips the prefix in exactly that case (tables probed from node; checked on ~2M pairs: every BMP char and a
+  char per lead block, 5 prefixes, 3 digits). Verified: 300 000 random pairs over the BMP and planes 1 to 2
   (all scripts, symbols, digits, spaces) and the 125 000 characters of the Han, kana, Hangul, Indic, symbol and
-  emoji blocks in node's own sorted order, with no mismatch; the committed fixture replays 60 000 pairs including
+  emoji blocks in node's own sorted order, with no mismatch; the committed fixture replays 122 000 pairs including
   the blind-critic cases. Remaining: the data versions differ (node ICU 78 / CLDR 48 vs the crate's CLDR data), so
   characters added or reordered between those releases could differ; JS uses the host locale, the fixture is
   node's default (root/en).

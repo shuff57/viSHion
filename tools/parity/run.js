@@ -334,6 +334,18 @@ function natCases() {
   // Student names as groups.list sorts them: curly quotes, em dashes, non-Latin scripts.
   const sn = ['Maya R.', 'Maya — R', 'O’Brien', "O'Brien", 'Αλέξης', 'Анна', 'דני', 'محمد', 'გიორგი', '王芳', 'あや', 'Zoë', 'Zoe', 'Åsa', 'Anaïs'];
   for (const a of sn) for (const b of sn) wp.push([a, b]);
+  // Supplementary-plane Nd (all of them) with and without a digit-run prefix against mixed probes.
+  const suppProbes = ['a', '!', '1', '2', '9', '11', '12', 'ᙲ', 'ሀ', '_', 'z'];
+  for (let cp = 0x10000; cp < 0x110000; cp++) {
+    const ch = String.fromCodePoint(cp);
+    if (!/\p{Nd}/u.test(ch)) continue;
+    for (const pre of ['', '1', '٢', '0']) for (const pr of suppProbes) wp.push([pre + ch, pre + pr], [pr + pre, ch + pre]);
+  }
+  // ICU's identical-prefix skip backs up over combining marks / contraction chars: sample the BMP and every lead block.
+  for (let cp = 0x80; cp < 0x10000; cp += 5) { if (cp >= 0xd800 && cp < 0xe000) continue; const ch = String.fromCodePoint(cp); wp.push(['1' + ch, '1\u{1D7CF}'], ['٢\u{1FBF3}9', '٢' + ch + 'x']); }
+  for (let b = 0; b < 1024; b++) { const ch = String.fromCodePoint(0x10000 + b * 1024 + 7); wp.push(['1' + ch, '1\u{1CCF5}'], ['1\u{1D7CF}9', '1' + ch + 'x']); }
+  for (const m of ['̀', '́', '〪', '゙', '︠', '่', 'ְ', '່', '᪰']) wp.push(['1' + m, '1\u{1D7CF}'], ['1\u{1D7CF}9', '1' + m + 'x']);
+  wp.push(['1\u{1D7CF}', '1\u{1D7D0}'], ['1\u{1D7CF}9', '1\u{1D7CF}10'], ['\u{1D7CF}1', '11'], ['2\u{1200}', '2\u{1D7CF}'], ['0\u{1CCF0}', '0!']);
   const allPairs = pairs.concat(wp);
   add('nat', { pairs: allPairs }, allPairs.map(([a, b]) => Math.sign(j.OCR.natCompare(a, b))));
   const slugs = ['Period 3 Quiz', '  --Hello, World!--  ', 'Café Ünal', 'ÀÉÎÕÜ', '', '!!!', 'a'.repeat(60), 'Ab-Cd_Ef', 'ﬁne ﬀ', '①②③', '日本語 test', 'x'.repeat(47) + ' y z', 'x'.repeat(47) + '--y', 'ǅ', 'ＡＢＣ'];
