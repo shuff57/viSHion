@@ -240,17 +240,23 @@ pub fn show_unit(ui: &mut egui::Ui, cache: &mut MathCache, src: &str) {
 pub struct App {
     cases: Vec<Case>,
     sel: usize,
+    mirrored: Option<usize>,
     cache: MathCache,
 }
 
 impl App {
     pub fn new() -> Self {
-        Self { cases: corpus(), sel: 0, cache: MathCache::new() }
+        Self { cases: corpus(), sel: 0, mirrored: None, cache: MathCache::new() }
     }
 }
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _f: &mut eframe::Frame) {
+        if self.mirrored != Some(self.sel) {
+            self.mirrored = Some(self.sel);
+            #[cfg(target_arch = "wasm32")]
+            a11y_mirror(&self.cases[self.sel].text);
+        }
         egui::SidePanel::left("list").show(ctx, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| {
                 for (i, c) in self.cases.iter().enumerate() {
@@ -282,4 +288,30 @@ mod web {
             .start(&canvas_id, eframe::WebOptions::default(), Box::new(|_| Ok(Box::new(super::App::new()))))
             .await
     }
+}
+
+/// Hidden DOM twin of the transcript so assistive tech has something to read. Plain DOM, no egui involved.
+#[cfg(target_arch = "wasm32")]
+fn a11y_mirror(text: &str) {
+    use wasm_bindgen::JsCast;
+    let Some(doc) = web_sys::window().and_then(|w| w.document()) else { return };
+    let Some(host) = doc.get_element_by_id("a11y") else { return };
+    host.set_text_content(None);
+    for u in units(text) {
+        let (held, math) = hold_math(&u);
+        let Ok(p) = doc.create_element("p") else { continue };
+        for piece in pieces(&held, math.len()) {
+            let Ok(span) = doc.create_element("span") else { continue };
+            match piece {
+                Piece::Text { s, .. } => span.set_text_content(Some(&s)),
+                Piece::Math(n) => {
+                    let _ = span.set_attribute("role", "math");
+                    span.set_text_content(Some(&math[n].tex));
+                }
+            }
+            let _ = p.append_child(&span);
+        }
+        let _ = host.append_child(&p);
+    }
+    let _ = host.dyn_ref::<web_sys::HtmlElement>();
 }

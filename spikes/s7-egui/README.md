@@ -33,3 +33,12 @@ the S5 transcript corpus with typeset math. Screen-reader access on the web buil
 
 Run: `cargo run --release --bin s7 -- --report`, `... -- --tex math.txt`, then
 `cargo build --release --target wasm32-unknown-unknown --lib && wasm-bindgen --target web --no-typescript --out-dir dist target/wasm32-unknown-unknown/release/vishion_s7.wasm && node shot.mjs`
+
+## S8 follow-up: accessibility probe (`a11y.mjs`)
+- **Hidden DOM mirror works for reading.** `lib.rs::a11y_mirror` writes the selected transcript into a
+  visually hidden `<main role=document aria-live=polite>` (paragraphs, math as `role=math` with the TeX as
+  text). Chrome's accessibility tree then exposes it correctly and updates on selection.
+- **Interaction is still invisible.** The list of items, buttons and any editing live only on the canvas.
+  Tab focuses the bare `<canvas>`. A real app would need a second mirrored layer of focusable controls
+  (or AccessKit on web, not available in eframe 0.28). That is the actual cost of choosing egui for the web.
+- **Not verified:** native AccessKit tree (UI Automation) and any real screen reader (NVDA/VoiceOver).
