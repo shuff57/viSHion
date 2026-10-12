@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 120" role="img" aria-label="viSHion">
+  <style>
+    @font-face { font-family:'Caveat'; font-weight:600; src:url(fonts/caveat-600-logo.woff2) format('woff2'); }
+    @font-face { font-family:'Instrument Sans'; font-weight:600; src:url(fonts/instrument-sans-latin-600-normal.woff2) format('woff2'); }
+    :root { --ink:#141B2D; --accent:#26358F; }
+    @media (prefers-color-scheme: dark) { :root { --ink:#E8ECF3; --accent:#8FA0FF; } }
+    .hand  { font:600 68px 'Caveat','Segoe Script','Bradley Hand',cursive; fill:var(--accent); opacity:.85;
+             animation:hand 5s ease-in-out infinite alternate; }
+    .clean { font:600 56px 'Instrument Sans','Segoe UI',system-ui,sans-serif; fill:var(--ink);
+             animation:clean 5s ease-in-out infinite alternate; }
+    .clean tspan { fill:var(--accent); }
+    .bar   { fill:var(--accent); animation:bar 5s ease-in-out infinite alternate; }
+    @keyframes clean { 0%,12% { clip-path:inset(0 100% 0 0); } 88%,100% { clip-path:inset(0); } }
+    @keyframes hand  { 0%,12% { clip-path:inset(0); } 88%,100% { clip-path:inset(0 0 0 100%); } }
+    @keyframes bar   { 0%,12% { transform:translateX(0); } 88%,100% { transform:translateX(300px); } }
+    @media (prefers-reduced-motion: reduce) { * { animation:none !important; } .hand { display:none; } .clean { clip-path:none; } .bar { display:none; } }
+  </style>
+  <!-- ponytail: handwriting is a font, not hand-drawn paths; swap for traced paths if the SVG must work as <img> -->
+  <text class="hand"  x="30" y="82" textLength="300" lengthAdjust="spacingAndGlyphs" transform="rotate(-3 180 60)">viSHion</text>
+  <text class="clean" x="30" y="82" textLength="300" lengthAdjust="spacingAndGlyphs">vi<tspan>SH</tspan>ion</text>
+  <rect class="bar" x="28" y="22" width="4" height="76" rx="2"/>
+</svg>

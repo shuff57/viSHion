@@ -1,0 +1,115 @@
+/* Design tokens. Light is the default; dark applies when the theme is "dark",
+   or when it is "auto" and the system prefers dark. Values come from design/HANDOFF.md. */
+@font-face { font-family: "Instrument Sans"; font-weight: 400; font-style: normal; font-display: swap; src: url("../fonts/instrument-sans-latin-400-normal.woff2") format("woff2"); }
+@font-face { font-family: "Instrument Sans"; font-weight: 500; font-style: normal; font-display: swap; src: url("../fonts/instrument-sans-latin-500-normal.woff2") format("woff2"); }
+@font-face { font-family: "Instrument Sans"; font-weight: 600; font-style: normal; font-display: swap; src: url("../fonts/instrument-sans-latin-600-normal.woff2") format("woff2"); }
+@font-face { font-family: "Source Serif 4"; font-weight: 400; font-style: normal; font-display: swap; src: url("../fonts/source-serif-4-latin-400-normal.woff2") format("woff2"); }
+@font-face { font-family: "Source Serif 4"; font-weight: 600; font-style: normal; font-display: swap; src: url("../fonts/source-serif-4-latin-600-normal.woff2") format("woff2"); }
+@font-face { font-family: "Source Serif 4"; font-weight: 400; font-style: italic; font-display: swap; src: url("../fonts/source-serif-4-latin-400-italic.woff2") format("woff2"); }
+@font-face { font-family: "Caveat"; font-weight: 600; font-style: normal; font-display: swap; src: url("../fonts/caveat-600-logo.woff2") format("woff2"); }
+
+:root {
+  color-scheme: light;
+  --bg: #EEF1F5;
+  --surface: #FFFFFF;
+  --sunken: #F3F5F8;
+  --ink: #141B2D;
+  --on-ink: #FFFFFF;
+  --muted: #5A6477;
+  --faint: #8792A6;
+  --line: #D3D9E2;
+  --line2: #BCC5D2;
+  --soft: #E3E8EF;
+  --hover: #E4E9F0;
+  --track: #E1E6EE;
+  --warn: #FFE27A;
+  --warn-bg: #FFF6CF;
+  --warn-line: #E6C84F;
+  --bad: #A5221B;
+  --bad-bg: #FBDAD5;
+  --ok: #176B45;
+  --ok-bg: #DDF0E5;
+  --accent: #26358F;
+  --scanbg: #C6CEDA;
+  --scanhead: #D3DAE4;
+  --scanline: #B5BECC;
+  --scrim: rgba(20, 27, 45, 0.5);
+
+  /* Same in both themes. */
+  --bar-ok: #2F8F62;       --bar-ok-edge: #176B45;
+  --bar-warn: #FFE27A;     --bar-warn-edge: #D9A400;
+  --bar-bad: #E26D5C;      --bar-bad-edge: #A5221B;
+  --hl-warn: rgba(255, 226, 122, 0.6);
+  --hl-bad: rgba(251, 218, 213, 0.85);
+  --paper: #FCFCF8;
+  --paper-rule: #C3D4EA;
+  --paper-ink: #26358F;
+
+  --sans: "Instrument Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --serif: "Source Serif 4", Georgia, serif;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --r-control: 8px;
+  --r-card: 10px;
+  --r-dialog: 12px;
+  --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0F131C;
+  --surface: #171C28;
+  --sunken: #1D2331;
+  --ink: #E8ECF3;
+  --on-ink: #0F131C;
+  --muted: #9AA5B8;
+  --faint: #6F7A90;
+  --line: #2B3345;
+  --line2: #3E4A63;
+  --soft: #222A3A;
+  --hover: #232B3B;
+  --track: #2A3347;
+  --warn: #6B5712;
+  --warn-bg: #3A3110;
+  --warn-line: #7A6516;
+  --bad: #FF9C92;
+  --bad-bg: #4A1F1B;
+  --ok: #5FD39A;
+  --ok-bg: #14382A;
+  --accent: #9DB0FF;
+  --scanbg: #0A0D14;
+  --scanhead: #131824;
+  --scanline: #252D40;
+  --scrim: rgba(5, 7, 11, 0.62);
+  --paper: #D8D7CB;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root[data-theme="auto"] {
+    color-scheme: dark;
+    --bg: #0F131C;
+    --surface: #171C28;
+    --sunken: #1D2331;
+    --ink: #E8ECF3;
+    --on-ink: #0F131C;
+    --muted: #9AA5B8;
+    --faint: #6F7A90;
+    --line: #2B3345;
+    --line2: #3E4A63;
+    --soft: #222A3A;
+    --hover: #232B3B;
+    --track: #2A3347;
+    --warn: #6B5712;
+    --warn-bg: #3A3110;
+    --warn-line: #7A6516;
+    --bad: #FF9C92;
+    --bad-bg: #4A1F1B;
+    --ok: #5FD39A;
+    --ok-bg: #14382A;
+    --accent: #9DB0FF;
+    --scanbg: #0A0D14;
+    --scanhead: #131824;
+    --scanline: #252D40;
+    --scrim: rgba(5, 7, 11, 0.62);
+    --paper: #D8D7CB;
+  }
+}

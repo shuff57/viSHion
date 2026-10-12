@@ -1,0 +1,22 @@
+/* Motion marks arrival or a change of state. Nothing loops except an active run. */
+@keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@keyframes pop { from { opacity: 0; transform: scale(0.98) translateY(6px); } to { opacity: 1; transform: none; } }
+@keyframes fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+
+.toast { animation: rise 0.25s var(--ease) both; }
+.backdrop { animation: fade 0.15s ease-out both; }
+.modal { animation: pop 0.2s var(--ease) both; }
+.proj { animation: rise 0.35s var(--ease) both; animation-delay: calc(var(--i, 0) * 40ms); }
+.save-state[data-s="saving"] .ico { animation: spin 0.9s linear infinite; }
+.pill.processing { animation: pulse 1.6s ease-in-out infinite; }
+.btn:active:not(:disabled) { transform: scale(0.98); }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
+}

@@ -1,0 +1,8 @@
+{
+  // Static site, no Worker script. The repo root is the asset directory; .assetsignore keeps dev files out.
+  "name": "vishion",
+  "compatibility_date": "2026-10-01",
+  "assets": { "directory": "." },
+  // Needs lefthanddev.com to be a zone in this Cloudflare account; deploy creates the DNS record.
+  "routes": [{ "pattern": "vishion.lefthanddev.com", "custom_domain": true }]
+}

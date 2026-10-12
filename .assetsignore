@@ -1,0 +1,15 @@
+.assetsignore
+wrangler.jsonc
+.git
+.gitignore
+.msgbox
+.claude
+node_modules
+_workspace
+bakeoff
+tests
+design
+tools
+HANDOFF.md
+README.md
+logo-options.html
