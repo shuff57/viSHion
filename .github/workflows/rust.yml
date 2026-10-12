@@ -1,0 +1,55 @@
+name: rust
+
+on:
+  push:
+    branches: [rust-rewrite, main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  WASM_BINDGEN_VERSION: 0.2.129
+
+jobs:
+  test-and-web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Core stays pure (no egui / web-sys / tokio)
+        run: |
+          if cargo tree -p vishion-core --edges normal | grep -E '(egui|eframe|web-sys|tokio)'; then
+            echo "vishion-core depends on a forbidden crate"; exit 1
+          fi
+
+      - name: cargo test
+        run: cargo test --workspace --locked
+
+      - name: wasm32 build
+        run: cargo build -p vishion-app --lib --target wasm32-unknown-unknown --release --locked
+
+      - name: Install wasm-bindgen-cli (must match Cargo.lock)
+        run: cargo install wasm-bindgen-cli --version "$WASM_BINDGEN_VERSION" --locked
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: crates/app/web/package-lock.json
+
+      - name: Web build (wasm-bindgen + CSP-bearing _headers)
+        working-directory: crates/app/web
+        run: |
+          npm ci
+          node build.mjs
+
+      - name: CSP check (wrangler dev + Chrome, zero violations)
+        working-directory: crates/app/web
+        env:
+          CHROME: /usr/bin/google-chrome
+        run: node check.mjs

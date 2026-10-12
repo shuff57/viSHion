@@ -1,0 +1,7 @@
+{
+  // Local-only config for the Rust web build (wrangler dev serves dist/_headers, so the CSP is the real one).
+  // Never deploy this: no routes, no account bindings. Production wiring is a later phase.
+  "name": "vishion-rust-dev",
+  "compatibility_date": "2026-01-14",
+  "assets": { "directory": "../dist" }
+}

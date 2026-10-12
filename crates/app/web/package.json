@@ -1,0 +1,14 @@
+{
+  "name": "vishion-web-tools",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "serve": "node serve.mjs",
+    "check": "node check.mjs"
+  },
+  "devDependencies": {
+    "playwright-core": "1.57.0",
+    "wrangler": "4.59.2"
+  }
+}
