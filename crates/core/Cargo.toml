@@ -9,3 +9,7 @@ publish.workspace = true
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
+# Inline markdown for the egui renderer pieces; pure Rust, no HTML output needed.
+pulldown-cmark = { version = "0.13", default-features = false }
+# NFKD for `OCR.slug` (export file names).
+unicode-normalization = "0.1"
