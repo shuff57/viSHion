@@ -1,0 +1,26 @@
+\int_0^1 x^2\,dx = \frac{1}{3}
+\sum_{i=1}^{n} i = \frac{n(n+1)}{2}
+\lim_{x\to 0}\frac{\sin x}{x}=1
+\sqrt[3]{x^2+y^2}
+\begin{pmatrix} a & b \ c & d \end{pmatrix}
+\begin{bmatrix} 1 & 0 \ 0 & 1 \end{bmatrix}
+\begin{aligned} y &= mx+b \ &= 2x+1 \end{aligned}
+\begin{cases} x & x>0 \ -x & x\le 0 \end{cases}
+\frac{d}{dx}\left(e^{x}\right)=e^{x}
+\alpha+\beta=\gamma,\ \Delta x,\ \theta,\ \pi,\ \infty
+\vec{v}\cdot\vec{w}=\|v\|\|w\|\cos\theta
+\bar{x}=\frac{1}{n}\sum x_i,\ \hat{y},\ \tilde{z}
+\mathbb{R},\ \mathcal{L},\ \mathbf{x}
+\binom{n}{k}=\frac{n!}{k!(n-k)!}
+\overline{AB},\ \underline{x},\ \overbrace{a+b}^{c}
+x\in A\cup B\subseteq C,\ \forall x\exists y
+a\neq b,\ a\approx b,\ a\equiv b\pmod{n}
+\text{if } x>0 \text{ then } y
+\oint_C F\cdot dr,\ \iint_D f\,dA
+\frac{\partial^2 u}{\partial x^2}+\nabla^2 u
+\left\{ x \mid x>0 \right\}
+\mathrm{Var}(X)=E[X^2]-E[X]^2
+\color{red}{x}+\operatorname{sgn}(x)
+\xrightarrow{f} B,\ \xleftarrow{g}
+\stackrel{def}{=},\ \underset{x}{\max}
+\boxed{x=1}
