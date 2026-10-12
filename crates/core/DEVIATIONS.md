@@ -29,7 +29,7 @@ later phase. Quirks of the JS (for example `$&` in a glossary term being expande
   reach that range.
 * **`localeCompare`.** `jsx::nat_compare` reproduces ICU `numeric: true, sensitivity: 'base'` for Latin text
   (space < punctuation < digits < letters, case and accents ignored, digit runs by value). It matched node's
-  ICU on every pair of the 100-name sample (all printable ASCII, accented Latin, numbers). Other scripts and
+  ICU on all 20 736 pairs of a 144-name sample (every printable ASCII character, accented Latin, digit runs, empty and padded names). Other scripts and
   expansions (`ß`, `æ`) compare by code point.
 * **Case folding.** `to_lowercase` uses Rust's Unicode tables, V8 uses ICU's; equal for current Unicode data.
 * **Non-string values in string fields.** `page.corrected` as a number or `edits[].text` missing are treated as
