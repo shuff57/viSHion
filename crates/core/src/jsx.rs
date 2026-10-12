@@ -1,9 +1,8 @@
 //! JavaScript semantics the JS engine relies on, reproduced by hand so ports stay byte-identical:
 //! whitespace sets, `\w`/`\b`, UTF-16 lengths, `Number()` / `String()` coercion, `Math.round`,
-//! `Number#toFixed(1)` ties, regex escaping and `String#localeCompare(numeric, base)` for ASCII-ish text.
+//! `Number#toFixed(1)` ties, regex escaping and `String#localeCompare(numeric, base)` (ICU4X root collation).
 use serde_json::{Number, Value};
 use std::cmp::Ordering;
-use unicode_normalization::UnicodeNormalization;
 
 /// JS `\s` / `String#trim` set (WhiteSpace + LineTerminator). Differs from `char::is_whitespace`.
 pub fn is_ws(c: char) -> bool {
@@ -219,105 +218,28 @@ pub fn to_fixed1(x: f64) -> String {
     format!("{:.1}", x)
 }
 
-/// Compare like `a.localeCompare(b, undefined, {numeric: true, sensitivity: 'base'})` for Latin text:
-/// space < punctuation < symbols < digits < letters, case and accents ignored, digit runs by value.
-/// Non-Latin scripts fall back to code point order (documented deviation).
+/// `a.localeCompare(b, undefined, {numeric: true, sensitivity: 'base'})`: CLDR root collation at primary
+/// strength with numeric ordering, via ICU4X (the same algorithm and data family V8 uses).
 pub fn nat_compare(a: &str, b: &str) -> Ordering {
-    #[derive(PartialEq, Eq, PartialOrd, Ord)]
-    enum K {
-        Num(String),
-        Ch(u8, u32),
-    }
-    const PUNCT: &str = "_-,;:!?.'\"()[]{}@*/\\&#%`^+<=>|~$";
-    fn keys(s: &str) -> Vec<K> {
-        use crate::natfold::{EXPAND, OWN};
-        // Exception table first (Đ, ß, æ, ı, þ, circled digits, ...), then NFKD and mark stripping.
-        enum Piece {
-            C(char),
-            Own(u8, u32),
-        }
-        let mut cs: Vec<Piece> = vec![];
-        for c in s.chars() {
-            if let Ok(i) = EXPAND.binary_search_by_key(&c, |e| e.0) {
-                cs.extend(EXPAND[i].1.chars().map(Piece::C));
-            } else if let Ok(i) = OWN.binary_search_by_key(&c, |e| e.0) {
-                cs.push(Piece::Own(OWN[i].1, OWN[i].2));
-            } else {
-                cs.extend(
-                    std::iter::once(c)
-                        .nfkd()
-                        .filter(|c| !('\u{300}'..='\u{36f}').contains(c))
-                        .map(Piece::C),
-                );
-            }
-        }
-        let mut out = vec![];
-        let mut i = 0;
-        while i < cs.len() {
-            let c = match cs[i] {
-                Piece::Own(k, v) => {
-                    out.push(K::Ch(k, v));
-                    i += 1;
-                    continue;
-                }
-                Piece::C(c) => c,
-            };
-            if c.is_ascii_digit() {
-                let mut d = String::new();
-                while let Some(Piece::C(x)) = cs.get(i) {
-                    if !x.is_ascii_digit() {
-                        break;
-                    }
-                    d.push(*x);
-                    i += 1;
-                }
-                let d = d.trim_start_matches('0').to_string();
-                // length first so that numeric order = (len, lexicographic)
-                out.push(K::Num(format!("{:08}{}", d.len(), d)));
-                continue;
-            }
-            i += 1;
-            if c.is_control() {
-                continue; // ignorable
-            }
-            let k = if c.is_whitespace() {
-                K::Ch(0, 0)
-            } else if let Some(p) = PUNCT.find(c) {
-                K::Ch(1, p as u32)
-            } else if c.is_alphabetic() {
-                K::Ch(4, c.to_lowercase().next().unwrap_or(c) as u32 * 1000)
-            } else {
-                K::Ch(2, c as u32)
-            };
-            out.push(k);
-        }
-        out
-    }
-    let (ka, kb) = (keys(a), keys(b));
-    for (x, y) in ka.iter().zip(kb.iter()) {
-        let o = match (x, y) {
-            (K::Num(p), K::Num(q)) => p.cmp(q),
-            (K::Num(_), K::Ch(c, _)) => {
-                if *c >= 3 {
-                    Ordering::Less
-                } else {
-                    Ordering::Greater
-                }
-            }
-            (K::Ch(c, _), K::Num(_)) => {
-                if *c >= 3 {
-                    Ordering::Greater
-                } else {
-                    Ordering::Less
-                }
-            }
-            (K::Ch(c1, v1), K::Ch(c2, v2)) => (c1, v1).cmp(&(c2, v2)),
+    nat_compare_raw(&crate::hanfold::fold(a), &crate::hanfold::fold(b))
+}
+
+/// ICU4X root collation without the Han reordering of `hanfold` (used by the table generator).
+#[doc(hidden)]
+pub fn nat_compare_raw(a: &str, b: &str) -> Ordering {
+    use icu_collator::options::{CollatorOptions, Strength};
+    use icu_collator::preferences::CollationNumericOrdering;
+    use icu_collator::{Collator, CollatorPreferences};
+    thread_local! {
+        static C: Collator = {
+            let mut prefs = CollatorPreferences::default();
+            prefs.numeric_ordering = Some(CollationNumericOrdering::True);
+            let mut o = CollatorOptions::default();
+            o.strength = Some(Strength::Primary);
+            Collator::try_new(prefs, o).expect("root collation data is compiled in").static_to_owned()
         };
-        if o != Ordering::Equal {
-            return o;
-        }
     }
-    ka.len().cmp(&kb.len())
+    C.with(|c| c.as_borrowed().compare(a, b))
 }
 
 /// ASCII case-insensitive prefix test (regex `i` flag without `u` only folds ASCII).

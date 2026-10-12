@@ -13,3 +13,4 @@ serde_json.workspace = true
 pulldown-cmark = { version = "0.13", default-features = false }
 # NFKD for `OCR.slug` (export file names).
 unicode-normalization = "0.1"
+icu_collator = "2.3.1"

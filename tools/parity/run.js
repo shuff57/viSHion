@@ -314,6 +314,26 @@ function natCases() {
     if (/\p{Script=Latin}|\p{Nd}|\p{No}/u.test(ch)) cps.push(ch);
   }
   for (const ch of cps) for (const pr of probes) wp.push([ch, pr]);
+  // Seeded fuzz across scripts, punctuation, symbols, ignorables, kana, final forms, marks and digits.
+  const pools = [
+    'abcxyzABCXYZ', '0123456789', ' _-.,;:!?\'"()[]{}@*/\\&#%`^+<=>|~$',
+    '¿¡«»·•—–…¶§®©°€£¥‘’“”',
+    'áéñüßøæœđłðþıＡａ',
+    'αβςσΩά', 'абдийґяЖ',
+    'אךכםמת', 'اأبتضم٠٣',
+    'ადსամ', 'あアいイかカ日本中文한글',
+    '­​‍́̈ \t™★→∞×÷',
+    '\u{1f600}\u{1f44d}\u{1d400}\u{20000}กขअक'];
+  let seed = 424242; const rnd = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648;
+  const fz = [];
+  const pick = () => { const cs = Array.from(pools[Math.floor(rnd() * pools.length)]); return cs[Math.floor(rnd() * cs.length)]; };
+  for (let i = 0; i < 4000; i++) { let t = ''; const n = 1 + Math.floor(rnd() * 5); for (let k = 0; k < n; k++) t += pick(); fz.push(t); }
+  for (let i = 0; i + 1 < fz.length; i++) wp.push([fz[i], fz[i + 1]], [fz[i], fz[(i * 7 + 3) % fz.length]]);
+  const blind = [['\u{10d3}', '\u{636}'], ['\u{10d0}', '\u{5ea}'], ['\u{561}', '\u{10d0}'], ['\u{3042}', '\u{30a2}'], ['\u{3c2}', '\u{3c3}'], ['\u{5da}', '\u{5db}'], ['\u{5dd}', '\u{5de}'], ['\u{439}', '\u{438}'], ['\u{491}', '\u{434}'], ['\u{623}', '\u{627}'], ['a\u{ad}', 'a'], ['a\u{200b}', 'a'], ['\u{bf}', '\u{2014}'], ['\u{bf}', '\u{2026}'], ['\u{ab}', '\u{b7}'], ['\u{ab}', '\u{bf}']];
+  for (const p of blind) wp.push(p);
+  // Student names as groups.list sorts them: curly quotes, em dashes, non-Latin scripts.
+  const sn = ['Maya R.', 'Maya — R', 'O’Brien', "O'Brien", 'Αλέξης', 'Анна', 'דני', 'محمد', 'გიორგი', '王芳', 'あや', 'Zoë', 'Zoe', 'Åsa', 'Anaïs'];
+  for (const a of sn) for (const b of sn) wp.push([a, b]);
   const allPairs = pairs.concat(wp);
   add('nat', { pairs: allPairs }, allPairs.map(([a, b]) => Math.sign(j.OCR.natCompare(a, b))));
   const slugs = ['Period 3 Quiz', '  --Hello, World!--  ', 'Café Ünal', 'ÀÉÎÕÜ', '', '!!!', 'a'.repeat(60), 'Ab-Cd_Ef', 'ﬁne ﬀ', '①②③', '日本語 test', 'x'.repeat(47) + ' y z', 'x'.repeat(47) + '--y', 'ǅ', 'ＡＢＣ'];

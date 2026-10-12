@@ -9,3 +9,4 @@ node_modules/
 _workspace/
 target/
 dist/
+tools/parity/han_order.json

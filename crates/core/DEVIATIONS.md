@@ -27,16 +27,17 @@ later phase. Quirks of the JS (for example `$&` in a glossary term being expande
   core computes (`conf`, `percent`, band geometry) print with the shortest round-trip digits, like JS, but
   exponent forms differ outside `1e-6 <= |x| < 1e21` (`1e21` vs JS `1e+21`); none of the computed values
   reach that range.
-* **`localeCompare`.** `jsx::nat_compare` reproduces ICU `numeric: true, sensitivity: 'base'` for Latin text
-  (space < punctuation < symbols < digits < other numbers < letters, case and accents ignored, digit runs by
-  value). Characters whose base weight NFKD cannot give (`Đ`=`d`, `Ł`=`l`, `Ø`=`o`, `ß`=`ss`, `æ`=`ae`,
-  `ı`/`þ`/`ƒ` between letters, non-ASCII decimal digits, `①`/`²`/Roman numerals after digits) come from
-  `src/natfold.rs`, generated from node's ICU by `tools/parity/natfold.js`. The fixture compares every
-  Latin-script, Nd and No code point of the BMP against 14 probe strings, plus a 144-name all-pairs sample
-  and word pairs (51 626 comparisons), all equal to node. Not covered: non-Latin scripts (Greek, Cyrillic, CJK
-  compare by code point of the lowercased char, which is right for the order Greek < Cyrillic but not
-  guaranteed for every letter), supplementary-plane letters beyond Latin/Nd/No, and ICU contractions in
-  other locales (JS uses the host locale; the fixture is node's default).
+* **`localeCompare`.** `jsx::nat_compare` is `String#localeCompare(numeric: true, sensitivity: 'base')` through
+  ICU4X (`icu_collator` 2.x, root collation, primary strength, numeric ordering, compiled data, builds for
+  wasm32). That covers every script, punctuation, symbols, emoji, ignorables, kana/final-form folding and digit
+  runs. One gap in ICU4X is closed by `src/hanfold.rs`: node's ICU orders Han ideographs by radical-stroke, ICU4X
+  by code point, so each Han char is replaced by the char ICU4X ranks where node ranks it (generated from node by
+  `tools/parity/han.js` + `tests/gen_han.rs`). Verified: 300 000 random pairs over the BMP and planes 1 to 2
+  (all scripts, symbols, digits, spaces) and the 125 000 characters of the Han, kana, Hangul, Indic, symbol and
+  emoji blocks in node's own sorted order, with no mismatch; the committed fixture replays 60 000 pairs including
+  the blind-critic cases. Remaining: the data versions differ (node ICU 78 / CLDR 48 vs the crate's CLDR data), so
+  characters added or reordered between those releases could differ; JS uses the host locale, the fixture is
+  node's default (root/en).
 * **Case folding.** `to_lowercase` uses Rust's Unicode tables, V8 uses ICU's; equal for current Unicode data.
 * **Non-string values in string fields.** `page.corrected` as a number or `edits[].text` missing are treated as
   empty by the typed accessors; JS would coerce or throw. Real projects never contain these.
