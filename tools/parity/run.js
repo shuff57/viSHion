@@ -346,6 +346,24 @@ function natCases() {
   for (let b = 0; b < 1024; b++) { const ch = String.fromCodePoint(0x10000 + b * 1024 + 7); wp.push(['1' + ch, '1\u{1CCF5}'], ['1\u{1D7CF}9', '1' + ch + 'x']); }
   for (const m of ['̀', '́', '〪', '゙', '︠', '่', 'ְ', '່', '᪰']) wp.push(['1' + m, '1\u{1D7CF}'], ['1\u{1D7CF}9', '1' + m + 'x']);
   wp.push(['1\u{1D7CF}', '1\u{1D7D0}'], ['1\u{1D7CF}9', '1\u{1D7CF}10'], ['\u{1D7CF}1', '11'], ['2\u{1200}', '2\u{1D7CF}'], ['0\u{1CCF0}', '0!']);
+  // Round-4 gaps: supplementary digits before/after/inside digit runs (ICU prefix skip over UTF-16 units).
+  for (const [a, b] of [['100', '1\u{1D7CE}'], ['1\u{1D7CE}0', '10'], ['1\u{1D7CE}0', '1\u{1D7CE}'], ['100', '1\u{1CCF9}'], ['100', '1\u{1D7FF}'], ['100', '1\u{1FBF9}'],
+    ['1\u{1D7CE}0', '17'], ['1\u{1D7CE}0', '1９'], ['1\u{1D7CE}0', '1\u{661}'], ['1\u{1D7CE}0', '1\u{967}'],
+    ['\u{4E43}\u{967}\u{668}\u{2B9}', '\u{4E43}\u{967}\u{1CCF0}\u{1CCF6}\u{1D431}\u{16A62}'],
+    ['\u{1CCF2}\u{1CCF7}\u{1CCF0}\u{11066}', '\u{1CCF2}\u{1CCF7}\u{1CCF0}\u{635}\u{648}\u{63C}'],
+    ['\u{1CCF8}\u{1D7CE}\u{6F7}', '\u{1CCF8}\u{E58}']]) wp.push([a, b], [b, a]);
+  {
+    const dig = ['0', '1', '7', '9', '\u{661}', '\u{967}', '\u{6F7}', '\u{E58}', '９', '\u{1CCF0}', '\u{1CCF6}', '\u{1CCF9}', '\u{1D7CE}', '\u{1D7D3}', '\u{1D7FF}', '\u{1FBF0}', '\u{1FBF9}',
+      '\u{11066}', '\u{16A62}', '\u{1E951}', '\u{104A1}', '\u{1D431}', 'a', 'x', '\u{4E43}', '\u{2B9}', '\u{635}', '\u{300}', '!', '\u{200B}'];
+    let sd = 99991; const r2 = () => (sd = (sd * 1103515245 + 12345) % 2147483648) / 2147483648;
+    const mk = () => { let t = ''; const n = 1 + Math.floor(r2() * 6); for (let k = 0; k < n; k++) t += dig[Math.floor(r2() * dig.length)]; return t; };
+    for (let i = 0; i < 20000; i++) {
+      const a = mk(); let b;
+      const m = r2();
+      if (m < 0.5) { b = Array.from(a).slice(0, Math.floor(r2() * a.length)).join('') + mk(); } else if (m < 0.75) { b = mk(); } else { const c = Array.from(a); c[Math.floor(r2() * c.length)] = dig[Math.floor(r2() * dig.length)]; b = c.join(''); }
+      wp.push([a, b]);
+    }
+  }
   const allPairs = pairs.concat(wp);
   add('nat', { pairs: allPairs }, allPairs.map(([a, b]) => Math.sign(j.OCR.natCompare(a, b))));
   const slugs = ['Period 3 Quiz', '  --Hello, World!--  ', 'Café Ünal', 'ÀÉÎÕÜ', '', '!!!', 'a'.repeat(60), 'Ab-Cd_Ef', 'ﬁne ﬀ', '①②③', '日本語 test', 'x'.repeat(47) + ' y z', 'x'.repeat(47) + '--y', 'ǅ', 'ＡＢＣ'];

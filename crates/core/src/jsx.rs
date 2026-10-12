@@ -274,42 +274,66 @@ const UNSAFE_BMP: &[(u32, u32)] = &[
     (0xfe20, 0xfe2f),
 ];
 
-/// Whether ICU's identical-prefix skip must back up over the prefix because of the character `c` that follows.
-fn skip_unsafe(c: char) -> bool {
-    let u = c as u32;
-    if u >= 0x10000 {
-        return lead_unsafe((u - 0x10000) >> 10);
-    }
-    UNSAFE_BMP.binary_search_by(|&(lo, hi)| if u < lo { Ordering::Greater } else if u > hi { Ordering::Less } else { Ordering::Equal }).is_ok()
+/// BMP decimal digits above U+065F (ICU's numeric mode makes digits "unsafe backward"; ASCII handled inline).
+const BMP_ND: &[(u32, u32)] = &[
+    (0x660, 0x669), (0x6f0, 0x6f9), (0x7c0, 0x7c9), (0x966, 0x96f), (0x9e6, 0x9ef), (0xa66, 0xa6f), (0xae6, 0xaef),
+    (0xb66, 0xb6f), (0xbe6, 0xbef), (0xc66, 0xc6f), (0xce6, 0xcef), (0xd66, 0xd6f), (0xde6, 0xdef), (0xe50, 0xe59),
+    (0xed0, 0xed9), (0xf20, 0xf29), (0x1040, 0x1049), (0x1090, 0x1099), (0x17e0, 0x17e9), (0x1810, 0x1819),
+    (0x1946, 0x194f), (0x19d0, 0x19d9), (0x1a80, 0x1a89), (0x1a90, 0x1a99), (0x1b50, 0x1b59), (0x1bb0, 0x1bb9),
+    (0x1c40, 0x1c49), (0x1c50, 0x1c59), (0xa620, 0xa629), (0xa8d0, 0xa8d9), (0xa900, 0xa909), (0xa9d0, 0xa9d9),
+    (0xa9f0, 0xa9f9), (0xaa50, 0xaa59), (0xabf0, 0xabf9), (0xff10, 0xff19),
+];
+
+fn in_ranges(t: &[(u32, u32)], u: u32) -> bool {
+    t.binary_search_by(|&(lo, hi)| if u < lo { Ordering::Greater } else if u > hi { Ordering::Less } else { Ordering::Equal }).is_ok()
 }
 
-/// Supplementary Nd in lead blocks 0x33 (U+1CCxx), 0x35 (U+1D7xx) and 0x3e (U+1FBxx) are in ICU's "safe" lead
-/// blocks, so a digit run before them is *not* merged: ICU skips the identical code-unit prefix and compares the
-/// tails alone (the number-then-plain-digit behaviour node shows). ICU4X always merges, so strip the same prefix.
-/// `fa`/`fb` are the (char-for-char) Han-folded forms of `a`/`b`; ICU's safety test applies to the originals.
-fn icu_equal_prefix_skip<'a>(a: &str, b: &str, fa: &'a str, fb: &'a str) -> (&'a str, &'a str) {
-    let is_safe_supp_nd = |c: char| {
-        let u = c as u32;
-        (0x1ccf0..=0x1ccf9).contains(&u) || (0x1d7ce..=0x1d7ff).contains(&u) || (0x1fbf0..=0x1fbf9).contains(&u)
-    };
-    let (mut n, mut p) = (0, 0);
-    for (x, y) in fa.chars().zip(fb.chars()) {
-        if x != y {
-            break;
-        }
-        n += 1;
-        p += x.len_utf8();
+/// ICU `CollationData::isUnsafeBackward(unit, numeric = true)` for one UTF-16 code unit: trail surrogates, lead
+/// surrogates of unsafe blocks, contraction/mark characters, and (numeric mode) BMP decimal digits.
+fn unit_unsafe(u: u16) -> bool {
+    let u = u as u32;
+    match u {
+        0xd800..=0xdbff => lead_unsafe(u - 0xd800),
+        0xdc00..=0xdfff => true,
+        0x30..=0x39 => true,
+        _ => in_ranges(UNSAFE_BMP, u) || in_ranges(BMP_ND, u),
     }
-    if p == 0 {
+}
+
+/// ICU `RuleBasedCollator::doCompare` skips the identical UTF-16 prefix and only backs up to the start of a
+/// contraction/digit run when the next code unit on either side is "unsafe backward". A lead surrogate of a
+/// "safe" block (U+1CCxx, U+1D7xx, U+1FBxx Nd) is not unsafe, so a digit run before it is cut and the tails are
+/// compared alone. ICU4X always merges, so strip exactly the prefix ICU strips (the back-up loop only inspects
+/// code units of the common prefix). `fa`/`fb` are the char-for-char Han-folded forms of `a`/`b`.
+fn icu_equal_prefix_skip<'a>(a: &str, b: &str, fa: &'a str, fb: &'a str) -> (&'a str, &'a str) {
+    let ua: Vec<u16> = a.encode_utf16().collect();
+    let ub: Vec<u16> = b.encode_utf16().collect();
+    let mut eq = ua.iter().zip(ub.iter()).take_while(|(x, y)| x == y).count();
+    if eq == 0 {
         return (fa, fb);
     }
-    let (na, nb) = (a.chars().nth(n), b.chars().nth(n));
-    let hit = na.is_some_and(is_safe_supp_nd) || nb.is_some_and(is_safe_supp_nd);
-    if hit && !na.is_some_and(skip_unsafe) && !nb.is_some_and(skip_unsafe) {
-        (&fa[p..], &fb[p..])
-    } else {
-        (fa, fb)
+    if (eq != ua.len() && unit_unsafe(ua[eq])) || (eq != ub.len() && unit_unsafe(ub[eq])) {
+        loop {
+            eq -= 1;
+            if !(eq > 0 && unit_unsafe(ua[eq])) {
+                break;
+            }
+        }
     }
+    if eq == 0 {
+        return (fa, fb);
+    }
+    // eq is on a code point boundary here; convert the UTF-16 offset to a char count, then to a byte offset.
+    let (mut units, mut chars) = (0usize, 0usize);
+    for c in a.chars() {
+        if units >= eq {
+            break;
+        }
+        units += c.len_utf16();
+        chars += 1;
+    }
+    let off = |s: &'a str| s.char_indices().nth(chars).map_or(s.len(), |(i, _)| i);
+    (&fa[off(fa)..], &fb[off(fb)..])
 }
 
 /// ICU4X root collation without the Han reordering of `hanfold` (used by the table generator).
