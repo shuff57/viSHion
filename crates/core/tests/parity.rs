@@ -83,7 +83,7 @@ impl Tally {
         *self.kinds.entry(kind.to_string()).or_default() += 1;
         let (g, w) = (ser(got), ser(want));
         if g != w && self.fails.len() < 25 {
-            let cut = |x: &str| x.chars().take(700).collect::<String>();
+            let cut = |x: &str| x.chars().take(if kind == "nat" { 1_000_000 } else { 700 }).collect::<String>();
             self.fails.push(format!("[{} #{}]\n  rust: {}\n  js:   {}", kind, idx, cut(&g), cut(&w)));
         } else if g != w {
             self.fails.push(String::new());

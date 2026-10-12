@@ -12,6 +12,7 @@ pub mod idle;
 pub mod judge;
 pub mod jsx;
 pub mod model;
+mod natfold;
 pub mod render;
 pub mod student;
 pub mod words;

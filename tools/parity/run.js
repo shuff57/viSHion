@@ -302,7 +302,20 @@ function natCases() {
   const names = ['a', 'A', 'á', 'b', 'Z', 'z', '10', '9', '2', '02', '002', 'a b', 'ab', 'a_b', 'a-b', 'a.b', 'Maya R.', 'maya r', 'Maya  R', 'Ünal', 'Unal', 'Zoe', 'émile', 'Emile', '_x', '1a', 'a1', 'a10', 'a2', 'a02', '', ' ', 'x 1 y', 'x 10 y', 'x 9 y', 'Al 2', 'Al 10', 'Devon T.', 'Devon T', 'Sofia V.', 'name (1)', 'name (2)', 'name1', 'Name 1', 'ñ', 'n', 'o', 'z1', 'z 1'].concat(ascii);
   const pairs = [];
   for (let i = 0; i < names.length; i++) for (let k = 0; k < names.length; k++) pairs.push([names[i], names[k]]);
-  add('nat', { pairs }, pairs.map(([a, b]) => Math.sign(j.OCR.natCompare(a, b))));
+  // Letters ICU gives their own weight or expands (Đ Ł Ø Æ Œ ð þ ı ß, fullwidth, ligatures, ...), words, and
+  // every Latin-script / Nd / No code point in the BMP against a probe set.
+  const words = ['Łukasz', 'Lukasz', 'Mały', 'Maly', 'Øystein', 'Oystein', 'Ozzy', 'Straße', 'Strasse', 'Æsir', 'Aesir', 'Đorđe', 'Djordje', 'Þór', 'Zed', 'ıstanbul', 'Istanbul', 'ｆｕｌｌ', 'full', 'ﬁle', 'file', 'ǅ', 'dz', 'Ħal', 'Hal', 'Œuvre', 'Oeuvre', 'ð', 'þ', 'ĸ', 'ŉ', 'ŀ', 'a²', 'a2', 'x①', 'x1', '１２', '12', '٣', '3', 'ａｂｃ', 'abc', 'ℓ', 'ǆ', 'ƒ', 'ƿ'];
+  const wp = []; for (const a of words) for (const b of words.concat(['a', 'z', '9', '10', 'd', 'l', 'o', 's', 'ss', 'ae', 'oe', 'i', 'h', 'q', '_'])) wp.push([a, b]);
+  const probes = ['a', 'd', 'h', 'i', 'l', 'o', 's', 'z', '1', '9', '10', 'ss', 'ae', '_'];
+  const cps = [];
+  for (let cp = 0xa0; cp <= 0xffff; cp++) {
+    if (cp >= 0xd800 && cp < 0xe000) continue;
+    const ch = String.fromCodePoint(cp);
+    if (/\p{Script=Latin}|\p{Nd}|\p{No}/u.test(ch)) cps.push(ch);
+  }
+  for (const ch of cps) for (const pr of probes) wp.push([ch, pr]);
+  const allPairs = pairs.concat(wp);
+  add('nat', { pairs: allPairs }, allPairs.map(([a, b]) => Math.sign(j.OCR.natCompare(a, b))));
   const slugs = ['Period 3 Quiz', '  --Hello, World!--  ', 'Café Ünal', 'ÀÉÎÕÜ', '', '!!!', 'a'.repeat(60), 'Ab-Cd_Ef', 'ﬁne ﬀ', '①②③', '日本語 test', 'x'.repeat(47) + ' y z', 'x'.repeat(47) + '--y', 'ǅ', 'ＡＢＣ'];
   add('slug', { slugs }, slugs.map((s) => j.OCR.slug(s)));
 }

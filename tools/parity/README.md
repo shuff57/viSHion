@@ -25,7 +25,7 @@ Covered:
 | `render`, `render_libs`, `bands` | `R.units` and `R.unit` HTML (no libraries); with markdown-it 14.1.0 + KaTeX 0.16.9 recorded and replayed through the Rust glue; `R.mapBands` |
 | `export` | `E.pageText`, `E.label`, `E.combined` (27 mode/sep/fmt combinations), `E.csv`, `E.json`, `E.perPage`, `E.docx` and `E.run` for every kind (names, MIME, SHA-256 of the bytes) |
 | `settings`, `new_page`, `assignment` | `loadSettings` defaults and merge, `newPage`, `addPages`/`removePage`/`movePage`/`updatePage`/`syncStats` |
-| `nat`, `slug`, `number_str`, `to_fixed`, `csv_secs` | `OCR.natCompare` (20 736 pairs), `OCR.slug`, `Number()`/`String()` coercion, `toFixed(1)` ties |
+| `nat`, `slug`, `number_str`, `to_fixed`, `csv_secs` | `OCR.natCompare` (51 626 pairs: ASCII all-pairs, words, every BMP Latin/Nd/No code point vs probes; `natfold.js` regenerates `crates/core/src/natfold.rs`), `OCR.slug`, `Number()`/`String()` coercion, `toFixed(1)` ties |
 
 `render_libs` needs `spikes/s5-markdown-katex/vendor/*/dist/*.min.js` (gitignored there). When they are missing
 the script keeps the `render_libs` section already in `fixture.json` and says so.

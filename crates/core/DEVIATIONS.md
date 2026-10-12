@@ -28,9 +28,15 @@ later phase. Quirks of the JS (for example `$&` in a glossary term being expande
   exponent forms differ outside `1e-6 <= |x| < 1e21` (`1e21` vs JS `1e+21`); none of the computed values
   reach that range.
 * **`localeCompare`.** `jsx::nat_compare` reproduces ICU `numeric: true, sensitivity: 'base'` for Latin text
-  (space < punctuation < digits < letters, case and accents ignored, digit runs by value). It matched node's
-  ICU on all 20 736 pairs of a 144-name sample (every printable ASCII character, accented Latin, digit runs, empty and padded names). Other scripts and
-  expansions (`ß`, `æ`) compare by code point.
+  (space < punctuation < symbols < digits < other numbers < letters, case and accents ignored, digit runs by
+  value). Characters whose base weight NFKD cannot give (`Đ`=`d`, `Ł`=`l`, `Ø`=`o`, `ß`=`ss`, `æ`=`ae`,
+  `ı`/`þ`/`ƒ` between letters, non-ASCII decimal digits, `①`/`²`/Roman numerals after digits) come from
+  `src/natfold.rs`, generated from node's ICU by `tools/parity/natfold.js`. The fixture compares every
+  Latin-script, Nd and No code point of the BMP against 14 probe strings, plus a 144-name all-pairs sample
+  and word pairs (51 626 comparisons), all equal to node. Not covered: non-Latin scripts (Greek, Cyrillic, CJK
+  compare by code point of the lowercased char, which is right for the order Greek < Cyrillic but not
+  guaranteed for every letter), supplementary-plane letters beyond Latin/Nd/No, and ICU contractions in
+  other locales (JS uses the host locale; the fixture is node's default).
 * **Case folding.** `to_lowercase` uses Rust's Unicode tables, V8 uses ICU's; equal for current Unicode data.
 * **Non-string values in string fields.** `page.corrected` as a number or `edits[].text` missing are treated as
   empty by the typed accessors; JS would coerce or throw. Real projects never contain these.

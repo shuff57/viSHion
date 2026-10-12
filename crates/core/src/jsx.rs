@@ -230,18 +230,47 @@ pub fn nat_compare(a: &str, b: &str) -> Ordering {
     }
     const PUNCT: &str = "_-,;:!?.'\"()[]{}@*/\\&#%`^+<=>|~$";
     fn keys(s: &str) -> Vec<K> {
-        let folded: String = s.nfd().filter(|c| !('\u{300}'..='\u{36f}').contains(c)).collect();
-        let cs: Vec<char> = folded.chars().collect();
+        use crate::natfold::{EXPAND, OWN};
+        // Exception table first (Đ, ß, æ, ı, þ, circled digits, ...), then NFKD and mark stripping.
+        enum Piece {
+            C(char),
+            Own(u8, u32),
+        }
+        let mut cs: Vec<Piece> = vec![];
+        for c in s.chars() {
+            if let Ok(i) = EXPAND.binary_search_by_key(&c, |e| e.0) {
+                cs.extend(EXPAND[i].1.chars().map(Piece::C));
+            } else if let Ok(i) = OWN.binary_search_by_key(&c, |e| e.0) {
+                cs.push(Piece::Own(OWN[i].1, OWN[i].2));
+            } else {
+                cs.extend(
+                    std::iter::once(c)
+                        .nfkd()
+                        .filter(|c| !('\u{300}'..='\u{36f}').contains(c))
+                        .map(Piece::C),
+                );
+            }
+        }
         let mut out = vec![];
         let mut i = 0;
         while i < cs.len() {
-            let c = cs[i];
+            let c = match cs[i] {
+                Piece::Own(k, v) => {
+                    out.push(K::Ch(k, v));
+                    i += 1;
+                    continue;
+                }
+                Piece::C(c) => c,
+            };
             if c.is_ascii_digit() {
-                let st = i;
-                while i < cs.len() && cs[i].is_ascii_digit() {
+                let mut d = String::new();
+                while let Some(Piece::C(x)) = cs.get(i) {
+                    if !x.is_ascii_digit() {
+                        break;
+                    }
+                    d.push(*x);
                     i += 1;
                 }
-                let d: String = cs[st..i].iter().collect();
                 let d = d.trim_start_matches('0').to_string();
                 // length first so that numeric order = (len, lexicographic)
                 out.push(K::Num(format!("{:08}{}", d.len(), d)));
@@ -256,7 +285,7 @@ pub fn nat_compare(a: &str, b: &str) -> Ordering {
             } else if let Some(p) = PUNCT.find(c) {
                 K::Ch(1, p as u32)
             } else if c.is_alphabetic() {
-                K::Ch(4, c.to_lowercase().next().unwrap_or(c) as u32)
+                K::Ch(4, c.to_lowercase().next().unwrap_or(c) as u32 * 1000)
             } else {
                 K::Ch(2, c as u32)
             };
@@ -269,14 +298,14 @@ pub fn nat_compare(a: &str, b: &str) -> Ordering {
         let o = match (x, y) {
             (K::Num(p), K::Num(q)) => p.cmp(q),
             (K::Num(_), K::Ch(c, _)) => {
-                if *c >= 4 {
+                if *c >= 3 {
                     Ordering::Less
                 } else {
                     Ordering::Greater
                 }
             }
             (K::Ch(c, _), K::Num(_)) => {
-                if *c >= 4 {
+                if *c >= 3 {
                     Ordering::Greater
                 } else {
                     Ordering::Less
