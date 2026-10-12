@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>viSHion S6</title>
+<link data-trunk rel="copy-file" href="harness.js">
+<link data-trunk rel="rust" data-wasm-opt="z" data-wasm-opt-params="--enable-bulk-memory --enable-nontrapping-float-to-int --enable-sign-ext --enable-reference-types --enable-multivalue --enable-mutable-globals" data-bindgen-target="web" data-integrity="none">
+</head>
+<body>
+<div id="harness">
+  <h2>S6 harness</h2>
+  <div id="zone" style="border:2px dashed #888;padding:24px;margin:8px 0;height:60px">DROP FILES HERE</div>
+  <ul id="list" style="padding:0;list-style:none">
+    <li draggable="true" id="item-a" style="border:1px solid #444;padding:10px;margin:4px;width:200px">A</li>
+    <li draggable="true" id="item-b" style="border:1px solid #444;padding:10px;margin:4px;width:200px">B</li>
+    <li draggable="true" id="item-c" style="border:1px solid #444;padding:10px;margin:4px;width:200px">C</li>
+  </ul>
+  <pre id="out" style="font-size:11px"></pre>
+</div>
+<script src="harness.js"></script>
+</body>
+</html>

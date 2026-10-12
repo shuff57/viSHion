@@ -1,0 +1,6 @@
+{
+  "name": "s6-tauri-spike",
+  "private": true,
+  "type": "module",
+  "devDependencies": { "playwright": "1.60.0" }
+}

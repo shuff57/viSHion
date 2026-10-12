@@ -1,0 +1,12 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>S3 Rust storage harness</title>
+<body>S3 harness</body>
+<script type="module">
+  import init, * as rs from './pkg/s3_compat.js';
+  import initArb, * as rsArb from './pkg-arb/s3_compat.js';
+  import initFrt, * as rsFrt from './pkg-frt/s3_compat.js';
+  await init(); await initArb(); await initFrt();
+  window.rs = rs; window.rsArb = rsArb; window.rsFrt = rsFrt;
+  document.documentElement.dataset.ready = '1';
+</script>
