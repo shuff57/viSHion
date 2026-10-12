@@ -1,0 +1,27 @@
+[workspace]
+resolver = "2"
+members = ["crates/core", "crates/store", "crates/net", "crates/ui", "crates/app"]
+# spikes/* are standalone throwaway crates with their own Cargo.lock; keep them out of the workspace.
+exclude = ["spikes"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "UNLICENSED"
+publish = false
+
+[workspace.dependencies]
+vishion-core = { path = "crates/core" }
+vishion-store = { path = "crates/store" }
+vishion-net = { path = "crates/net" }
+vishion-ui = { path = "crates/ui" }
+serde = { version = "1", features = ["derive"] }
+# S3 rule 1: preserve_order + arbitrary_precision so unknown fields and big numbers round-trip.
+serde_json = { version = "1", features = ["preserve_order", "arbitrary_precision"] }
+# Pinned to 0.28 while latex-rust requires it (plan rule 6).
+eframe = { version = "0.28", default-features = false, features = ["glow", "default_fonts", "accesskit"] }
+egui = "0.28"
+
+[profile.release]
+opt-level = "s"
+lto = true

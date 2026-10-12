@@ -1,0 +1,10 @@
+[package]
+name = "vishion-net"
+description = "OCR client (chat completions streaming). Phase 0 holds the endpoint type only."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+vishion-core.workspace = true
