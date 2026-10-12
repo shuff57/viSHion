@@ -49,7 +49,11 @@ fn walk(dir: &Path, rel: &str, out: &mut Vec<String>) -> std::io::Result<()> {
         if name.starts_with(TMP_PREFIX) {
             continue;
         }
-        let key = if rel.is_empty() { name } else { format!("{rel}/{name}") };
+        let key = if rel.is_empty() {
+            name
+        } else {
+            format!("{rel}/{name}")
+        };
         if e.file_type()?.is_dir() {
             walk(&e.path(), &key, out)?;
         } else {
@@ -175,9 +179,23 @@ mod tests {
         let dir = tmp_dir("bad");
         let s = FsStore::new(&dir);
         for k in [
-            "", "/", "/a", "a/", "a//b", "../x", "a/../b", "./a", "a\\b", "c:x", "a/\0", ".vishion-tmp-1-1",
+            "",
+            "/",
+            "/a",
+            "a/",
+            "a//b",
+            "../x",
+            "a/../b",
+            "./a",
+            "a\\b",
+            "c:x",
+            "a/\0",
+            ".vishion-tmp-1-1",
         ] {
-            assert!(block_on(s.put(k, b"x")).is_err(), "key {k:?} should be rejected");
+            assert!(
+                block_on(s.put(k, b"x")).is_err(),
+                "key {k:?} should be rejected"
+            );
             assert!(block_on(s.get(k)).is_err(), "key {k:?} should be rejected");
         }
         assert!(!dir.exists(), "rejected keys must not create anything");

@@ -10,9 +10,16 @@ use std::time::Duration;
 #[cfg(target_arch = "wasm32")]
 mod web;
 
+/// Web only: call once after eframe started; makes the canvas a non-tabbable, AT-hidden surface and names
+/// eframe's IME input. See `web.rs` for the keyboard model.
+#[cfg(target_arch = "wasm32")]
+pub fn harden_web_dom(canvas_id: &str) {
+    web::harden(canvas_id);
+}
+
 const INK: Color32 = Color32::from_rgb(0x1B, 0x22, 0x30);
 
-/// Messages from the DOM twin to egui: `act:<id>` (activate) and `focus:<id>`.
+/// Messages from the DOM twin to egui: `act:<id>`, `focus:<id>`, `blur:<id>`.
 pub type Queue = Arc<Mutex<Vec<String>>>;
 
 #[derive(Clone, PartialEq, Debug)]
@@ -96,6 +103,10 @@ impl App {
                 self.act.insert(id.into());
             } else if let Some(id) = m.strip_prefix("focus:") {
                 self.focus = Some(id.into());
+            } else if let Some(id) = m.strip_prefix("blur:") {
+                if self.focus.as_deref() == Some(id) {
+                    self.focus = None;
+                }
             }
         }
     }

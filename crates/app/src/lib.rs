@@ -15,6 +15,9 @@ mod web {
                 eframe::WebOptions::default(),
                 Box::new(|cc| Ok(Box::new(vishion_ui::App::new(cc.egui_ctx.clone())))),
             )
-            .await
+            .await?;
+        // eframe sets tabindex=0 on the canvas and appends an unnamed IME <input>; fix both (keyboard path).
+        vishion_ui::harden_web_dom(&canvas_id);
+        Ok(())
     }
 }

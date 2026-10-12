@@ -61,11 +61,77 @@ try {
   expect(true, 'DOM control twin present: #controls [data-id=count]');
   const twin = page.locator('#controls [data-id="count"]');
   expect((await twin.textContent()) === 'Count: 0', 'twin label starts at "Count: 0"');
-  await twin.focus();
+  // ---- real keyboard flow (no programmatic focus): Tab order, no canvas trap, names, focus ring, activation
+  const active = () => page.evaluate(() => {
+    const a = document.activeElement;
+    return a ? { tag: a.tagName, id: a.id, dataId: a.getAttribute('data-id') } : null;
+  });
+  const pump = async (n = 6) => { for (let i = 0; i < n; i++) { await page.mouse.move(700 + i, 500 + i); await page.waitForTimeout(80); } };
+  // 1. Accessibility surface: nothing focusable may be unnamed or hidden-but-tabbable.
+  const surface = await page.evaluate(() => {
+    const out = { tabbable: [], hiddenFocusable: [] };
+    for (const el of document.querySelectorAll('canvas, input, button, a[href], select, textarea, [tabindex]')) {
+      const hidden = el.closest('[aria-hidden="true"]') !== null;
+      const name = (el.getAttribute('aria-label') || el.textContent || '').trim();
+      const tabbable = el.tabIndex >= 0;
+      if (tabbable) out.tabbable.push({ tag: el.tagName, id: el.id, dataId: el.getAttribute('data-id'), name, hidden });
+      if (tabbable && hidden) out.hiddenFocusable.push(el.tagName + '#' + el.id);
+    }
+    const c = document.getElementById('c');
+    out.canvas = { tabindex: c.getAttribute('tabindex'), ariaHidden: c.getAttribute('aria-hidden') };
+    const agent = document.querySelector('body > input[type=text]');
+    out.agent = agent && { tabindex: agent.getAttribute('tabindex'), label: agent.getAttribute('aria-label'), ariaHidden: agent.getAttribute('aria-hidden') };
+    return out;
+  });
+  expect(surface.canvas.tabindex === '-1' && surface.canvas.ariaHidden === 'true', 'canvas is tabindex=-1 and aria-hidden (not in Tab order, not exposed)');
+  expect(surface.hiddenFocusable.length === 0, 'no tabbable element is aria-hidden' + (surface.hiddenFocusable.length ? ': ' + surface.hiddenFocusable : ''));
+  expect(surface.tabbable.length > 0 && surface.tabbable.every(t => t.name), 'every tabbable element has an accessible name: ' + JSON.stringify(surface.tabbable.map(t => t.name)));
+  expect(!!surface.agent && surface.agent.tabindex === '-1' && !!surface.agent.label, 'eframe text agent is named and out of the Tab order: ' + JSON.stringify(surface.agent));
+
+  // pixel probe for the on-canvas focus ring: same pointer position every time so hover cannot differ
+  const shot = async () => { await page.mouse.move(900, 600); await page.waitForTimeout(500); return (await page.screenshot()).toString('base64'); };
+  await page.mouse.click(900, 600); // click far from the button: canvas gets pointer focus, no ring
+  expect((await active()).id === 'c', 'click focuses the canvas (pointer path still works)');
+  const idle = await shot();
+
+  // 2. Tab from the canvas must leave it and land on the first control (the old trap)
+  await page.keyboard.press('Tab');
+  const afterTab = await active();
+  expect(afterTab && afterTab.dataId === 'count', 'Tab from canvas lands on twin [data-id=count], got ' + JSON.stringify(afterTab));
+  await pump(); await page.waitForTimeout(300);
+  const ringOn = await shot();
+  expect(ringOn !== idle, 'on-canvas focus ring is drawn when the twin has focus');
+  // 3. Tab again goes on past the controls (no trap, nothing unnamed in between)
+  const seen = [];
+  for (let i = 0; i < 4; i++) { await page.keyboard.press('Tab'); seen.push(await active()); }
+  expect(!seen.some(s => s && s.id === 'c') && !seen.some(s => s && s.tag === 'INPUT'),
+    'repeated Tab never lands on the canvas or the text agent: ' + JSON.stringify(seen));
+  // 4. Shift+Tab from the canvas must also leave it
+  await page.mouse.click(900, 600);
+  expect((await active()).id === 'c', 'canvas focused again by click');
+  await page.keyboard.press('Shift+Tab');
+  const afterShift = await active();
+  expect(!(afterShift && afterShift.id === 'c'), 'Shift+Tab leaves the canvas (no keyboard trap), now on ' + JSON.stringify(afterShift));
+  // 5. Focus ring clears on blur (click away from the control)
+  // bring focus to the twin by Tab from the canvas, then blur by clicking the canvas
+  await page.mouse.click(900, 600);
+  await page.keyboard.press('Tab');
+  expect((await active()).dataId === 'count', 'twin focused again via Tab');
+  await pump(); await page.waitForTimeout(300);
+  const ringOn2 = await shot();
+  await page.mouse.click(900, 600);
+  const ringOff = await shot();
+  expect(ringOn2 !== ringOff && ringOff === idle, 'focus ring clears on blur (frame after blur equals the idle frame)');
+  // 6. Activation with real keys: Tab to the button, then Enter, then Space
+  await page.mouse.click(900, 600);
+  await page.keyboard.press('Tab');
+  expect((await active()).dataId === 'count', 'twin focused via Tab before activation');
+  const waitCount = async (n) => { for (let i = 0; i < 40 && (await twin.textContent()) !== 'Count: ' + n; i++) { await pump(2); } return (await twin.textContent()) === 'Count: ' + n; };
   await page.keyboard.press('Enter');
-  for (let i = 0; i < 5; i++) { await page.mouse.move(400 + i * 3, 260 + i); await page.waitForTimeout(80); }
-  for (let i = 0; i < 40 && (await twin.textContent()) !== 'Count: 1'; i++) { await page.mouse.move(400 + (i % 7), 260 + (i % 5)); await page.waitForTimeout(100); }
-  expect((await twin.textContent()) === 'Count: 1', 'keyboard activation of the twin reaches egui (count 0 -> 1)');
+  expect(await waitCount(1), 'Enter on the focused twin reaches egui (count 0 -> 1)');
+  expect((await active()).dataId === 'count', 'twin keeps keyboard focus after its label changed (no DOM re-order blur)');
+  await page.keyboard.press('Space');
+  expect(await waitCount(2), 'Space on the focused twin reaches egui (count 1 -> 2)');
   expect((await page.evaluate(() => window.__violations)).length === 0, 'still zero violations after interaction');
   await page.screenshot({ path: path.join(here, '../dist/check.png') });
 

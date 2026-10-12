@@ -110,6 +110,9 @@ mod tests {
 
     #[test]
     fn explicit_id_is_still_read() {
-        assert_eq!(Project::from_json(r#"{"id":"p1"}"#).unwrap().id(), Some("p1"));
+        assert_eq!(
+            Project::from_json(r#"{"id":"p1"}"#).unwrap().id(),
+            Some("p1")
+        );
     }
 }
