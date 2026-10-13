@@ -814,3 +814,62 @@ fn page_replace_cancelled_or_failed_shows_a_notice_not_a_change() {
     assert!(h.node_text("toast").unwrap().contains("unchanged"));
     assert_eq!(h.s().page("m1").unwrap().status(), "done");
 }
+
+// ---------------------------------------------------------------------------------------------------------
+// Blind critic (phase 4 review screen, round 2). Each test names the js/ui behaviour it is checked against and
+// is expected to FAIL until the product code is fixed.
+// ---------------------------------------------------------------------------------------------------------
+
+/// review.js renderTray: every guess is its own `.alt` button. Here the twin id is `alt-{via}`, and every guess has
+/// via "typed", so two guesses share one id and the twin (keyed by id) exposes only the last one to keyboard and
+/// screen readers on the web: "intervals, 62% likely" cannot be reached.
+#[test]
+fn critic_each_illegible_guess_has_its_own_twin_control() {
+    let mut h = H::new("m1");
+    h.sess().a.pages.get_mut("m1").unwrap().set(
+        "guesses",
+        serde_json::json!({"i:0": [{"text": "intervals", "percent": 62}, {"text": "intervening", "percent": 21}]}),
+    );
+    h.frames(2);
+    let w = h.word_id("i:0");
+    h.act(&w);
+    let alts: Vec<String> = h.app.controls().iter().filter(|c| c.id.starts_with("alt-")).map(|c| c.id.clone()).collect();
+    let mut uniq = alts.clone();
+    uniq.sort();
+    uniq.dedup();
+    assert_eq!(alts.len(), 3, "two guesses and the marker must be three controls: {alts:?}");
+    assert_eq!(uniq.len(), 3, "control ids must be unique (the twin is keyed by id): {alts:?}");
+}
+
+/// review.js syncSel/paintReading: the selected word's line is scrolled into view (`scrollIntoView`), so the word
+/// being decided is never left behind the tray. Here the transcript keeps its offset.
+#[test]
+fn critic_selected_word_is_not_left_under_the_tray() {
+    let mut h = H::new("m1");
+    h.size = (1280.0, 520.0);
+    h.frames(3);
+    let w = h.word_id("i:0");
+    h.act(&w);
+    h.frames(4);
+    let tray_top = h
+        .app
+        .nodes()
+        .iter()
+        .find_map(|n| match n {
+            Node::Heading { id, pos, .. } if id == "tray-title" => Some(pos.0 * 16),
+            _ => None,
+        })
+        .expect("tray title");
+    let word = h.ctl(&w).expect("word control");
+    let bottom = word.pos.0 * 16 + 22;
+    assert!(bottom <= tray_top, "the selected word ends at {bottom} but the tray starts at {tray_top}");
+}
+
+/// review.js renders the page's own text in any script (system fonts): CJK and emoji are real student input.
+/// The bundled fonts have no CJK fallback, so Chrome shows tofu boxes.
+#[test]
+fn critic_cjk_text_has_a_fallback_font() {
+    let h = H::new("m1");
+    let ok = h.ctx.fonts(|f| f.has_glyph(&theme::serif(22.0), '\u{65e5}'));
+    assert!(ok, "no glyph for U+65E5 in the serif family: CJK transcripts render as boxes");
+}
