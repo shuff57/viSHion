@@ -83,7 +83,9 @@ thread_local! {
 /// letter by letter.
 pub fn tex_speech(tex: &str) -> String {
     NEST.with(|n| n.set(0));
-    let cs: Vec<char> = tex.chars().collect();
+    // `\vert` is a bar like `|`
+    let norm = tex.replace("\\vert", "|");
+    let cs: Vec<char> = norm.chars().collect();
     let mut p = 0;
     let out = seq(&cs, &mut p, false);
     let mut s = out.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -164,7 +166,10 @@ fn word_for(cmd: &str) -> Option<&'static str> {
         "langle" => "open angle bracket",
         "rangle" => "close angle bracket",
         "ldots" | "cdots" | "dots" => "dot dot dot",
-        "circ" | "degree" => "degrees",
+        "circ" => "composed with",
+        "degree" => "degrees",
+        "frown" | "overarc" => "arc",
+        "top" => "transpose",
         "sum" => "the sum of",
         "prod" => "the product of",
         "int" => "the integral of",
@@ -176,7 +181,7 @@ fn word_for(cmd: &str) -> Option<&'static str> {
         "{" => "open brace",
         "}" => "close brace",
         "\\" => ",",
-        "left" | "right" | "big" | "Big" | "displaystyle" | "limits" => "",
+        "big" | "Big" | "bigg" | "Bigg" | "bigl" | "bigr" | "Bigl" | "Bigr" | "biggl" | "biggr" | "Biggl" | "Biggr" | "displaystyle" | "limits" => "",
         _ => return None,
     })
 }
@@ -262,7 +267,17 @@ fn needs_end(arg: &str) -> bool {
 }
 
 fn power(arg: &str) -> String {
+    let arg = arg.split_whitespace().collect::<Vec<_>>().join(" ");
+    let arg = arg.as_str();
+    let simple_frac = arg.split_once(" divided by ").is_some_and(|(n, d)| {
+        !n.is_empty() && !d.is_empty() && n.chars().all(|c| c.is_ascii_digit()) && d.chars().all(|c| c.is_ascii_digit())
+    });
     match arg {
+        // `^\circ` is a degree sign; `^{\top}` and `^T` a transpose, `^{-1}` an inverse
+        "composed with" => " degrees ".into(),
+        "T" | "transpose" => " transpose ".into(),
+        "minus 1" => " inverse ".into(),
+        a if simple_frac => format!(" to the power of {} ", a.replace(" divided by ", " over ")),
         "2" => " squared ".into(),
         "3" => " cubed ".into(),
         "degrees" => " degrees ".into(),
@@ -307,6 +322,8 @@ fn limits(cs: &[char], p: &mut usize, head: &str) -> String {
         // `\lim_{x \to 0}` is "the limit as x approaches 0 of"
         if head.starts_with("the limit") {
             out.push_str(&format!(" as {l}"));
+        } else if head.contains("contour") {
+            out.push_str(&format!(" around {l}"));
         } else {
             out.push_str(&format!(" from {l}"));
         }
@@ -499,7 +516,54 @@ fn command(cs: &[char], p: &mut usize) -> String {
             }
         }
         "bar" | "overline" => format!(" {} bar ", atom(cs, p)),
-        "hat" | "widehat" => format!(" {} hat ", atom(cs, p)),
+        "hat" => format!(" {} hat ", atom(cs, p)),
+        "widehat" => {
+            // an arc over vertex letters is an arc, not a hat
+            let a = atom(cs, p);
+            let w: Vec<&str> = a.split_whitespace().collect();
+            if w.len() >= 2 && w.iter().all(|t| t.len() == 1 && t.chars().all(|c| c.is_ascii_uppercase())) {
+                format!(" arc {a} ")
+            } else {
+                format!(" {a} hat ")
+            }
+        }
+        "underbrace" | "overbrace" => {
+            let a = atom(cs, p);
+            let mut q = *p;
+            while q < cs.len() && cs[q].is_whitespace() {
+                q += 1;
+            }
+            if matches!(cs.get(q), Some('_') | Some('^')) {
+                *p = q + 1;
+                let l = atom(cs, p);
+                format!(" {a} , labeled {l} end label ")
+            } else {
+                format!(" {a} ")
+            }
+        }
+        "overset" | "stackrel" | "underset" => {
+            let (top, base) = (atom(cs, p), atom(cs, p));
+            let (t, b) = (top.trim(), base.trim());
+            if t == "arc" {
+                format!(" arc {b} ")
+            } else if name == "underset" {
+                format!(" {b} with {t} below ")
+            } else {
+                format!(" {b} with {t} above ")
+            }
+        }
+        "log" if cs.get(*p) == Some(&'_') => {
+            *p += 1;
+            let b = atom(cs, p);
+            format!(" log base {} ", b.trim())
+        }
+        "left" | "right" => {
+            // `\left.` and `\right.` are invisible delimiters
+            if cs.get(*p) == Some(&'.') {
+                *p += 1;
+            }
+            String::new()
+        }
         "tilde" | "widetilde" => format!(" {} tilde ", atom(cs, p)),
         "dot" => format!(" {} dot ", atom(cs, p)),
         "vec" => format!(" vector {} ", atom(cs, p)),
@@ -586,6 +650,39 @@ fn bars_ahead(cs: &[char], from: usize, in_group: bool) -> usize {
     n
 }
 
+/// `|_{x=2}` and `|_0^1` after a bar with nothing open: the bar says where an expression is evaluated.
+/// `p` is just past the bar; it moves past the scripts only when the bar is one.
+fn evaluation_bar(cs: &[char], p: &mut usize) -> Option<String> {
+    let mut q = *p;
+    while q < cs.len() && cs[q].is_whitespace() {
+        q += 1;
+    }
+    if !matches!(cs.get(q), Some('_') | Some('^')) {
+        return None;
+    }
+    let (mut lo, mut hi) = (None, None);
+    for _ in 0..2 {
+        match cs.get(q) {
+            Some('_') if lo.is_none() => {
+                q += 1;
+                lo = Some(atom(cs, &mut q).trim().to_string());
+            }
+            Some('^') if hi.is_none() => {
+                q += 1;
+                hi = Some(atom(cs, &mut q).trim().to_string());
+            }
+            _ => break,
+        }
+    }
+    *p = q;
+    Some(match (lo, hi) {
+        (Some(l), Some(h)) => format!(" evaluated from {l} to {h} "),
+        (Some(l), None) => format!(" evaluated at {l} end evaluation "),
+        (None, Some(h)) => format!(" evaluated at {h} end evaluation "),
+        (None, None) => String::new(),
+    })
+}
+
 /// `\|` / `\Vert` left after `from`.
 fn norms_ahead(cs: &[char], from: usize) -> usize {
     let (mut n, mut q) = (0, from);
@@ -631,6 +728,8 @@ fn seq(cs: &[char], p: &mut usize, in_group: bool) -> String {
     let mut out = String::new();
     // `|x - 3|`: the first bar opens an absolute value and the next closes it
     let mut bar_open = false;
+    // the closing words of an open `|...|`: a single capital letter between bars is a set's size
+    let mut bar_close = " end absolute value ";
     let mut norm_open = false;
     // `P(A|B)` and `\{x | x > 0\}`: a bar with no partner is a divider, not an absolute value
     let (mut paren, mut in_set) = (0i32, false);
@@ -640,14 +739,43 @@ fn seq(cs: &[char], p: &mut usize, in_group: bool) -> String {
             '|' => {
                 *p += 1;
                 if bar_open {
-                    out.push_str(" end absolute value ");
+                    out.push_str(bar_close);
                     bar_open = false;
+                } else if let Some(s) = evaluation_bar(cs, p) {
+                    out.push_str(&s);
                 } else if bars_ahead(cs, *p, in_group) % 2 == 0 {
                     out.push_str(divider(paren, in_set));
                 } else {
-                    out.push_str(" absolute value of ");
+                    let mut q = *p;
+                    while q < cs.len() && cs[q].is_whitespace() {
+                        q += 1;
+                    }
+                    let mut r = q + 1;
+                    while r < cs.len() && cs[r].is_whitespace() {
+                        r += 1;
+                    }
+                    let set = cs.get(q).is_some_and(|c| c.is_ascii_uppercase()) && cs.get(r) == Some(&'|');
+                    out.push_str(if set { " the size of " } else { " absolute value of " });
+                    bar_close = if set { " end size " } else { " end absolute value " };
                     bar_open = true;
                 }
+            }
+            ':' if in_set && paren == 0 => {
+                *p += 1;
+                out.push_str(" such that ");
+            }
+            '\\' if cs[*p + 1..].starts_with(&['c', 'd', 'o', 't']) && !cs.get(*p + 5).is_some_and(|c| c.is_ascii_alphabetic()) => {
+                *p += 5;
+                let w: Vec<&str> = out.split_whitespace().collect();
+                let n = w.len();
+                let vector_before = n >= 1 && (w[n - 1] == "del" || (n >= 2 && w[n - 2] == "vector"));
+                let mut q = *p;
+                while q < cs.len() && cs[q].is_whitespace() {
+                    q += 1;
+                }
+                let rest: String = cs[q..].iter().take(12).collect();
+                let vector_after = ["\\vec", "\\mathbf", "\\overrightarrow", "\\nabla", "\\boldsymbol", "\\hat"].iter().any(|v| rest.starts_with(v));
+                out.push_str(if vector_before || vector_after { " dot " } else { " times " });
             }
             '(' => {
                 paren += 1;
@@ -693,7 +821,12 @@ fn seq(cs: &[char], p: &mut usize, in_group: bool) -> String {
             '^' => {
                 *p += 1;
                 let a = atom(cs, p);
-                out.push_str(&power(a.trim()));
+                let lone_capital = out.split_whitespace().next_back().is_some_and(|w| w.len() == 1 && w.chars().all(|c| c.is_ascii_uppercase()));
+                if a.trim() == "c" && lone_capital {
+                    out.push_str(" complement ");
+                } else {
+                    out.push_str(&power(a.trim()));
+                }
             }
             '_' => {
                 *p += 1;
@@ -875,7 +1008,6 @@ mod tests {
     /// Blind critic round 8: formulas a listener mishears. `#[ignore]`d so the workspace stays green; run with
     /// `cargo test -p vishion-ui -- --ignored round8`. Failing by design.
     #[test]
-    #[ignore = "blind critic round 8: failing by design"]
     fn round8_function_composition_and_dot_products() {
         let s = tex_speech(r"f \circ g");
         assert!(!s.contains("degrees"), "composition is not degrees: {s}");
@@ -886,7 +1018,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "blind critic round 8: failing by design"]
     fn round8_logs_inverses_transpose_and_evaluation_bars() {
         assert!(tex_speech(r"\log_2 8").contains("base 2"), "{}", tex_speech(r"\log_2 8"));
         assert!(tex_speech(r"\log_{10} 100").contains("base 10"));
@@ -904,7 +1035,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "blind critic round 8: failing by design"]
     fn round8_arcs_underbraces_and_cardinality() {
         for t in [r"\underbrace{a+b}_{2}", r"\overset{\frown}{AB}"] {
             let s = tex_speech(t);
@@ -914,6 +1044,25 @@ mod tests {
         assert!(s.contains("arc"), "an arc over letters is an arc, not 'hat': {s}");
         let s = tex_speech(r"|S| = 5");
         assert!(!s.contains("absolute value"), "the size of a set: {s}");
+    }
+
+    #[test]
+    fn round9_set_notation_and_evaluation() {
+        assert!(tex_speech(r"A^c").contains("complement"));
+        assert!(tex_speech(r"x^c").contains("power"));
+        assert_eq!(tex_speech(r"x^{1/2}"), "x to the power of 1 over 2");
+        let s = tex_speech(r"\{x : x > 0\}");
+        assert!(s.contains("such that"), "{s}");
+        assert_eq!(tex_speech(r"|S| = 5"), "the size of S end size equals 5");
+        assert_eq!(tex_speech(r"|x - 3|"), "absolute value of x minus 3 end absolute value");
+        assert_eq!(tex_speech(r"x^\circ"), "x degrees");
+        let s = tex_speech(r"\left. x^2 \right|_0^1");
+        assert!(s.contains("evaluated from 0 to 1"), "{s}");
+        let s = tex_speech(r"\oint_C F");
+        assert!(s.contains("around C"), "{s}");
+        assert!(tex_speech(r"m\widehat{AB}").contains("arc A B"));
+        assert!(tex_speech(r"\mathbf{u} \cdot \mathbf{v}").contains("dot"));
+        assert!(tex_speech(r"2 \cdot 3").contains("times"));
     }
 
     #[test]
