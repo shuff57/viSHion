@@ -1942,7 +1942,7 @@ fn spoken_math_says_which_part_belongs_to_which() {
     assert_eq!(t(r"\frac{\frac{1}{2}}{3}"), "the fraction the fraction 1 over 2 end fraction over 3 end fraction");
     assert_eq!(t(r"\frac{1}{\frac{2}{3}}"), "the fraction 1 over the fraction 2 over 3 end fraction end fraction");
     assert_eq!(t(r"\frac{1}{2}x"), "the fraction 1 over 2 end fraction x");
-    assert_eq!(t(r"\frac{1}{2} + 3"), "1 over 2 plus 3");
+    assert_eq!(t(r"\frac{1}{2} + 3"), "the fraction 1 over 2 end fraction plus 3");
     assert_eq!(t(r"\begin{pmatrix}a&b\\c&d\end{pmatrix}"), "the 2 by 2 matrix, row 1: a, b; row 2: c, d; end matrix");
     assert_eq!(t(r"\begin{vmatrix} 1 & 2 \\ 3 & 4 \end{vmatrix} = -2"), "the 2 by 2 determinant, row 1: 1, 2; row 2: 3, 4; end determinant equals minus 2");
     assert_eq!(t(r"\binom{n}{k}"), "n choose k");
@@ -2746,4 +2746,55 @@ fn round4_streamed_text_is_dom_text_on_the_web() {
     assert!(chrome.get("stream").is_some_and(|c| c.0 == "stream"), "{:?}", chrome.keys().collect::<Vec<_>>());
     assert!(chrome.contains_key("stream-note"));
     assert!(h.app.nodes().iter().any(|n| matches!(n, Node::Text { id, text, .. } if id == "stream" && text.contains("streams in here"))));
+}
+
+// ---- a11y critic round 9: silent controls
+
+#[test]
+fn a11y_layout_and_panel_close_are_announced() {
+    let mut h = H::new("m1");
+    h.act("layout-text");
+    assert!(h.app.announced().join(" | ").contains("text only"), "{:?}", h.app.announced());
+    h.act("layout-split");
+    assert!(h.app.announced().join(" | ").contains("side by side"), "{:?}", h.app.announced());
+    let w = h.word_id("c:0");
+    h.act(&w);
+    let before = h.app.announced().len();
+    h.act("tray-close");
+    let said = h.app.announced()[before..].join(" | ");
+    assert!(said.contains("Word panel closed"), "{said}");
+}
+
+#[test]
+fn a11y_use_typed_with_nothing_typed_says_so_and_focuses_the_box() {
+    let mut h = H::new("m1");
+    let w = h.word_id("c:0");
+    h.act(&w);
+    h.act("use-typed");
+    let said = h.app.announced().join(" | ");
+    assert!(said.contains("Type the word first"), "{said}");
+    h.frames(3);
+    assert_eq!(h.app.ctl.focus.as_deref(), Some("typed-word"));
+}
+
+#[test]
+fn a11y_moving_the_underline_says_the_line() {
+    let mut h = H::new("m1");
+    h.focus("transcript");
+    let before = h.app.announced().len();
+    h.twin_key("ArrowDown", false);
+    let said = h.app.announced()[before..].join(" | ");
+    assert!(said.contains("Line 1 of"), "{said}");
+}
+
+#[test]
+fn a11y_a_dimmed_control_says_why() {
+    let mut h = H::new("m1");
+    let zo = h.ctl("zoom-out").expect("zoom out");
+    assert!(zo.disabled, "100% is the smallest zoom here");
+    assert!(crate::a11y::disabled_reason("zoom-out").is_some());
+    let before = h.app.announced().len();
+    h.act("zoom-out");
+    let said = h.app.announced()[before..].join(" | ");
+    assert!(said.contains("smallest"), "{said}");
 }

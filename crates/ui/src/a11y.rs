@@ -32,6 +32,15 @@ pub fn group_of(id: &str) -> Option<(&'static str, &'static str, &'static str)> 
 pub fn disabled_reason(id: &str) -> Option<&'static str> {
     match id {
         "ver-original" => Some("Nothing has been corrected on this page yet, so the original and corrected text are the same."),
+        "copy" => Some("Nothing to copy yet: this student has no transcript."),
+        "prev-student" => Some("This is the first student."),
+        "next-student" => Some("This is the last student."),
+        "done" => Some("Select a student first."),
+        "zoom-out" => Some("Already at the smallest size, or no page is selected."),
+        "zoom-in" => Some("Already at the largest size, or no page is selected."),
+        "zoom-fit" | "boxes" | "replace" | "remove" => Some("Select a page first."),
+        "level" | "rotate" => Some("Select a page first, and wait until it has been read."),
+        "st-clear-fixes" => Some("There are no remembered fixes."),
         _ => None,
     }
 }
@@ -107,7 +116,8 @@ fn word_for(cmd: &str) -> Option<&'static str> {
         "approx" => "is approximately",
         "sim" => "is distributed as",
         "infty" => "infinity",
-        "to" | "rightarrow" | "longrightarrow" | "mapsto" | "longmapsto" => "to",
+        "to" | "rightarrow" | "longrightarrow" => "to",
+        "mapsto" | "longmapsto" => "maps to",
         "leftarrow" => "from",
         "Rightarrow" | "implies" | "Longrightarrow" => "implies",
         "Leftarrow" => "is implied by",
@@ -136,7 +146,7 @@ fn word_for(cmd: &str) -> Option<&'static str> {
         "subseteq" => "is a subset of or equal to",
         "supset" => "is a superset of",
         "supseteq" => "is a superset of or equal to",
-        "setminus" => "minus the set",
+        "setminus" => "set minus",
         "equiv" => "is equivalent to",
         "propto" => "is proportional to",
         "wedge" | "land" => "and",
@@ -179,7 +189,7 @@ fn word_for(cmd: &str) -> Option<&'static str> {
         "quad" | "qquad" | "," | ";" | "!" | ":" | " " => " ",
         "%" => "percent",
         "{" => "open brace",
-        "}" => "close brace",
+        "}" => "end set",
         "\\" => ",",
         "big" | "Big" | "bigg" | "Bigg" | "bigl" | "bigr" | "Bigl" | "Bigr" | "biggl" | "biggr" | "Biggl" | "Biggr" | "displaystyle" | "limits" => "",
         _ => return None,
@@ -272,6 +282,12 @@ fn power(arg: &str) -> String {
     let simple_frac = arg.split_once(" divided by ").is_some_and(|(n, d)| {
         !n.is_empty() && !d.is_empty() && n.chars().all(|c| c.is_ascii_digit()) && d.chars().all(|c| c.is_ascii_digit())
     });
+    let frame = arg.strip_prefix("the fraction ").and_then(|r| r.strip_suffix(" end fraction"));
+    if let Some((n, d)) = frame.and_then(|r| r.split_once(" over ")) {
+        if !n.is_empty() && !d.is_empty() && n.chars().all(|c| c.is_ascii_digit()) && d.chars().all(|c| c.is_ascii_digit()) {
+            return format!(" to the power of {n} over {d} ");
+        }
+    }
     match arg {
         // `^\circ` is a degree sign; `^{\top}` and `^T` a transpose, `^{-1}` an inverse
         "composed with" => " degrees ".into(),
@@ -324,6 +340,8 @@ fn limits(cs: &[char], p: &mut usize, head: &str) -> String {
             out.push_str(&format!(" as {l}"));
         } else if head.contains("contour") {
             out.push_str(&format!(" around {l}"));
+        } else if head.contains("double") || head.contains("triple") {
+            out.push_str(&format!(" over {l}"));
         } else {
             out.push_str(&format!(" from {l}"));
         }
@@ -471,12 +489,12 @@ fn command(cs: &[char], p: &mut usize) -> String {
     match name.as_str() {
         "frac" | "dfrac" | "tfrac" | "cfrac" => {
             let (a, b, nested) = two_args(cs, p);
-            // short only when nothing can attach to it: "1 over 2 x" would read as 1 over 2x
-            if nested || multi(&a) || multi(&b) || !ends_here(cs, *p) {
-                format!(" the fraction {a} over {b} end fraction ")
-            } else {
-                format!(" {a} over {b} ")
+            // always closed: "1 over 2 plus 1 over 3" cannot be told from 1 over (2 plus 1) over 3
+            let _ = nested;
+            if a.is_empty() && b.is_empty() {
+                return " over ".into();
             }
+            format!(" the fraction {a} over {b} end fraction ")
         }
         "binom" | "dbinom" | "tbinom" => {
             let (a, b, nested) = two_args(cs, p);
@@ -555,7 +573,7 @@ fn command(cs: &[char], p: &mut usize) -> String {
         "log" if cs.get(*p) == Some(&'_') => {
             *p += 1;
             let b = atom(cs, p);
-            format!(" log base {} ", b.trim())
+            format!(" log base {} of ", b.trim())
         }
         "left" | "right" => {
             // `\left.` and `\right.` are invisible delimiters
@@ -584,7 +602,8 @@ fn command(cs: &[char], p: &mut usize) -> String {
                 "Q" => "rationals",
                 "N" => "natural numbers",
                 "C" => "complex numbers",
-                "P" => "primes",
+                "P" => "probability",
+                "E" => "expected value",
                 "H" => "quaternions",
                 other => other,
             };
@@ -600,6 +619,13 @@ fn command(cs: &[char], p: &mut usize) -> String {
         "iiint" => limits(cs, p, "the triple integral"),
         "oint" => limits(cs, p, "the contour integral"),
         "lim" => limits(cs, p, "the limit"),
+        "bigcup" | "bigsqcup" => limits(cs, p, "the union"),
+        "bigcap" => limits(cs, p, "the intersection"),
+        "bigvee" => limits(cs, p, "the logical or"),
+        "bigwedge" => limits(cs, p, "the logical and"),
+        "bigoplus" => limits(cs, p, "the direct sum"),
+        "bigotimes" => limits(cs, p, "the tensor product"),
+        "coprod" => limits(cs, p, "the coproduct"),
         "sin" | "cos" | "tan" | "log" | "ln" | "exp" | "min" | "max" | "sup" | "inf" => format!(" {name} "),
         "Sigma" | "Delta" | "Omega" | "Gamma" | "Theta" | "Lambda" | "Pi" | "Phi" | "Psi" | "Xi" => {
             format!(" capital {} ", name.to_lowercase())
@@ -617,6 +643,7 @@ fn command(cs: &[char], p: &mut usize) -> String {
             format!(" {dir} labeled {a} end arrow ")
         }
         "overrightarrow" | "overleftarrow" | "overrightarrow*" => format!(" vector {} ", atom(cs, p)),
+        "equiv" if { let rest: String = cs[*p..].iter().collect(); rest.contains("\\pmod") || rest.contains("\\pod") } => " is congruent to ".into(),
         "pmod" | "pod" => format!(" mod {} ", atom(cs, p)),
         "overrightharpoon" => format!(" vector {} ", atom(cs, p)),
         "varepsilon" => " epsilon ".into(),
@@ -714,6 +741,228 @@ fn figure_before(out: &str) -> bool {
     caps >= 3
 }
 
+/// Is the delimiter at `at` the one a `\right` (or `\left`, with `word`) just before it names?
+fn after_word(cs: &[char], at: usize, word: &str) -> bool {
+    let mut q = at;
+    while q > 0 && cs[q - 1].is_whitespace() {
+        q -= 1;
+    }
+    let w: Vec<char> = word.chars().collect();
+    q >= w.len() && cs[q - w.len()..q] == w[..]
+}
+
+/// `\to`, `\rightarrow` or `\longrightarrow` at `p`: its length.
+fn arrow_len(cs: &[char], p: usize) -> Option<usize> {
+    for w in ["\\longrightarrow", "\\rightarrow", "\\to"] {
+        let n = w.chars().count();
+        if cs.len() >= p + n && cs[p..p + n].iter().copied().eq(w.chars()) && !cs.get(p + n).is_some_and(|c| c.is_ascii_alphabetic()) {
+            return Some(n);
+        }
+    }
+    None
+}
+
+/// After an arrow: a value with a `^+` or `^-` (`0^+`), a one-sided limit.
+fn one_sided_ahead(cs: &[char], from: usize) -> bool {
+    let mut q = from;
+    let skip = |q: &mut usize| {
+        while *q < cs.len() && cs[*q].is_whitespace() {
+            *q += 1;
+        }
+    };
+    skip(&mut q);
+    if cs.get(q) == Some(&'-') {
+        q += 1;
+    }
+    match cs.get(q) {
+        Some('{') => {
+            let mut depth = 0;
+            while q < cs.len() {
+                match cs[q] {
+                    '{' => depth += 1,
+                    '}' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            q += 1;
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+                q += 1;
+            }
+        }
+        Some('\\') => {
+            q += 1;
+            while q < cs.len() && cs[q].is_ascii_alphabetic() {
+                q += 1;
+            }
+        }
+        Some(c) if c.is_ascii_digit() => {
+            while q < cs.len() && (cs[q].is_ascii_digit() || cs[q] == '.') {
+                q += 1;
+            }
+        }
+        Some(c) if c.is_alphabetic() => q += 1,
+        _ => return false,
+    }
+    skip(&mut q);
+    if cs.get(q) != Some(&'^') {
+        return false;
+    }
+    q += 1;
+    skip(&mut q);
+    let braced = cs.get(q) == Some(&'{');
+    if braced {
+        q += 1;
+        skip(&mut q);
+    }
+    matches!(cs.get(q), Some('+') | Some('-'))
+}
+
+/// A vector written in TeX: `\vec{u}`, `\overrightarrow{AB}`, `\hat{i}`, and (as a dot product only, since
+/// a bold capital is a matrix) `\mathbf{u}`. `cross`: only what can be crossed.
+fn vector_tex(head: &str, arg: &str, cross: bool) -> bool {
+    match head {
+        "vec" | "overrightarrow" | "overleftarrow" | "hat" => true,
+        "mathbf" | "boldsymbol" => !cross || (arg.chars().count() == 1 && arg.chars().all(|c| c.is_ascii_lowercase())),
+        _ => false,
+    }
+}
+
+/// Is there a vector right before `at` (the backslash of the operator) or right after `after`?
+fn vector_near(cs: &[char], at: usize, after: usize, cross: bool) -> bool {
+    // before: `\vec{u}` ends in a `}`
+    let mut q = at;
+    while q > 0 && cs[q - 1].is_whitespace() {
+        q -= 1;
+    }
+    if q > 0 && cs[q - 1] == '}' {
+        let (mut depth, mut m) = (0i32, q - 1);
+        loop {
+            match cs[m] {
+                '}' => depth += 1,
+                '{' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        break;
+                    }
+                }
+                _ => {}
+            }
+            if m == 0 {
+                break;
+            }
+            m -= 1;
+        }
+        let head: String = cs[..m].iter().rev().take_while(|c| c.is_ascii_alphabetic()).collect::<Vec<_>>().into_iter().rev().collect();
+        let arg: String = cs[m + 1..q - 1].iter().collect();
+        if m > head.len() && cs[m - head.len() - 1] == '\\' && vector_tex(&head, arg.trim(), cross) {
+            return true;
+        }
+    }
+    // after
+    let mut r = after;
+    while r < cs.len() && cs[r].is_whitespace() {
+        r += 1;
+    }
+    if cs.get(r) == Some(&'\\') {
+        let head: String = cs[r + 1..].iter().take_while(|c| c.is_ascii_alphabetic()).collect();
+        let k = r + 1 + head.len();
+        let arg: String = if cs.get(k) == Some(&'{') { cs[k + 1..].iter().take_while(|c| **c != '}').collect() } else { String::new() };
+        return vector_tex(&head, arg.trim(), cross) || (!cross && head == "nabla");
+    }
+    false
+}
+
+/// `[a,b)` and `(a,b]`: an interval with one end in and one out. `p` is at the opening bracket.
+fn interval(cs: &[char], p: usize) -> Option<(String, usize)> {
+    let open = cs[p];
+    let (mut depth, mut q, mut comma) = (0i32, p + 1, None);
+    while q < cs.len() {
+        match cs[q] {
+            '\\' => q += 1,
+            '(' | '[' | '{' => depth += 1,
+            '}' => depth -= 1,
+            ',' if depth == 0 => {
+                if comma.is_some() {
+                    return None;
+                }
+                comma = Some(q);
+            }
+            ')' | ']' => {
+                if depth == 0 {
+                    break;
+                }
+                depth -= 1;
+            }
+            _ => {}
+        }
+        q += 1;
+    }
+    let close = *cs.get(q)?;
+    let comma = comma?;
+    if !((open == '[' && close == ')') || (open == '(' && close == ']')) {
+        return None;
+    }
+    let mut hi_end = q;
+    // `\left[a,b\right)`
+    let right: Vec<char> = "\\right".chars().collect();
+    if hi_end >= right.len() && cs[hi_end - right.len()..hi_end] == right[..] {
+        hi_end -= right.len();
+    }
+    let say = |s: &[char]| {
+        let mut r = 0;
+        seq(s, &mut r, false).split_whitespace().collect::<Vec<_>>().join(" ")
+    };
+    let (a, b) = (say(&cs[p + 1..comma]), say(&cs[comma + 1..hi_end]));
+    if a.is_empty() || b.is_empty() {
+        return None;
+    }
+    let text = if open == '[' {
+        format!(" the interval from {a}, including {a}, to {b}, not including {b} ")
+    } else {
+        format!(" the interval from {a}, not including {a}, to {b}, including {b} ")
+    };
+    Some((text, q + 1))
+}
+
+/// Between two bars: a set (`A \cap B`, `\mathcal{A}`), whose size is the cardinality.
+fn bar_holds_set(cs: &[char], from: usize) -> bool {
+    let (mut depth, mut q) = (0i32, from);
+    while q < cs.len() {
+        match cs[q] {
+            '\\' => q += 1,
+            '{' => depth += 1,
+            '}' => {
+                if depth == 0 {
+                    return false;
+                }
+                depth -= 1;
+            }
+            '|' if depth == 0 => {
+                let inner: String = cs[from..q].iter().collect();
+                return ["\\cap", "\\cup", "\\setminus", "\\mathcal", "\\emptyset", "\\varnothing"].iter().any(|w| inner.contains(w));
+            }
+            _ => {}
+        }
+        q += 1;
+    }
+    false
+}
+
+fn ordinal(n: &str) -> String {
+    match n {
+        "1" => "first".into(),
+        "2" => "second".into(),
+        "3" => "third".into(),
+        "4" => "fourth".into(),
+        "5" => "fifth".into(),
+        n if n.chars().all(|c| c.is_ascii_digit()) => format!("{n}th"),
+        n => format!("{n}th"),
+    }
+}
+
 fn divider(paren: i32, in_set: bool) -> &'static str {
     if in_set {
         " such that "
@@ -731,6 +980,8 @@ fn seq(cs: &[char], p: &mut usize, in_group: bool) -> String {
     // the closing words of an open `|...|`: a single capital letter between bars is a set's size
     let mut bar_close = " end absolute value ";
     let mut norm_open = false;
+    // after an arrow that heads for a one-sided value (x to 0^+)
+    let mut approach = false;
     // `P(A|B)` and `\{x | x > 0\}`: a bar with no partner is a divider, not an absolute value
     let (mut paren, mut in_set) = (0i32, false);
     while *p < cs.len() {
@@ -754,7 +1005,7 @@ fn seq(cs: &[char], p: &mut usize, in_group: bool) -> String {
                     while r < cs.len() && cs[r].is_whitespace() {
                         r += 1;
                     }
-                    let set = cs.get(q).is_some_and(|c| c.is_ascii_uppercase()) && cs.get(r) == Some(&'|');
+                    let set = (cs.get(q).is_some_and(|c| c.is_ascii_uppercase()) && cs.get(r) == Some(&'|')) || bar_holds_set(cs, *p);
                     out.push_str(if set { " the size of " } else { " absolute value of " });
                     bar_close = if set { " end size " } else { " end absolute value " };
                     bar_open = true;
@@ -775,7 +1026,30 @@ fn seq(cs: &[char], p: &mut usize, in_group: bool) -> String {
                 }
                 let rest: String = cs[q..].iter().take(12).collect();
                 let vector_after = ["\\vec", "\\mathbf", "\\overrightarrow", "\\nabla", "\\boldsymbol", "\\hat"].iter().any(|v| rest.starts_with(v));
-                out.push_str(if vector_before || vector_after { " dot " } else { " times " });
+                let vector_tex = vector_near(cs, *p - 5, *p, false);
+                out.push_str(if vector_before || vector_after || vector_tex { " dot " } else { " times " });
+            }
+            '\\' if cs[*p + 1..].starts_with(&['t', 'i', 'm', 'e', 's']) && !cs.get(*p + 6).is_some_and(|c| c.is_ascii_alphabetic()) => {
+                let at = *p;
+                *p += 6;
+                out.push_str(if vector_near(cs, at, *p, true) { " cross " } else { " times " });
+            }
+            '\\' if arrow_len(cs, *p).is_some_and(|n| one_sided_ahead(cs, *p + n)) => {
+                *p += arrow_len(cs, *p).unwrap_or(0);
+                approach = true;
+                out.push_str(" approaches ");
+            }
+            '(' | '[' if interval(cs, *p).is_some() => {
+                let (text, end) = interval(cs, *p).unwrap_or_default();
+                out.push_str(&text);
+                *p = end;
+            }
+            ']' if after_word(cs, *p, "\\right") => {
+                *p += 1;
+                out.push_str(" close bracket ");
+                if let Some(s) = evaluation_bar(cs, p) {
+                    out.push_str(&s);
+                }
             }
             '(' => {
                 paren += 1;
@@ -783,9 +1057,15 @@ fn seq(cs: &[char], p: &mut usize, in_group: bool) -> String {
                 out.push_str(" open paren ");
             }
             ')' => {
+                let right = after_word(cs, *p, "\\right");
                 paren -= 1;
                 *p += 1;
                 out.push_str(" close paren ");
+                if right {
+                    if let Some(s) = evaluation_bar(cs, p) {
+                        out.push_str(&s);
+                    }
+                }
             }
             '\\' if cs[*p + 1..].starts_with(&['s', 'i', 'm']) && !cs.get(*p + 4).is_some_and(|c| c.is_ascii_alphabetic()) => {
                 *p += 4;
@@ -804,8 +1084,17 @@ fn seq(cs: &[char], p: &mut usize, in_group: bool) -> String {
                 }
             }
             '\\' if cs.get(*p + 1) == Some(&'{') => {
-                in_set = true;
-                out.push_str(&command(cs, p));
+                // a left brace before an array is a system of equations, not a set
+                let left = after_word(cs, *p, "\\left");
+                *p += 2;
+                let mut q = *p;
+                while q < cs.len() && cs[q].is_whitespace() {
+                    q += 1;
+                }
+                if !(left && cs[q..].starts_with(&['\\', 'b', 'e', 'g', 'i', 'n'])) {
+                    in_set = true;
+                    out.push_str(" the set ");
+                }
             }
             '\\' if cs[*p + 1..].starts_with(&['m', 'i', 'd']) && !cs.get(*p + 4).is_some_and(|c| c.is_ascii_alphabetic()) => {
                 *p += 4;
@@ -821,8 +1110,28 @@ fn seq(cs: &[char], p: &mut usize, in_group: bool) -> String {
             '^' => {
                 *p += 1;
                 let a = atom(cs, p);
+                let was_approach = std::mem::replace(&mut approach, false);
                 let lone_capital = out.split_whitespace().next_back().is_some_and(|w| w.len() == 1 && w.chars().all(|c| c.is_ascii_uppercase()));
-                if a.trim() == "c" && lone_capital {
+                let tail = out.trim_end().to_string();
+                let set = [("real numbers", ""), ("complex numbers", ""), ("rationals", ""), ("integers", ""), ("natural numbers", "")]
+                    .into_iter()
+                    .find(|(w, _)| tail.ends_with(w));
+                let one = a.trim();
+                let derivative = one.strip_prefix("open paren ").and_then(|r| r.strip_suffix(" close paren")).filter(|r| !r.is_empty() && !r.contains("paren") && r.split_whitespace().count() == 1);
+                if was_approach && one == "plus" {
+                    out.push_str(" from the right ");
+                } else if was_approach && one == "minus" {
+                    out.push_str(" from the left ");
+                } else if let Some(n) = derivative {
+                    out.push_str(&format!(" {} derivative ", ordinal(n.trim())));
+                } else if let (Some((w, _)), true) = (set, one == "plus" || one == "minus" || (one.chars().count() == 1 && one.chars().all(|c| c.is_ascii_alphanumeric()))) {
+                    out.truncate(tail.len() - w.len());
+                    match one {
+                        "plus" => out.push_str(&format!(" positive {w} ")),
+                        "minus" => out.push_str(&format!(" negative {w} ")),
+                        n => out.push_str(&format!(" {w} in {n} dimensions ")),
+                    }
+                } else if a.trim() == "c" && lone_capital {
                     out.push_str(" complement ");
                 } else {
                     out.push_str(&power(a.trim()));
@@ -1063,6 +1372,52 @@ mod tests {
         assert!(tex_speech(r"m\widehat{AB}").contains("arc A B"));
         assert!(tex_speech(r"\mathbf{u} \cdot \mathbf{v}").contains("dot"));
         assert!(tex_speech(r"2 \cdot 3").contains("times"));
+    }
+
+    /// Critic round 9: evaluation brackets, maps-to, probability, big set operators, one-sided limits, closed
+    /// fractions, cross products, derivatives, intervals, sets and set sizes.
+    #[test]
+    fn round10_critic_gaps() {
+        assert_eq!(tex_speech(r"\left[ x^2 \right]_0^3"), "open bracket x squared close bracket evaluated from 0 to 3");
+        assert_eq!(tex_speech(r"x \mapsto x^2"), "x maps to x squared");
+        assert_eq!(tex_speech(r"\mathbb{P}(A \cap B)"), "probability open paren A intersection B close paren");
+        assert_eq!(tex_speech(r"\bigcup_{i=1}^{n} A_i"), "the union from i equals 1 to n of A sub i");
+        assert_eq!(tex_speech(r"\bigcap_{i} A_i"), "the intersection from i of A sub i");
+        assert_eq!(tex_speech(r"x \to 0^+"), "x approaches 0 from the right");
+        assert_eq!(tex_speech(r"x \to 2^{-}"), "x approaches 2 from the left");
+        assert_eq!(tex_speech(r"\lim_{x \to 0^+} f(x)"), "the limit as x approaches 0 from the right of f open paren x close paren");
+        assert_eq!(tex_speech(r"x \to 3"), "x to 3");
+        assert_eq!(
+            tex_speech(r"\frac{1}{2}+\frac{1}{3}"),
+            "the fraction 1 over 2 end fraction plus the fraction 1 over 3 end fraction"
+        );
+        assert_eq!(tex_speech(r"\dfrac{a}{b}"), "the fraction a over b end fraction");
+        assert_eq!(tex_speech(r"\frac{a}{b}\cdot\frac{c}{d}"), "the fraction a over b end fraction times the fraction c over d end fraction");
+        assert_eq!(tex_speech(r"\overrightarrow{AB} \cdot \overrightarrow{CD}"), "vector A B dot vector C D");
+        assert_eq!(tex_speech(r"\vec{u}\times\vec{v}"), "vector u cross vector v");
+        assert_eq!(tex_speech(r"\mathbf{u}\times\mathbf{v}"), "u cross v");
+        assert_eq!(tex_speech(r"\mathbf{A}\times\mathbf{B}"), "A times B");
+        assert_eq!(tex_speech(r"3 \times 4"), "3 times 4");
+        assert_eq!(tex_speech(r"f^{(n)}(x)"), "f nth derivative open paren x close paren");
+        assert_eq!(tex_speech(r"f^{(3)}"), "f third derivative");
+        assert_eq!(tex_speech(r"\log_2 8"), "log base 2 of 8");
+        assert_eq!(tex_speech(r"\iint_D f"), "the double integral over D of f");
+        assert_eq!(tex_speech(r"\{1,2,3\}"), "the set 1, 2, 3 end set");
+        let s = tex_speech(r"[a,b)");
+        assert!(s.contains("interval from a, including a, to b, not including b"), "{s}");
+        let s = tex_speech(r"(0,1]");
+        assert!(s.contains("interval from 0, not including 0, to 1, including 1"), "{s}");
+        assert!(tex_speech(r"(a,b)").contains("open paren"));
+        assert_eq!(tex_speech(r"\mathbb{R}^2"), "real numbers in 2 dimensions");
+        assert_eq!(tex_speech(r"\mathbb{R}^+"), "positive real numbers");
+        assert_eq!(tex_speech(r"|A \cap B|"), "the size of A intersection B end size");
+        assert_eq!(tex_speech(r"A \setminus B"), "A set minus B");
+        assert_eq!(tex_speech(r"a \equiv b \pmod{n}"), "a is congruent to b mod n");
+        assert_eq!(tex_speech(r"a \equiv b"), "a is equivalent to b");
+        assert_eq!(tex_speech(r"\sim"), "is distributed as");
+        // a system of equations is not a set
+        let s = tex_speech(r"\left\{ \begin{array}{l} x=1 \ y=2 \end{array} \right.");
+        assert!(!s.contains("the set"), "{s}");
     }
 
     #[test]

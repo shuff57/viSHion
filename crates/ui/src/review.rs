@@ -57,6 +57,7 @@ pub(crate) struct Stage {
 pub(crate) enum Act {
     Pick(String, String),
     SetSplit(bool),
+    TypeFirst,
     Original(bool),
     Student(i32),
     DoneNext,
@@ -405,6 +406,29 @@ fn pop_dialog(ctl: &mut Ctl, dialog: &mut Option<Dialog>, focus: Option<&'static
     }
 }
 
+/// A transcript line as it sounds: formulas spoken, markup marks dropped.
+fn spoken_line(unit: &str) -> String {
+    let mut out = String::new();
+    let mut rest = unit;
+    while let Some(i) = rest.find('$') {
+        out.push_str(&rest[..i]);
+        let after = &rest[i..];
+        let (open, tail) = if after.starts_with("$$") { (2, &after[2..]) } else { (1, &after[1..]) };
+        match tail.find(if open == 2 { "$$" } else { "$" }) {
+            Some(j) => {
+                out.push_str(&crate::a11y::tex_speech(&tail[..j]));
+                rest = &tail[j + open..];
+            }
+            None => {
+                out.push_str(after);
+                rest = "";
+            }
+        }
+    }
+    out.push_str(rest);
+    out.replace(['*', '`'], "").split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 #[allow(clippy::too_many_arguments)]
 fn apply(
     a: Act,
@@ -429,7 +453,14 @@ fn apply(
             s.pick_word(&p, &k);
             ctl.say(format!("Word panel opened. {}", s.next_word_phrase()));
         }
-        Act::SetSplit(v) => s.set_split(v),
+        Act::SetSplit(v) => {
+            s.set_split(v);
+            ctl.say(if v { "Showing the page and the text side by side." } else { "Showing the text only." });
+        }
+        Act::TypeFirst => {
+            ctl.say("Type the word first.");
+            ctl.want_focus = Some("typed-word".into());
+        }
         Act::Original(v) => s.original = v,
         Act::Student(d) => {
             s.step_student(d);
@@ -534,14 +565,18 @@ fn apply(
                 s.sync_tray();
                 ctl.say(format!("Word panel opened. {}", s.next_word_phrase()));
                 ctl.want_focus = Some("prev-word".into());
-            } else if let Some((p, k)) = s.sel_word.clone() {
-                // focus returns to the word, as `close()` in review.js does
-                ctl.want_focus = Some(format!("word-{p}-{k}"));
+            } else {
+                ctl.say("Word panel closed.");
+                if let Some((p, k)) = s.sel_word.clone() {
+                    // focus returns to the word, as `close()` in review.js does
+                    ctl.want_focus = Some(format!("word-{p}-{k}"));
+                }
             }
         }
         Act::ReadLine(i) => s.set_read_line(Some(i)),
         Act::ReadMove(d) => {
-            let n = s.current().map(|p| vishion_core::render::units(p.raw()).len()).unwrap_or(0);
+            let units = s.current().map(|p| vishion_core::render::units(p.raw())).unwrap_or_default();
+            let n = units.len();
             if n > 0 {
                 let cur = s.selected.as_ref().and_then(|id| s.read_line.get(id)).copied();
                 let next = match cur {
@@ -555,6 +590,8 @@ fn apply(
                     Some(c) => (c as i64 + d as i64).clamp(0, n as i64 - 1) as usize,
                 };
                 s.set_read_line(Some(next));
+                // the underline moved: say which line it is on, as the page shows it
+                ctl.say(format!("Line {} of {}: {}", next + 1, n, spoken_line(&units[next])));
             }
         }
         Act::ReadClear => s.set_read_line(None),
@@ -3141,8 +3178,12 @@ fn alternatives(ui: &mut Ui, cx: &mut Cx, s: &Session, cur: &Entry) {
         }
         let entered = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
         let use_it = widgets::button(cx.ctl, ui, t, C::new("use-typed", "Use this", TRAY), "Use this", Look::Primary, btn_w);
-        if (use_it || entered) && !cx.typed.trim().is_empty() {
-            cx.acts.push(Act::Choose("typed", cx.typed.trim().to_string()));
+        if use_it || entered {
+            if cx.typed.trim().is_empty() {
+                cx.acts.push(Act::TypeFirst);
+            } else {
+                cx.acts.push(Act::Choose("typed", cx.typed.trim().to_string()));
+            }
         }
     });
 }

@@ -184,6 +184,17 @@ pub fn install(q: Queue, ctx: egui::Context) {
     let _ = h.add_event_listener_with_callback("keydown", on_key.as_ref().unchecked_ref());
     on_key.forget();
 
+    // a new key press or click is a new action: what it says is not added to what the last one said
+    if let Some(doc) = document() {
+        for kind in ["keydown", "pointerdown"] {
+            let cb = Closure::<dyn FnMut(web_sys::Event)>::new(|_: web_sys::Event| {
+                SPOKEN.with(|s| s.borrow_mut().iter_mut().for_each(|slot| slot.0 = 0.0));
+            });
+            let _ = doc.add_event_listener_with_callback_and_bool(kind, cb.as_ref().unchecked_ref(), true);
+            cb.forget();
+        }
+    }
+
     // Keys the screen handles by where focus is (js: handlers on #tx-text, .scan-pages, the stage, .tray).
     // Escape always goes through (the tray and dialogs close on it); the others only inside their region.
     let (q4, c4) = (q.clone(), ctx.clone());
@@ -669,8 +680,11 @@ fn control(r: &Reg) -> Spec {
     } else {
         s.attrs.push(("aria-pressed", state));
     }
-    s.attrs.push(("disabled", if r.disabled { Some(String::new()) } else { None }));
-    s.attrs.push(("aria-description", if r.disabled { a11y::disabled_reason(&r.id).map(String::from) } else { None }));
+    // a control with a reason stays in the Tab order (aria-disabled), so a keyboard user can find out why
+    let why = if r.disabled { a11y::disabled_reason(&r.id) } else { None };
+    s.attrs.push(("disabled", if r.disabled && why.is_none() { Some(String::new()) } else { None }));
+    s.attrs.push(("aria-disabled", if why.is_some() { Some("true".to_string()) } else { None }));
+    s.attrs.push(("aria-description", why.map(String::from)));
     if r.size.0 > 0 && r.size.1 > 0 {
         s.rect = Some((r.at.0, r.at.1, r.size.0 as i32, r.size.1 as i32));
     }

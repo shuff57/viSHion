@@ -286,13 +286,36 @@ try {
     const pageNow = () => page.evaluate(() => document.querySelector('#controls [data-id^="page-"][aria-pressed="true"]')?.dataset.id);
     const told = /Now on page/.test((await a.announced())[0]);
     expect(told === ((await pageNow()) !== pageBefore), `the page is named only when it changed (was ${pageBefore}, now ${await pageNow()}, told ${told}): ` + JSON.stringify(await a.announced()));
-    // a control that disables itself under the keyboard hands focus on, and says so
+    // a control that dims under the keyboard stays where it is (aria-disabled, still in the Tab order) and says why
     expect(await a.tabTo('zoom-in'), 'Tab reaches Zoom in');
-    for (let i = 0; i < 4; i++) { await page.keyboard.press('Enter'); await a.pump(4); }
-    const now = await a.active();
-    expect(now && now !== 'body' && now !== 'html' && now !== 'zoom-in', 'at the largest zoom focus moved to a control beside it: ' + now);
-    expect(await a.wait(async () => /not available now/.test((await a.announced())[0])), 'and it says why: ' + JSON.stringify(await a.announced()));
-    expect(await a.attr('zoom-in', 'disabled') !== null, 'Zoom in is disabled at 400%');
+    for (let i = 0; i < 7; i++) { await page.keyboard.press('Enter'); await a.pump(4); }
+    expect(await a.active() === 'zoom-in', 'at the largest zoom focus stays on Zoom in: ' + await a.active());
+    expect(await a.wait(async () => /largest/.test((await a.announced())[0])), 'and Enter says why: ' + JSON.stringify(await a.announced()));
+    expect(await a.attr('zoom-in', 'aria-disabled') === 'true', 'Zoom in is aria-disabled at 400%');
+    await a.close();
+  }
+
+  // ---------------------------------------------------------------- controls that used to be silent
+  {
+    const a = await open('silent');
+    const { page } = a;
+    const press = async (id, key = 'Enter') => { await page.evaluate((i) => document.querySelector(`#controls [data-id="${i}"]`).focus(), id); await page.keyboard.press(key); await a.pump(4); };
+    await press('layout-text');
+    expect(await a.wait(async () => /text only/i.test((await a.announced())[0])), 'Text only is announced: ' + JSON.stringify(await a.announced()));
+    await press('layout-split');
+    expect(await a.wait(async () => /side by side/i.test((await a.announced())[0])), 'Side by side is announced: ' + JSON.stringify(await a.announced()));
+    await press('transcript', 'ArrowDown');
+    expect(await a.wait(async () => /Line 1 of \d+/.test((await a.announced())[0])), 'moving the underline says the line: ' + JSON.stringify(await a.announced()));
+    await press('zoom-out');
+    expect(await a.wait(async () => /smallest/.test((await a.announced())[0])), 'a dimmed Zoom out says why: ' + JSON.stringify(await a.announced()));
+    expect(await a.attr('zoom-out', 'aria-disabled') === 'true' && await a.attr('zoom-out', 'disabled') === null, 'Zoom out stays in the Tab order');
+    await press('word-p-maya-1-i:0');
+    expect(await a.wait(async () => await a.has('use-typed')), 'the word panel has Use this');
+    await press('use-typed');
+    expect(await a.wait(async () => /Type the word first/.test((await a.announced())[0])), 'Use this with nothing typed says so: ' + JSON.stringify(await a.announced()));
+    expect(await a.wait(async () => (await a.active()) === 'typed-word'), 'and focus goes to the box: ' + await a.active());
+    await press('tray-close');
+    expect(await a.wait(async () => /Word panel closed/.test((await a.announced())[0])), 'closing the panel is announced: ' + JSON.stringify(await a.announced()));
     await a.close();
   }
 
@@ -309,7 +332,7 @@ try {
     expect(await a.wait(async () => /Now on page 2 of 2/.test((await a.announced())[0])), 'a decision that moves to the other page says so: ' + JSON.stringify(await a.announced()));
     // Original is dimmed while nothing is corrected: the twin says why (the JS group has a title)
     const reload = await open('reason');
-    const g = await reload.page.evaluate(() => { const b = document.querySelector('#controls [data-id="ver-original"]'); return { btn: b?.getAttribute('aria-description'), grp: b?.closest('[role=group]')?.getAttribute('aria-description'), dis: b?.disabled }; });
+    const g = await reload.page.evaluate(() => { const b = document.querySelector('#controls [data-id="ver-original"]'); return { btn: b?.getAttribute('aria-description'), grp: b?.closest('[role=group]')?.getAttribute('aria-description'), dis: b?.getAttribute('aria-disabled') === 'true' }; });
     expect(g.dis === true && /Nothing has been corrected/.test(g.btn || '') && /Nothing has been corrected/.test(g.grp || ''), 'disabled Original says why on the button and its group: ' + JSON.stringify(g));
     // the same words twice are two announcements (a live region only reads what changed)
     await reload.page.evaluate(() => { window.__w = 0; new MutationObserver(() => { window.__w++; }).observe(document.getElementById('announce'), { childList: true, characterData: true, subtree: true }); });

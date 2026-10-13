@@ -251,12 +251,12 @@ try {
 
     // page stage: zoom keys only while it has focus
     expect(await has4('stage') && !(await has4('zoom-out')) === false, 'the page stage is a focusable group in the twin');
-    expect((await attr4('zoom-out', 'disabled')) !== null, 'Zoom out starts disabled (fit)');
+    expect((await attr4('zoom-out', 'aria-disabled')) === 'true', 'Zoom out starts disabled (fit)');
     expect(await tab4('stage'), 'Tab reaches the page stage');
     await p4.keyboard.press('+');
-    expect(await wait4(async () => (await attr4('zoom-out', 'disabled')) === null), 'plus zooms in (Zoom out becomes available)');
+    expect(await wait4(async () => (await attr4('zoom-out', 'aria-disabled')) !== 'true'), 'plus zooms in (Zoom out becomes available)');
     await p4.keyboard.press('0');
-    expect(await wait4(async () => (await attr4('zoom-out', 'disabled')) !== null), 'zero fits the page again');
+    expect(await wait4(async () => (await attr4('zoom-out', 'aria-disabled')) === 'true'), 'zero fits the page again');
 
     // transcript: arrows move the underline only inside it; Escape clears it first, not the tray
     const reading = () => p4.evaluate(() => { const e = document.querySelector('#controls p[data-reading]'); return e ? e.dataset.id : null; });
@@ -523,7 +523,7 @@ try {
     expect(ui.scroll > 0 && ui.scrollId === 'p2', 'scrolling the transcript writes meta.ui.scroll and scrollId: ' + JSON.stringify(ui));
     await p3.evaluate(() => { for (let i = 0; i < 4; i++) document.querySelector('#controls [data-id="zoom-in"]').click(); });
     let maxed = false;
-    for (let i = 0; i < 30 && !maxed; i++) { await empty(); maxed = await p3.evaluate(() => document.querySelector('#controls [data-id="zoom-in"]').disabled); }
+    for (let i = 0; i < 30 && !maxed; i++) { await empty(); maxed = await p3.evaluate(() => document.querySelector('#controls [data-id="zoom-in"]').getAttribute('aria-disabled') === 'true'); }
     expect(maxed, 'four zoom-in activations in one tick reach 400% (none are dropped)');
     expect((await p3.evaluate(() => window.__violations)).length === 0, 'zero CSP violations with real storage');
     await ctx3.close();

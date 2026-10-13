@@ -298,6 +298,12 @@ impl Ctl {
             }
             None => false,
         };
+        // a dimmed control that can still be reached says why it does nothing
+        if c.disabled && from_dom {
+            if let Some(why) = crate::a11y::disabled_reason(c.id) {
+                self.say(why);
+            }
+        }
         let hit = !c.disabled && (r.clicked() || from_dom);
         if hit {
             self.activated = Some(c.id.to_string());
