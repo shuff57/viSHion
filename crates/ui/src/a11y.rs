@@ -394,6 +394,26 @@ mod tests {
         let _ = tex_speech(r"\{^_}\\");
     }
 
+    /// Blind critic round 3: formulas where a listener cannot tell which part belongs to which. Failing by design.
+    #[test]
+    fn nested_fractions_keep_their_scope() {
+        // "1 over 2 over 3" is (1/2)/3 or 1/(2/3): the inner fraction must be closed
+        let s = tex_speech(r"\frac{\frac{1}{2}}{3}");
+        assert_eq!(s.matches("end fraction").count(), 2, "{s}");
+        // "1 over 2 x" reads as 1/(2x): the fraction must be closed before the factor
+        let s = tex_speech(r"\frac{1}{2}x");
+        assert!(s.contains("end fraction"), "{s}");
+    }
+
+    #[test]
+    fn matrices_and_binomials_are_not_spelled_out() {
+        let s = tex_speech(r"\begin{pmatrix} a & b \\ c & d \end{pmatrix}");
+        assert!(!s.contains("p m a t r i x"), "{s}");
+        assert!(s.contains("matrix") && s.contains("row"), "{s}");
+        let s = tex_speech(r"\binom{n}{k}");
+        assert!(s.contains("choose"), "{s}");
+    }
+
     #[test]
     fn groups_and_landmarks() {
         assert_eq!(group_of("page-p1").map(|g| g.0), Some("pages"));

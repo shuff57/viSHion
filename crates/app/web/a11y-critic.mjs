@@ -80,6 +80,28 @@ try {
     expect(!/heading "Maya R\."/.test(snap) && !/- main:/.test(snap), 'behind a dialog: no main landmark or h1 left in the tree');
     await ctx.close();
   }
+
+  // 5. Blind critic round 3 (each FAIL is a gap)
+  {
+    const { ctx, page, pump } = await open({ width: 1280, height: 800 });
+    const val = () => page.evaluate(() => document.querySelector('#controls [data-id="typed-word"]')?.value ?? null);
+    const focus = async (id) => { await page.evaluate((i) => document.querySelector(`#controls [data-id="${i}"]`)?.focus(), id); await pump(3); };
+    // the text box is the next word's box after a typed fix, and a screen reader reads its value: it must be empty
+    await focus('word-p-maya-1-i:0'); await page.keyboard.press('Enter'); await pump(4);
+    await focus('typed-word'); await page.keyboard.type('mean'); await page.keyboard.press('Enter'); await pump(6);
+    const v = await val();
+    expect(v === '', 'after a typed fix the next word\'s text box is empty (JS re-renders the tray), not stale: ' + JSON.stringify(v));
+    // a button that disables itself by its own action hands focus on (A11Y.md says so)
+    await page.mouse.click(640, 3);
+    for (let i = 0; i < 40; i++) { await page.keyboard.press('Tab'); if (await page.evaluate(() => document.activeElement?.dataset?.id) === 'zoom-in') break; }
+    for (let i = 0; i < 5; i++) { await page.keyboard.press('Enter'); await pump(4); }
+    const act = await page.evaluate(() => document.activeElement?.dataset?.id || document.activeElement?.tagName);
+    expect(act !== 'BODY' && act !== 'HTML', 'zooming in to the maximum keeps focus on a control (Zoom in turns disabled under it): ' + act);
+    // js/main.js sets the tab title to "<assignment> | viSHion" outside the home screen
+    const title = await page.title();
+    expect(/\| viSHion$/.test(title), 'the document title names the assignment (JS: "Unit 5 | viSHion"): ' + JSON.stringify(title));
+    await ctx.close();
+  }
 } catch (e) {
   console.error(e);
   failures.push('exception: ' + (e && e.message));
