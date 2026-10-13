@@ -5,6 +5,7 @@
 //! `clean` (model-wrapper stripping), `render` (units, math hold, pieces), `export`, `idle`.
 //! `jsx` reproduces the JavaScript semantics the ports depend on.
 pub mod clean;
+pub mod demo;
 pub mod export;
 pub mod groups;
 pub mod guess;

@@ -278,13 +278,30 @@ mod tests {
     }
 
     #[test]
-    fn straighten_and_transcribe_are_honest_about_not_being_here_yet() {
+    fn straighten_is_honest_and_transcribe_reads_in_demo_mode() {
         let (store, slug) = block_on(seed(1)).unwrap();
-        let be = Backend::new(store, "Demo");
+        let be = Backend::new_demo(store, "Demo");
         let s = block_on(be.handle(Cmd::Straighten { slug: slug.clone(), id: "p-maya-1".into() }, 0));
         assert!(matches!(s, Event::Notice { ref text, error: false } if text.contains("unchanged")));
-        let t = block_on(be.handle(Cmd::Transcribe { slug, ids: vec!["p-maya-1".into()] }, 0));
-        assert!(matches!(t, Event::Notice { ref text, error: true } if text.contains("OCR")));
+        // demo mode answers with the sample text, one event per page, by position in the run
+        let Event::Many(evs) = block_on(be.handle(Cmd::Transcribe { slug: slug.clone(), ids: vec!["p-omar-1".into(), "p-ben-1".into()] }, 0)) else {
+            panic!("expected one event per page")
+        };
+        assert_eq!(evs.len(), 2);
+        match &evs[0] {
+            Event::Transcribed { id, outcome: vishion_ui::ReadOutcome::Done { raw, guesses, .. } } => {
+                assert_eq!(id, "p-omar-1");
+                assert!(raw.starts_with("Lesson 4: Quadratics"), "{raw}");
+                assert_eq!(guesses.as_ref().map(|g| g.len()), Some(1));
+            }
+            e => panic!("{e:?}"),
+        }
+        assert!(matches!(&evs[1], Event::Transcribed { outcome: vishion_ui::ReadOutcome::Done { raw, .. }, .. } if raw.starts_with("Pt seen")));
+        // without demo mode the page is left alone and the message says why
+        let (store, slug) = block_on(seed(1)).unwrap();
+        let be = Backend::new(store, "Saved");
+        let Event::Many(evs) = block_on(be.handle(Cmd::Transcribe { slug, ids: vec!["p-maya-1".into()] }, 0)) else { panic!() };
+        assert!(matches!(&evs[0], Event::Transcribed { outcome: vishion_ui::ReadOutcome::Unreachable(m), .. } if m.contains("OCR")));
     }
 
     /// The native path: a real folder, written and read back through `FsStore` and the project layer.

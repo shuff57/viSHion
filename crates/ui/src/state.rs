@@ -832,6 +832,72 @@ impl Session {
         self.dirty.meta = true;
     }
 
+    /// A page was read (`Q.runOne` `finish`, then `J.run`, then the automatic guess): status done, the
+    /// transcript, its line boxes when the ink scan agrees with the line count, the glossary suggestions
+    /// from the offline judge, and guesses for unreadable words when the host made them. Decisions already
+    /// on the page (`resolved`, `edits`) are left as they are, exactly as the JS queue leaves them.
+    pub fn page_read(&mut self, id: &str, raw: &str, tokens: u32, ms: u32, guesses: Option<serde_json::Map<String, Value>>, bands: &[Band]) {
+        let topic = self.a.meta.topic().to_string();
+        let terms = self.settings.terms(&topic);
+        let guess_on = self.settings.get("guessIllegible").and_then(Value::as_bool) != Some(false);
+        let boxes = compute_boxes(raw, bands);
+        let Some(p) = self.a.pages.get_mut(id) else { return };
+        let raw = raw.trim_end_matches(jsx::is_ws).to_string();
+        let was_done = p.status() == "done";
+        // `autoGuess`: a page that starts reading drops old guesses (only when it had any)
+        let had_guesses = jsx::truthy(p.get("guessed")) || p.get("guesses").and_then(Value::as_object).is_some_and(|o| !o.is_empty());
+        if had_guesses {
+            p.set("guesses", json!({}));
+            p.set("guessed", json!(false));
+        }
+        p.set("status", json!("done"));
+        p.set("raw", json!(raw));
+        p.set("corrected", json!(raw));
+        p.set("corrections", json!([]));
+        p.set("boxes", Value::Array(boxes));
+        p.set("error", json!(""));
+        p.set("timings", json!({"ms": ms, "tokens": tokens}));
+        if !raw.is_empty() && !terms.is_empty() {
+            let found = vishion_core::judge::heuristic(&raw, &terms);
+            vishion_core::judge::apply_found(p, &found);
+        }
+        if guess_on && !jsx::truthy(p.get("guessed")) && has_illegible(&raw) {
+            if let Some(g) = guesses {
+                p.set("guesses", Value::Object(g));
+                p.set("guessed", json!(true));
+            }
+        }
+        self.read_line.remove(id);
+        self.dirty.pages.insert(id.to_string());
+        if !was_done {
+            self.a.sync_stats();
+            self.dirty.meta = true;
+        }
+        self.sync_tray();
+    }
+
+    /// The page could not be read: status error with the message (`queue.js` catch).
+    pub fn page_failed(&mut self, id: &str, msg: &str) {
+        let Some(p) = self.a.pages.get_mut(id) else { return };
+        let changed = p.status() != "error";
+        p.set("status", json!("error"));
+        p.set("error", json!(if msg.is_empty() { "Transcription failed." } else { msg }));
+        self.dirty.pages.insert(id.to_string());
+        if changed {
+            self.a.sync_stats();
+            self.dirty.meta = true;
+        }
+        self.sync_tray();
+    }
+
+    /// `W.guess` answered: `guesses = found`, `guessed = true`.
+    pub fn page_guessed(&mut self, id: &str, found: serde_json::Map<String, Value>) {
+        let Some(p) = self.a.pages.get_mut(id) else { return };
+        p.set("guesses", Value::Object(found));
+        p.set("guessed", json!(true));
+        self.dirty.pages.insert(id.to_string());
+    }
+
     /// True when the page carries decisions that "Transcribe again" would replace.
     pub fn has_decisions(&self, p: &Page) -> bool {
         !p.edits().is_empty() || !p.resolved().is_empty()
@@ -846,6 +912,22 @@ impl Session {
     pub fn take_dirty(&mut self) -> Dirty {
         std::mem::take(&mut self.dirty)
     }
+}
+
+/// `/\[illegible\]/i`
+pub fn has_illegible(t: &str) -> bool {
+    let b = t.as_bytes();
+    (0..b.len().saturating_sub(10)).any(|i| b[i] == b'[' && b[i..i + 11].eq_ignore_ascii_case(b"[illegible]"))
+}
+
+/// `R.computeBoxes`: the ink bands fitted to the transcript lines, or nothing when they are not reliable.
+pub fn compute_boxes(raw: &str, bands: &[Band]) -> Vec<Value> {
+    let n = render::units(raw).len();
+    if n == 0 || !render::bands_reliable(bands.len(), n) {
+        return vec![];
+    }
+    let vals: Vec<Value> = bands.iter().map(|b| json!({"x": b.x, "y": b.y, "w": b.w, "h": b.h, "r": 0, "s": b.s})).collect();
+    render::map_bands(&vals, n)
 }
 
 /// A transcript line's box on the page, as fractions of the image.

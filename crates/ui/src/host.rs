@@ -25,8 +25,11 @@ pub enum Cmd {
     AddPages { slug: String, student: String },
     /// Straighten the stored image and redo its line boxes (needs the imaging port).
     Straighten { slug: String, id: String },
-    /// Read these pages (again). The OCR client lands with phase 3.
+    /// Read these pages (again), in order: `Event::Transcribed` per page. Demo mode answers with sample text;
+    /// otherwise the host needs the OCR connection (phase 3) and says so.
     Transcribe { slug: String, ids: Vec<String> },
+    /// Ask for likely words for the unreadable words of a page (`W.guess`): `Event::Guessed`.
+    Guess { slug: String, id: String, raw: String },
     /// Write `exports/<name>` (the strip's "Export N selected").
     Export { slug: String, name: String, bytes: Vec<u8> },
     /// Web: fetch the STIX Two Math font once (it is not part of the wasm, plan risk "wasm size").
@@ -63,10 +66,27 @@ pub enum Event {
     PageReplaced { id: String, name: String, bytes: Vec<u8> },
     /// New pages with their pictures, in order.
     PagesAdded { pages: Vec<(Page, Vec<u8>)> },
+    /// The answer to `Transcribe` for one page.
+    Transcribed { id: String, outcome: ReadOutcome },
+    /// The answer to `Guess`: `Err` is a message for the toast, the page is unchanged.
+    Guessed { id: String, result: Result<serde_json::Map<String, serde_json::Value>, String> },
+    /// Several events from one command, applied in order.
+    Many(Vec<Event>),
     /// The math font bytes (web).
     MathFont(Vec<u8>),
     /// The fallback font bytes (web).
     FallbackFont(Vec<u8>),
+}
+
+/// What reading a page gave.
+#[derive(Debug)]
+pub enum ReadOutcome {
+    /// A transcript. `guesses` are present when the host also guessed the unreadable words (demo mode).
+    Done { raw: String, tokens: u32, ms: u32, guesses: Option<serde_json::Map<String, serde_json::Value>> },
+    /// The server could not be reached: the page keeps what it had (`queue.js` "unreachable").
+    Unreachable(String),
+    /// The page could not be read: its status becomes "error" with this message.
+    Failed(String),
 }
 
 /// Thread-safe mailbox the host pushes into. Pushing wakes egui.

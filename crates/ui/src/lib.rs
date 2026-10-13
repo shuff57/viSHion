@@ -34,7 +34,7 @@ mod web;
 #[cfg(test)]
 mod app_tests;
 
-pub use host::{Cmd, Dispatch, Event, Inbox};
+pub use host::{Cmd, Dispatch, Event, Inbox, ReadOutcome};
 pub use twin::{Node, Part, Reg};
 
 /// Web only: call once after eframe started; makes the canvas a non-tabbable, AT-hidden surface and names
@@ -460,10 +460,18 @@ impl App {
     }
 
     fn handle_events(&mut self) {
-        let evs = match &self.host {
+        let drained = match &self.host {
             Some((_, inbox)) => inbox.drain(),
             None => vec![],
         };
+        fn flatten(e: Event, out: &mut Vec<Event>) {
+            match e {
+                Event::Many(v) => v.into_iter().for_each(|x| flatten(x, out)),
+                e => out.push(e),
+            }
+        }
+        let mut evs = vec![];
+        drained.into_iter().for_each(|e| flatten(e, &mut evs));
         for e in evs {
             match e {
                 Event::Opened { slug, assignment, settings, storage, unreadable, notice } => {
@@ -538,6 +546,41 @@ impl App {
                         self.status_err = false;
                     }
                 }
+                Event::Many(_) => {}
+                Event::Transcribed { id, outcome } => {
+                    use host::ReadOutcome::*;
+                    match outcome {
+                        Done { raw, tokens, ms, guesses } => {
+                            let bands: Vec<bands::Band> = match self.images.get(&id) {
+                                Some(Slot::Ready(im)) => im.bands.clone(),
+                                _ => vec![],
+                            };
+                            if let Some(s) = &mut self.session {
+                                s.page_read(&id, &raw, tokens, ms, guesses, &bands);
+                            }
+                        }
+                        Unreachable(m) => {
+                            self.status_msg = Some(m);
+                            self.status_err = true;
+                        }
+                        Failed(m) => {
+                            if let Some(s) = &mut self.session {
+                                s.page_failed(&id, &m);
+                            }
+                        }
+                    }
+                }
+                Event::Guessed { id, result } => match result {
+                    Ok(found) => {
+                        if let Some(s) = &mut self.session {
+                            s.page_guessed(&id, found);
+                        }
+                    }
+                    Err(m) => {
+                        self.status_msg = Some(m);
+                        self.status_err = true;
+                    }
+                },
                 Event::MathFont(bytes) => self.math.set_font(bytes),
                 Event::FallbackFont(bytes) => {
                     if !bytes.is_empty() {

@@ -15,6 +15,8 @@ use crate::widgets::{self, Icon, Look, TARGET};
 use crate::{App, Boot, Cmd, Ctl, Img, KeyEv, SaveState, Slot, C};
 use egui::{pos2, vec2, Align, Color32, Layout, Margin, Rect, RichText, Sense, Stroke, Ui, Vec2};
 use std::collections::HashMap;
+use serde_json::Value;
+use vishion_core::jsx::truthy as jsx_truthy;
 use vishion_core::model::Page;
 use vishion_core::words;
 
@@ -72,6 +74,7 @@ pub(crate) enum Act {
     ChangeStudent,
     TextView(bool),
     Transcribe(String, bool),
+    Guess(String),
     OpenSettings,
     CloseDialog,
     Inbox,
@@ -433,6 +436,11 @@ fn apply(
                 });
             } else {
                 send(Cmd::Transcribe { slug, ids: vec![id] });
+            }
+        }
+        Act::Guess(id) => {
+            if let Some(p) = s.page(&id) {
+                send(Cmd::Guess { slug, id: id.clone(), raw: p.raw().to_string() });
             }
         }
         Act::OpenSettings => *dialog = Some(Dialog::Settings),
@@ -1872,6 +1880,26 @@ fn alternatives(ui: &mut Ui, cx: &mut Cx, s: &Session, cur: &Entry) {
         let label = format!("{}. {}", a.label, a.hint);
         if cx.ctl.reg(ui, &r, C::new(&a.id, &label, TRAY).pressed(a.on)) {
             cx.acts.push(Act::Choose(a.via, a.text.clone()));
+        }
+    }
+    // unreadable words: the guesses' own caveat, or the way to ask for them (review.js `alts.append`)
+    if cur.item.kind == "illegible" {
+        let page = s.page(&cur.page);
+        let has = page
+            .and_then(|p| p.get("guesses"))
+            .and_then(|g| g.get(&cur.item.key))
+            .and_then(Value::as_array)
+            .is_some_and(|a| !a.is_empty());
+        if has {
+            let msg = "The percentages are the model’s own estimate, not a measured probability.";
+            let r = ui.add(egui::Label::new(RichText::new(msg).font(theme::sans(13.0)).color(t.muted)).wrap());
+            cx.ctl.text("guess-hint", msg, TRAY, r.rect.min);
+        } else {
+            let guessed = page.is_some_and(|p| jsx_truthy(p.get("guessed")));
+            let label = if guessed { "Look again for likely words" } else { "Suggest likely words" };
+            if widgets::button(cx.ctl, ui, t, C::new("suggest-guesses", label, TRAY), label, Look::Outline, w) {
+                cx.acts.push(Act::Guess(cur.page.clone()));
+            }
         }
     }
     // typed fix

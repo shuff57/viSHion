@@ -8,9 +8,12 @@ use vishion_store::mem::MemStore;
 use vishion_store::projects::Projects;
 use vishion_store::{Result, Store};
 use vishion_core::model::{Assignment, Page};
-use vishion_ui::{Cmd, Event};
+use vishion_ui::{Cmd, Event, ReadOutcome};
 
 use crate::pictures;
+
+/// Said when a page is read without demo mode: the OCR client is phase 3.
+const NEEDS_OCR: &str = "Reading pages needs the OCR connection, which arrives with phase 3. Nothing was changed.";
 
 /// A file the user picked: its name and its bytes.
 #[derive(Clone, Debug)]
@@ -250,6 +253,28 @@ impl Backend {
         Event::PagesAdded { pages }
     }
 
+    /// Demo mode of js/ocr.js: the sample assignment, or the `demo` setting.
+    async fn demo_mode(&self) -> bool {
+        if self.demo {
+            return true;
+        }
+        match self.projects.load_settings().await {
+            Ok(Some(m)) => Settings::load(&Value::Object(m)).get("demo").and_then(Value::as_bool) == Some(true),
+            _ => false,
+        }
+    }
+
+    /// One page of a run (`Q.runOne`): sample text in demo mode, otherwise the server (phase 3) is needed.
+    fn read_page(&self, id: String, index: usize, demo: bool) -> Event {
+        if !demo {
+            return Event::Transcribed { id, outcome: ReadOutcome::Unreachable(NEEDS_OCR.into()) };
+        }
+        let r = vishion_core::demo::read(index);
+        let (_, n) = vishion_core::guess::numbered(&r.text);
+        let guesses = Some(vishion_core::demo::guesses(n));
+        Event::Transcribed { id, outcome: ReadOutcome::Done { raw: r.text, tokens: r.tokens, ms: r.ms, guesses } }
+    }
+
     pub async fn handle(&self, cmd: Cmd, now: i64) -> Event {
         match cmd {
             Cmd::RemovePage { slug, id } => done(self.projects.delete_page(&slug, &id).await),
@@ -278,10 +303,18 @@ impl Backend {
                 text: "Straightening needs the imaging port, which arrives with phase 5. The page is unchanged.".into(),
                 error: false,
             },
-            Cmd::Transcribe { .. } => Event::Notice {
-                text: "Reading pages needs the OCR connection, which arrives with phase 3. Nothing was changed.".into(),
-                error: true,
-            },
+            Cmd::Transcribe { ids, .. } => {
+                let demo = self.demo_mode().await;
+                Event::Many(ids.into_iter().enumerate().map(|(i, id)| self.read_page(id, i, demo)).collect())
+            }
+            Cmd::Guess { id, raw, .. } => {
+                if self.demo_mode().await {
+                    let (_, n) = vishion_core::guess::numbered(&raw);
+                    Event::Guessed { id, result: Ok(vishion_core::demo::guesses(n)) }
+                } else {
+                    Event::Guessed { id, result: Err(NEEDS_OCR.into()) }
+                }
+            }
             Cmd::Export { slug, name, bytes } => match self.projects.write_export(&slug, &name, &bytes).await {
                 Ok(()) => Event::Notice { text: format!("Exported to exports/{name}."), error: false },
                 Err(e) => Event::Notice { text: format!("Could not export: {e}"), error: true },

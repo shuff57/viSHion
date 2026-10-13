@@ -105,4 +105,73 @@ mod tests {
             println!("ctl {} at={:?} size={:?}", c.id, c.at, c.size);
         }
     }
+
+    impl Rig {
+        /// Through the assignment overview to a student's first page, as a click path.
+        fn open_student(&mut self, key: &str) {
+            if self.app.session().unwrap().view == vishion_ui::state::View::Review {
+                self.act("crumb");
+            }
+            self.act(&format!("row-{key}"));
+        }
+
+        fn page(&self, id: &str) -> vishion_core::model::Page {
+            self.app.session().unwrap().page(id).unwrap().clone()
+        }
+    }
+
+    /// Blind critic round 3: "Retry this page" and "Transcribe this page" did nothing (the host answered
+    /// "needs the OCR connection"). In demo mode the JS app reads sample text, runs the judge and ends with
+    /// status done and corrections.
+    #[test]
+    fn blind3_retry_on_an_error_page_reads_it_in_demo_mode() {
+        let mut r = Rig::demo();
+        r.open_student("n:omar k.");
+        assert_eq!(r.page("p-omar-1").status(), "error");
+        assert!(r.has("retry-page"));
+        r.act("retry-page");
+        let p = r.page("p-omar-1");
+        assert_eq!(p.status(), "done");
+        assert!(p.raw().starts_with("Lesson 4: Quadratics"), "{}", p.raw());
+        assert!(p.s("error").is_empty());
+        assert!(!p.corrections().is_empty(), "the judge ran: {:?}", p.corrections());
+        assert!(p.get("guesses").and_then(|g| g.get("i:0")).is_some(), "demo guesses for the unreadable word");
+        assert!(!r.has("retry-page"), "the error block is gone");
+        assert!(r.has("transcribe-again"));
+        // stored, with the stats of the assignment following
+        let vishion_ui::Event::Opened { assignment, .. } = block_on(r.be.open(Some(&r.slug), 5)) else { panic!("reopen") };
+        assert_eq!(assignment.page("p-omar-1").unwrap().status(), "done");
+        assert_eq!(assignment.meta.get("stats").unwrap()["done"], 4);
+    }
+
+    #[test]
+    fn blind3_transcribe_this_page_reads_a_pending_page() {
+        let mut r = Rig::demo();
+        r.open_student("n:ben t.");
+        assert_eq!(r.page("p-ben-1").status(), "pending");
+        assert!(r.has("transcribe-page"));
+        r.act("transcribe-page");
+        let p = r.page("p-ben-1");
+        assert_eq!(p.status(), "done");
+        assert!(p.raw().starts_with("Lesson 4: Quadratics"));
+        assert!(p.get("timings").unwrap()["tokens"].as_u64().unwrap() > 10);
+        // and again: one more read replaces it (the second sample is only for the second page of a run)
+        r.act("transcribe-again");
+        assert_eq!(r.page("p-ben-1").status(), "done");
+    }
+
+    /// The review screen opens unscrolled at 1280 x 800, as the JS app does: the name and the status pill
+    /// are on screen and the word being decided sits just above the tray.
+    #[test]
+    fn blind3_demo_opens_unscrolled_with_name_pill_and_word_in_view() {
+        let mut r = Rig::demo();
+        r.frames(20);
+        let name = r.texts().into_iter().find(|(t, _, y)| t == "Maya R." && *y > 100.0).map(|(_, _, y)| y.round());
+        // the 32px line box starts at 141 (109 + 32, as in js); its glyph row is centred in it
+        assert!(matches!(name, Some(y) if (137.0..=142.0).contains(&y)), "heading at {name:?}: scrolled or off the js rhythm");
+        assert!(r.y_of("4 words to check").is_some_and(|y| y < 160.0));
+        let word = r.app.controls().into_iter().find(|c| c.id.contains("c:0")).unwrap().at.1;
+        let tray = r.y_of("Check this word").unwrap();
+        assert!(word as f32 + 44.0 <= tray + 30.0, "word target at {word}, tray heading at {tray}");
+    }
 }
