@@ -90,6 +90,8 @@ pub struct Ctl {
     /// Ids that took an activation this frame (the rest of their queue waits for the next frame).
     consumed: HashSet<String>,
     focus: Option<String>,
+    /// Native: the control that had the keyboard focus last (see `track_focus`).
+    restore_kb: Option<String>,
     /// Text typed into a twin textbox, by id (consumed by the widget that owns it).
     typed: HashMap<String, String>,
     nodes: Vec<Node>,
@@ -206,6 +208,14 @@ impl Ctl {
             self.focus_fresh = true;
         }
         let twin_focus = self.focus.as_deref() == Some(id);
+        // Native: egui let go of the focus this control had (egui ids are positional: a control whose neighbours
+        // came or went in the frame of its action is another widget to egui, and egui drops a focus whose
+        // widget it did not see). The platform focus would fall to the window element, a screen reader would
+        // read the title and Tab would start again at the top. A mouse press clears the record.
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.restore_kb.as_deref() == Some(id) && !r.has_focus() && ui.ctx().memory(|m| m.focused().is_none()) {
+            r.request_focus();
+        }
         if twin_focus && self.focus_fresh && self.scrolls.get(region as usize).copied().unwrap_or(false) {
             self.focus_fresh = false;
             // the ring and a little air round it; a tall region (the transcript) only needs its top on screen
@@ -1215,6 +1225,7 @@ impl App {
             #[cfg(not(target_arch = "wasm32"))]
             {
                 self.ctl.focus = None;
+                self.ctl.restore_kb = None;
             }
         }
         self.ctl.drain(&self.queue);
@@ -1235,6 +1246,9 @@ impl App {
             self.was_focus = self.prev_focus.clone();
         }
         self.prev_focus = self.ctl.focused.as_ref().map(|f| f.0.clone());
+        if self.prev_focus.is_some() {
+            self.ctl.restore_kb = self.prev_focus.clone();
+        }
         // an activation or typed text whose control was not on screen this frame is dropped, not kept; what a
         // control has queued beyond the one it took this frame waits for the next frame
         let consumed = std::mem::take(&mut self.ctl.consumed);

@@ -2580,3 +2580,53 @@ fn native_focus_survives_transcribe_again_on_an_untouched_page() {
     h.frames(4);
     assert!(focused(&h).is_some(), "focus is on a control while the page is read");
 }
+
+/// Round 11: Enter on a plain action button (no dialog) on the real window dropped the platform focus to the
+/// Window element. Same key sequence as the window gets (Tab to the button, Enter down and up), every update
+/// handed to a consumer; the focus of every update after the key is a node of the tree other than the root.
+#[test]
+fn native_focus_stays_on_a_control_after_enter_on_a_plain_action() {
+    for (target, by_tab) in [("text-view", true), ("transcribe-again", true), ("text-view", false), ("transcribe-again", false)] {
+        let mut h = H::new("m1");
+        h.ctx.enable_accesskit();
+        h.frames(2);
+        let upd = h.out.platform_output.accesskit_update.clone().expect("update");
+        let mut tree = accesskit_consumer::Tree::new(upd, true);
+        if by_tab {
+            for _ in 0..120 {
+                if h.app.prev_focus.as_deref() == Some(target) {
+                    break;
+                }
+                h.events.push(tab_key(false));
+                h.frames(2);
+            }
+        } else {
+            // a UI Automation client's SetFocus (what the critic script does before the key)
+            let w = h.app.ctl.widgets[target];
+            h.events.push(egui::Event::AccessKitActionRequest(accesskit::ActionRequest {
+                action: accesskit::Action::Focus,
+                target: accesskit::NodeId(w.value()),
+                data: None,
+            }));
+            h.frames(3);
+        }
+        assert_eq!(h.app.prev_focus.as_deref(), Some(target), "Tab reaches it");
+        let root = egui::accesskit_root_id();
+        for pressed in [true, false] {
+            h.events.push(egui::Event::Key { key: egui::Key::Enter, physical_key: Some(egui::Key::Enter), pressed, repeat: false, modifiers: Default::default() });
+            for _ in 0..1 {
+                h.frames(1);
+                let u = h.out.platform_output.accesskit_update.clone().expect("update");
+                tree.update(u);
+            }
+        }
+        for i in 0..8 {
+            h.frames(1);
+            let u = h.out.platform_output.accesskit_update.clone().expect("update");
+            let f = u.focus;
+            tree.update(u);
+            assert!(f.0 != root.value(), "{target}: frame {i} after Enter: platform focus is the window ({f:?})");
+            assert!(tree.state().focus().is_some(), "{target}: focus is a node");
+        }
+    }
+}
