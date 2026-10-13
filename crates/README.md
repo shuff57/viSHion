@@ -114,7 +114,10 @@ The canvas is `tabindex=-1` and `aria-hidden`: it takes pointer focus but is not
 exposed to assistive tech. The hidden `#controls` twin buttons are the keyboard/AT surface, in on-screen
 reading order (region, then 16px row band, then x): header, page pane, transcript, tray. The transcript is
 mirrored as headings, a `role=status` live region and paragraphs with the flagged words as inline buttons and
-math as `role=math`. eframe would swallow Tab on the canvas, so `ui/src/web.rs` keeps Tab away from it (capture
+math as `role=math`; each flagged word is reserved in its sentence at layout time (`Ctl::para_slot`), so it reads
+where it stands ("The 95% [Spelling to check: confidance...] interval ..."). The tray's position is a
+`role=status` node ("Word 2 of 4") between Previous and Next, and the header's student position a text node.
+eframe would swallow Tab on the canvas, so `ui/src/web.rs` keeps Tab away from it (capture
 listener) and the browser moves focus: no keyboard trap. `check.mjs` drives real Tab, Shift+Tab, Enter and
 Space, never `focus()`. A future egui text field must keep this property (Tab leaves it).
 

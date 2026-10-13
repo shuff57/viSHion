@@ -225,17 +225,39 @@ pub fn crumb(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, c: C, name: &str, max_w: f3
 pub const BRAND_W: f32 = 119.0;
 
 pub fn brand(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, c: C) -> bool {
-    let font = theme::mono_bold(26.5);
+    // js/ui/header.js `logo()`: SVG text `600 64px mono`, `textLength=300 spacingAndGlyphs` in a 312 x 84 view box
+    // drawn 32px high (x 0.381): glyphs are stretched to 114.3px wide, the baseline sits 24.4px under the top of
+    // the 32px box, which is centred in the 44px button. The stretch is applied to the glyph meshes.
+    let font = theme::mono_bold(21.0);
     let parts = [("vi", t.ink), ("SH", t.accent), ("ion", t.ink)];
     let r = ui.allocate_response(vec2(BRAND_W, TARGET), Sense::click());
     let hover = if r.hovered() { Some(t.accent) } else { None };
     let gs: Vec<_> = parts.iter().map(|(s, col)| ui.painter().layout_no_wrap((*s).to_string(), font.clone(), hover.unwrap_or(*col))).collect();
-    let total: f32 = gs.iter().map(|g| g.size().x).sum();
-    let mut x = r.rect.left() + 2.0 + (114.0 - total) / 2.0;
-    for g in gs {
-        let sz = g.size();
-        ui.painter().galley(pos2(x, r.rect.center().y - sz.y / 2.0 - 1.0), g, Color32::PLACEHOLDER);
-        x += sz.x;
+    let natural: f32 = gs.iter().map(|g| g.size().x).sum();
+    let x0 = r.rect.left() + 1.0;
+    let k = 117.4 / natural.max(1.0);
+    let baseline = r.rect.center().y + 8.38;
+    // the lowest vertex of the first row is the glyph quads bottom, a fixed distance under the baseline
+    let bottom = gs
+        .iter()
+        .flat_map(|g| g.rows.iter().take(1))
+        .flat_map(|row| row.visuals.mesh.vertices.iter().map(|v| v.pos.y))
+        .fold(f32::MIN, f32::max);
+    // (the glyph quads reach about 3px under the baseline at this size: measured against the browser)
+    let dy = baseline - bottom + 1.8;
+    // the row meshes use texel UVs; the tessellator normalises them for text shapes, here it is done by hand
+    let [tw, th] = ui.fonts(|f| f.font_image_size());
+    let mut x = 0.0;
+    for g in &gs {
+        for row in &g.rows {
+            let mut m = row.visuals.mesh.clone();
+            for v in &mut m.vertices {
+                v.pos = pos2(x0 + (x + v.pos.x) * k, v.pos.y + dy);
+                v.uv = pos2(v.uv.x / tw as f32, v.uv.y / th as f32);
+            }
+            ui.painter().add(egui::Shape::mesh(m));
+        }
+        x += g.size().x;
     }
     ctl.reg(ui, &r, c)
 }

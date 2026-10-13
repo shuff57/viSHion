@@ -342,6 +342,27 @@ try {
     expect(await wait7(async () => /-1$/.test((await reading7()) || '')), 'ArrowUp moves it back one line');
     await p7.keyboard.press('Escape');
     expect(await wait7(async () => (await reading7()) === null), 'Escape clears the underline');
+    // reading order: the flagged words sit in the sentence, read where they stand, with no hole where they were
+    const sentence = (id) => p7.evaluate((i) => {
+      const p = document.querySelector(`#controls [data-id="${i}"]`);
+      return p ? [...p.childNodes].map(n => n.tagName === 'BUTTON' ? '[' + (n.getAttribute('aria-label') || n.textContent) + ']' : n.textContent).join('') : null;
+    }, id);
+    const l0 = await sentence('line-p-maya-1-0');
+    expect(l0 === 'The 95% [Spelling to check: confidance. Show options.] interval for the average commute time is (18.4, 24.1) minutes.', 'twin line 0 reads the word inside the sentence: ' + l0);
+    const l4 = await sentence('line-p-maya-1-4');
+    expect(!!l4 && /^about 95% of those \[Word that could not be read\. Show options\.\] would capture the true \[Spelling to check: populaton\. Show options\.\] mean\.$/.test(l4), 'twin line 4 reads both words inside the sentence: ' + l4);
+    const asnap = await p7.locator('#controls').ariaSnapshot();
+    expect(/The 95%[\s\S]{0,40}button "Spelling to check: confidance[\s\S]{0,40}interval for the average/.test(asnap), 'accessibility tree keeps the sentence order around a flagged word');
+    // the tray's position is in the twin, between Previous and Next, and follows the step
+    await p7.evaluate(() => document.querySelector('#controls button[data-id^="word-p-maya-1-"]').click());
+    const trayCount = () => p7.evaluate(() => { const e = document.querySelector('#controls [data-id="tray-count"]'); return e ? e.textContent : null; });
+    expect(await wait7(async () => /^Word 1 of \d+$/.test((await trayCount()) || '')), 'tray position is exposed: ' + await trayCount());
+    const orderIds = await p7.evaluate(() => [...document.querySelectorAll('#controls > [data-id]')].map(e => e.dataset.id));
+    const ic = orderIds.indexOf('tray-count');
+    expect(ic > 0 && orderIds[ic - 1] === 'prev-word' && orderIds[ic + 1] === 'next-word', 'tray position reads between Previous and Next word');
+    await p7.evaluate(() => document.querySelector('#controls [data-id="next-word"]').click());
+    expect(await wait7(async () => /^Word 2 of \d+$/.test((await trayCount()) || '')), 'tray position follows the step: ' + await trayCount());
+    expect(/^Maya R\., student \d+ of \d+$/.test(await p7.evaluate(() => document.querySelector('#controls [data-id="student-pos"]')?.textContent || '')), 'header position is exposed');
     // js leaves the transcript where it is (the saved offset, here the top) when another page opens
     await p7.mouse.click(92, 200);
     await pump7(10);

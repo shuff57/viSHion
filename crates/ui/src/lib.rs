@@ -209,8 +209,35 @@ impl Ctl {
 
     fn push(&mut self, reg: Reg) {
         match &mut self.para {
-            Some(parts) => parts.push(Part::Control(reg)),
+            Some(parts) => {
+                // a slot reserved at layout time (`para_slot`) is filled in place, so the control sits in the
+                // sentence where the word is, not after it
+                let slot = parts.iter().position(|p| matches!(p, Part::Control(c) if c.id == reg.id));
+                match slot {
+                    Some(i) => parts[i] = Part::Control(reg),
+                    None => parts.push(Part::Control(reg)),
+                }
+            }
             None => self.nodes.push(Node::Control(reg)),
+        }
+    }
+
+    /// Reserve the place of a control in the paragraph being built: it is registered later (while painting),
+    /// but reads where the word stands in the line.
+    pub fn para_slot(&mut self, id: &str, label: &str, region: u8) {
+        if let Some(p) = &mut self.para {
+            p.push(Part::Control(Reg {
+                id: id.into(),
+                role: "button",
+                label: label.into(),
+                pressed: None,
+                value: None,
+                disabled: false,
+                region,
+                pos: (0, 0),
+                at: (0, 0),
+                size: (0, 0),
+            }));
         }
     }
 

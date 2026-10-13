@@ -659,10 +659,12 @@ fn header(ui: &mut Ui, cx: &mut Cx, s: &Session) {
             let (wr, _) = ui.allocate_exact_size(vec2(who_w, TARGET), Sense::hover());
             if pos.is_some() {
                 // 19.6 + 18.2 of text centred in the 44 high bar
-                let top = wr.top() + (TARGET - 37.8) / 2.0;
+                // (egui sets the glyphs about 2px higher in their row than the browser does: measured on the ink)
+                let top = wr.top() + (TARGET - 37.8) / 2.0 + 2.0;
                 let a = ui.painter().layout_no_wrap(who.clone(), theme::sans_semi(14.0), t.ink);
                 let c = pos2(wr.center().x - a.size().x / 2.0, top + (19.6 - a.size().y) / 2.0);
                 ui.painter().galley(c, a, t.ink);
+                cx.ctl.text("student-pos", &format!("{who}, student {} of {}", i + 1, n), HEADER, wr.min);
                 let b = ui.painter().layout_no_wrap(format!("{} of {}", i + 1, n), theme::sans(13.0), t.muted);
                 let c = pos2(wr.center().x - b.size().x / 2.0, top + 19.6 + (18.2 - b.size().y) / 2.0);
                 ui.painter().galley(c, b, t.muted);
@@ -1222,7 +1224,7 @@ fn review_panes(ctx: &egui::Context, cx: &mut Cx, s: &Session, narrow: bool) {
     } else {
         if s.split {
             let w = (ctx.screen_rect().width() * 0.5).round();
-            egui::SidePanel::left("scan").exact_width(w).resizable(false).frame(egui::Frame::none().fill(t.scanbg)).show(ctx, |ui| scan(ui, cx, s, false));
+            egui::SidePanel::left("scan").exact_width(w).resizable(false).show_separator_line(false).frame(egui::Frame::none().fill(t.scanbg)).show(ctx, |ui| scan(ui, cx, s, false));
         }
         let panel = egui::CentralPanel::default()
             .frame(egui::Frame::none().fill(t.surface).inner_margin(Margin { left: if s.split { 1.0 } else { 0.0 }, ..Margin::ZERO }))
@@ -1382,8 +1384,14 @@ fn scan(ui: &mut Ui, cx: &mut Cx, s: &Session, stacked: bool) {
         } else {
             title_ui(ui, cx);
             ui.add_space(4.0);
-            // the pane is narrower than the tools: they wrap inside it instead of leaving the screen
-            ui.horizontal_wrapped(|ui| tools(ui, cx));
+            // the pane is narrower than the tools: they stay on one row, as in the browser (flex, no wrap). The
+            // row starts at the pane's padding and uses the right padding too, so the last tool is not cut off
+            let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), TARGET), Sense::hover());
+            let shift = (tools_w - row.width() - 12.0).max(0.0);
+            let at = Rect::from_min_size(row.min - vec2(shift, 0.0), vec2(tools_w, TARGET));
+            // a child ui: the row must not widen the pane's content (it would shift everything under it)
+            let mut row_ui = ui.child_ui(at, Layout::left_to_right(Align::Center), None);
+            tools(&mut row_ui, cx);
         }
     });
     ui.painter().hline(head.response.rect.x_range(), head.response.rect.bottom() + 0.5, Stroke::new(1.0, t.scanline));
@@ -1430,14 +1438,17 @@ fn scan(ui: &mut Ui, cx: &mut Cx, s: &Session, stacked: bool) {
                 let np = rect.left_bottom() + vec2(4.0, -2.0 - num.size().y);
                 ui.painter().rect_filled(Rect::from_min_size(np - vec2(3.0, 0.0), num.size() + vec2(6.0, 0.0)), 3.0, t.paper);
                 ui.painter().galley(np, num, t.paper_ink);
-                let dc = rect.right_top() + vec2(-2.0, 2.0);
-                ui.painter().circle(dc, 6.0, dot_color(t, p), Stroke::new(2.0, t.scanhead));
                 if on {
                     ui.painter().rect_stroke(rect.expand(2.0), 3.0, Stroke::new(2.0, t.ink));
                 }
                 if s.multi.contains(id) {
                     ui.painter().rect_stroke(rect.expand(4.0), 4.0, Stroke::new(3.0, t.accent));
                 }
+                // `.dot`: 12px box, 2px border in the strip's colour, at -4px / -4px; it is positioned, so it
+                // paints above the thumbnail's outline and cuts a ring out of it
+                let dc = rect.right_top() + vec2(-2.0, 2.0);
+                ui.painter().circle_filled(dc, 6.0, t.scanhead);
+                ui.painter().circle_filled(dc, 4.0, dot_color(t, p));
                 if cx.ctl.reg(ui, &r, C::new(&format!("page-{id}"), &label, SCAN).pressed(on)) {
                     let m = ui.input(|i| i.modifiers);
                     cx.acts.push(Act::StripClick { id: id.clone(), multi: m.command || m.ctrl, shift: m.shift });
@@ -2118,6 +2129,8 @@ fn unit(ui: &mut Ui, cx: &mut Cx, s: &Session, p: &Page, line: &Line, items: &[w
                     theme::serif(px)
                 };
                 let color = if kind == Kind::Bad && !checked { t.bad } else { t.ink };
+                // the twin reads the word where it stands in the sentence
+                cx.ctl.para_slot(&format!("word-{}-{}", p.id(), key), &label, TEXT);
                 let g = ui.painter().layout_no_wrap(shown, font, color);
                 // `.w { padding: 0 4px }`; no gap after it: the following text carries its own space
                 it.push(flow::Item { w: g.size().x + 8.0, h: px * 1.35, trail: 0.0, brk: false });
@@ -2187,18 +2200,69 @@ fn unit(ui: &mut Ui, cx: &mut Cx, s: &Session, p: &Page, line: &Line, items: &[w
         ui.scroll_to_rect(rect, None);
     }
     if reading {
-        // `text-decoration: underline 3px accent; text-underline-offset: 7px` on every visual line
-        for l in &fl.lines {
+        // `text-decoration: underline 3px accent; text-underline-offset: 7px` on the line: the browser draws it
+        // under text only (space between words included, space hanging at a wrap not), never under a chip
+        // (inline-block) or a formula, so it breaks there
+        let under: Vec<bool> = atoms.iter().map(|a| matches!(a, Atom::Text { .. } | Atom::Emoji { .. })).collect();
+        for seg in underline_segments(&under, &it, &fl) {
+            let l = &fl.lines[seg.0];
             let y = origin.y + l.top + l.h / 2.0 + px * 0.35 + 7.0;
-            ui.painter().rect_filled(
-                Rect::from_min_max(pos2(origin.x + l.x0, y), pos2(origin.x + l.x1.max(l.x0 + 4.0), y + 3.0)),
-                1.0,
-                t.accent,
-            );
+            ui.painter().rect_filled(Rect::from_min_max(pos2(origin.x + seg.1, y), pos2(origin.x + seg.2.max(seg.1 + 1.0), y + 3.0)), 1.0, t.accent);
         }
     }
     cx.ctl.end_para(&id, TEXT, rect.min, true, reading);
     rect
+}
+
+/// Runs of the reading underline as (line, x0, x1): text and emoji atoms, with the space after them when
+/// something follows on the same line, merged while contiguous.
+fn underline_segments(under: &[bool], items: &[flow::Item], fl: &flow::Flow) -> Vec<(usize, f32, f32)> {
+    let mut out: Vec<(usize, f32, f32)> = vec![];
+    for (k, &u) in under.iter().enumerate() {
+        if !u {
+            continue;
+        }
+        let (pl, it) = (&fl.placed[k], &items[k]);
+        let more = fl.placed.get(k + 1).is_some_and(|n| n.line == pl.line);
+        let end = pl.x + it.w + if more { it.trail } else { 0.0 };
+        match out.last_mut() {
+            Some(last) if last.0 == pl.line && (pl.x - last.2).abs() < 0.5 => last.2 = end,
+            _ => out.push((pl.line, pl.x, end)),
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod underline_tests {
+    use super::*;
+
+    #[test]
+    fn breaks_at_chips_keeps_spaces_and_hangs_the_space_at_a_wrap() {
+        // "about 95% of those " [chip] " would capture the true " [chip] " mean." in a 330 wide column
+        let t = |w: f32, trail: f32| flow::Item { w, h: 28.0, trail, brk: true };
+        let chip = |w: f32| flow::Item { w, h: 30.0, trail: 0.0, brk: false };
+        let items = [t(100.0, 6.0), t(60.0, 6.0), chip(80.0), t(0.0, 6.0), t(120.0, 0.0), chip(70.0), t(0.0, 6.0), t(50.0, 0.0)];
+        let under = [true, true, false, true, true, false, true, true];
+        let fl = flow::layout(&items, 330.0, 37.4);
+        assert!(fl.lines.len() >= 2);
+        let segs = underline_segments(&under, &items, &fl);
+        // the first run covers both words and the space before the chip, and stops where the chip starts
+        assert_eq!(segs[0].0, 0);
+        assert!((segs[0].1 - 0.0).abs() < 0.01);
+        assert!((segs[0].2 - fl.placed[2].x).abs() < 0.01, "{segs:?} {:?}", fl.placed[2]);
+        // no run overlaps a chip
+        for (k, p) in fl.placed.iter().enumerate() {
+            if !under[k] {
+                for s in segs.iter().filter(|s| s.0 == p.line) {
+                    assert!(s.2 <= p.x + 0.01 || s.1 >= p.x + items[k].w - 0.01, "{s:?} under chip {k}");
+                }
+            }
+        }
+        // the last visual line's run ends at its text, not at a hanging space
+        let last = segs.last().unwrap();
+        assert!(last.2 <= fl.lines[last.0].x1 + 0.01);
+    }
 }
 
 fn click_line(ui: &mut Ui, cx: &mut Cx, id: &str, rect: Rect, index: usize) {
@@ -2384,6 +2448,8 @@ fn tray(ui: &mut Ui, cx: &mut Cx, s: &Session, entries: &[Entry]) {
                 let count = format!("{} of {}", idx + 1, n);
                 let cr = ui.allocate_response(vec2(56.0, TARGET), Sense::hover());
                 ui.painter().text(cr.rect.center(), egui::Align2::CENTER_CENTER, &count, theme::sans(13.0), t.muted);
+                // the position the sighted reader sees, read out between the two step buttons
+                cx.ctl.status("tray-count", &format!("Word {count}"), TRAY, cr.rect.min);
                 if widgets::icon_button(cx.ctl, ui, t, C::new("next-word", "Next word to check", TRAY), Icon::Right, false) {
                     cx.acts.push(Act::StepWord(1));
                 }

@@ -1434,3 +1434,66 @@ fn round4_phone_top_bar_is_as_tall_as_the_browsers() {
     let split = h.ctl("layout-split").unwrap().at.1;
     assert!((split - 132).abs() <= 1, "layout toggle at {split} (js 131.6)");
 }
+
+#[test]
+fn round5_flagged_words_read_in_place_inside_the_sentence() {
+    let h = H::new("m1");
+    for n in h.app.nodes() {
+        let Node::Para { id, parts, .. } = n else { continue };
+        if !id.starts_with("line-m1-") {
+            continue;
+        }
+        // text after a word starts where the word was, so no part sits next to another text part and the
+        // sentence has no hole where a word was cut out
+        let mut flat = String::new();
+        for p in parts {
+            match p {
+                Part::Text(t) => flat.push_str(t),
+                Part::Math(t) => flat.push_str(t),
+                Part::Control(c) => flat.push_str(&format!("[{}]", c.id)),
+            }
+        }
+        assert!(!flat.contains("  "), "double space in {id}: {flat:?}");
+        if let Some(ci) = parts.iter().position(|p| matches!(p, Part::Control(_))) {
+            // a word is never the first or last thing unless the line starts or ends with it
+            let before: String = parts[..ci].iter().filter_map(|p| if let Part::Text(t) = p { Some(t.as_str()) } else { None }).collect();
+            if id.ends_with("-0") {
+                assert!(before.starts_with("The 95% "), "{id}: {parts:?}");
+                assert!(matches!(&parts[ci + 1], Part::Text(t) if t.starts_with("interval") || t.starts_with(" interval")), "{parts:?}");
+            }
+        }
+    }
+}
+
+#[test]
+fn round5_tray_position_and_student_position_are_in_the_twin() {
+    let mut h = H::new("m1");
+    h.act(&h.word_id("c:0"));
+    let n = h.s().open_entry().map(|(_, _, n)| n).unwrap();
+    let t = h.node_text("tray-count").expect("tray count node");
+    assert_eq!(t, format!("Word 1 of {n}"));
+    let nodes = h.app.nodes();
+    let at = |id: &str| nodes.iter().position(|x| x.id() == id).unwrap();
+    // read between the previous and next buttons
+    assert!(at("tray-count") > at("prev-word") && at("tray-count") < at("next-word"));
+    h.act("next-word");
+    assert_eq!(h.node_text("tray-count").unwrap(), format!("Word 2 of {n}"));
+    assert!(h.node_text("student-pos").unwrap().contains(" of "), "student position");
+}
+
+#[test]
+fn round5_phone_page_pane_tools_stay_on_one_row_like_the_browser() {
+    let mut h = H::new("m1");
+    h.size = (390.0, 844.0);
+    h.frames(3);
+    let ids = ["zoom-out", "zoom-fit", "zoom-in", "boxes", "level", "rotate", "replace", "remove"];
+    let y = h.ctl("zoom-out").unwrap().at.1;
+    for id in ids {
+        let c = h.ctl(id).unwrap();
+        assert_eq!(c.at.1, y, "{id} dropped to another row");
+        assert!(c.at.0 >= 0 && c.at.0 + c.size.0 as i32 <= 390, "{id} off screen: {:?}", c.at);
+    }
+    // js: tools row 44, 4 padding + 1 border + 10 strip padding, then the first thumbnail
+    let thumb = h.ctl("page-m1").unwrap().at.1;
+    assert!((thumb - y - 59).abs() <= 1, "strip starts {} below the tools, js 59", thumb - y);
+}
