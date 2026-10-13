@@ -168,6 +168,8 @@ pub struct Ctl {
     /// (node id, words said before its text), see `say_node_after`.
     pub(crate) say_nodes: Vec<(&'static str, String)>,
     say_wait: Vec<(&'static str, String)>,
+    /// A heading that takes keyboard focus once the next screen has drawn it (the logo goes home).
+    pub(crate) focus_title: Option<&'static str>,
     /// Native: the egui widget that draws each twin control, so the accessibility tree reuses its node
     /// (activation from a screen reader is then a click on that widget).
     #[cfg(not(target_arch = "wasm32"))]
@@ -1483,6 +1485,12 @@ impl App {
             self.ctl.said.push((n, false));
         }
         self.announce_runs();
+        if let Some(id) = self.ctl.focus_title {
+            if text_of(&self.ctl.nodes, id).is_some() {
+                self.ctl.focus_title = None;
+                self.ctl.dom_focus = Some(id.to_string());
+            }
+        }
         self.ctl.say_wait = std::mem::take(&mut self.ctl.say_nodes);
         if !self.ctl.say_wait.is_empty() {
             self.ctx.request_repaint();

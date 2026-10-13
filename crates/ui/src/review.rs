@@ -425,7 +425,10 @@ fn apply(
         said_n += 1;
     };
     match a {
-        Act::Pick(p, k) => s.pick_word(&p, &k),
+        Act::Pick(p, k) => {
+            s.pick_word(&p, &k);
+            ctl.say(format!("Word panel opened. {}", s.next_word_phrase()));
+        }
         Act::SetSplit(v) => s.set_split(v),
         Act::Original(v) => s.original = v,
         Act::Student(d) => {
@@ -447,7 +450,14 @@ fn apply(
                 say(format!("Copied {}\u{2019}s text.", g.name), false);
             }
         }
-        Act::Boxes => s.boxes = s.boxes.next(),
+        Act::Boxes => {
+            s.boxes = s.boxes.next();
+            ctl.say(match s.boxes {
+                BoxMode::Off => "Marks on the page: off.",
+                BoxMode::Flagged => "Marks on the page: underlines.",
+                BoxMode::All => "Marks on the page: underlines and a box on every line.",
+            });
+        }
         Act::StripClick { id, multi, shift } => {
             if multi || shift {
                 s.multi_click(&id, shift);
@@ -622,7 +632,11 @@ fn apply(
             }
             pop_dialog(ctl, dialog, None);
         }
-        Act::Inbox => s.view = View::Inbox,
+        Act::Inbox => {
+            s.view = View::Inbox;
+            ctl.say_node("inbox-title");
+            ctl.focus_title = Some("inbox-title");
+        }
         Act::OpenReview(id) => {
             s.select(&id);
             s.view = View::Review;
@@ -720,7 +734,7 @@ fn apply(
                 dialog::Out::Theme(v) => {
                     s.settings.set("theme", serde_json::json!(v));
                     s.dirty.settings = true;
-                    ctl.say(format!("Theme: {v}."));
+                    ctl.say(format!("Theme: {}.", dialog::opt_label(dialog::THEMES, &v)));
                     // the dialog stays open so the change can be seen
                     return;
                 }

@@ -26,6 +26,7 @@ pub enum Role {
     CheckBox,
     Switch,
     TextInput,
+    PasswordInput,
     Image,
     Status,
     Alert,
@@ -87,6 +88,7 @@ fn rect_of(at: (i32, i32), size: (u16, u16)) -> Option<Rect> {
 
 fn control_node(r: &Reg) -> Tree {
     let (role, checked) = match (r.role, r.pressed) {
+        ("textbox", _) if r.id == "st-key" => (Role::PasswordInput, None),
         ("textbox", _) => (Role::TextInput, None),
         ("checkbox", p) => (Role::CheckBox, p),
         ("switch", p) => (Role::Switch, p),

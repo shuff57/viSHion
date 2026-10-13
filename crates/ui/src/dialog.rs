@@ -222,6 +222,16 @@ fn text_box(ctl: &mut Ctl, ui: &mut Ui, id: &'static str, name: &str, hint: &str
     }
 }
 
+const FMTS: &[(&str, &str)] = &[("docx", "Word (.docx)"), ("md", "Markdown (.md)"), ("txt", "Plain text (.txt)")];
+const SEPS: &[(&str, &str)] = &[("label", "A \u{201C}Page N\u{201D} line"), ("break", "A page break"), ("none", "Nothing")];
+const TXTS: &[(&str, &str)] = &[("corrected", "Corrected"), ("raw", "Original"), ("both", "Both")];
+pub const THEMES: &[(&str, &str)] = &[("auto", "Match my device"), ("light", "Light"), ("dark", "Dark")];
+
+/// What the button for `v` says: a setting is announced by the words on its button, not its stored value.
+pub fn opt_label(opts: &[(&str, &str)], v: &str) -> String {
+    opts.iter().find(|(k, _)| *k == v).map_or(v, |(_, l)| *l).to_string()
+}
+
 fn on_off(on: bool) -> &'static str {
     if on {
         "off"
@@ -246,7 +256,7 @@ fn settings(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, s: &Session, drafts: &mut st
             label(ctl, ui, t, "settings-theme-label", "Theme");
             let cur = get_s("theme", "auto");
             let cur = if cur == "light" || cur == "dark" { cur } else { "auto".to_string() };
-            if let Some(v) = choice(ctl, ui, t, "theme-", &cur, &[("auto", "Match my device"), ("light", "Light"), ("dark", "Dark")]) {
+            if let Some(v) = choice(ctl, ui, t, "theme-", &cur, THEMES) {
                 out = Some(Out::Theme(v));
             }
 
@@ -300,17 +310,17 @@ fn settings(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, s: &Session, drafts: &mut st
 
             section(ctl, ui, t, "set-export", "Export defaults");
             label(ctl, ui, t, "st-fmt-label", "Combined file");
-            if let Some(v) = choice(ctl, ui, t, "st-fmt-", &get_s("exportFormat", "md"), &[("docx", "Word (.docx)"), ("md", "Markdown (.md)"), ("txt", "Plain text (.txt)")]) {
-                out = Some(Out::Setting("exportFormat", json!(v), format!("Combined file: {v}.")));
+            if let Some(v) = choice(ctl, ui, t, "st-fmt-", &get_s("exportFormat", "md"), FMTS) {
+                out = Some(Out::Setting("exportFormat", json!(v), format!("Combined file: {}.", opt_label(FMTS, &v))));
             }
             // (not "st-sep-label": that is the id of the "A Page N line" choice; one id on two nodes gave it two parents)
             label(ctl, ui, t, "st-sep-title", "Between pages");
-            if let Some(v) = choice(ctl, ui, t, "st-sep-", &get_s("exportSeparator", "label"), &[("label", "A \u{201C}Page N\u{201D} line"), ("break", "A page break"), ("none", "Nothing")]) {
-                out = Some(Out::Setting("exportSeparator", json!(v), format!("Between pages: {v}.")));
+            if let Some(v) = choice(ctl, ui, t, "st-sep-", &get_s("exportSeparator", "label"), SEPS) {
+                out = Some(Out::Setting("exportSeparator", json!(v), format!("Between pages: {}.", opt_label(SEPS, &v))));
             }
             label(ctl, ui, t, "st-txt-label", "Text to export");
-            if let Some(v) = choice(ctl, ui, t, "st-txt-", &get_s("exportText", "corrected"), &[("corrected", "Corrected"), ("raw", "Original"), ("both", "Both")]) {
-                out = Some(Out::Setting("exportText", json!(v), format!("Text to export: {v}.")));
+            if let Some(v) = choice(ctl, ui, t, "st-txt-", &get_s("exportText", "corrected"), TXTS) {
+                out = Some(Out::Setting("exportText", json!(v), format!("Text to export: {}.", opt_label(TXTS, &v))));
             }
 
             section(ctl, ui, t, "set-storage", "Storage");

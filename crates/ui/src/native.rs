@@ -28,6 +28,7 @@ fn role(r: Role) -> AkRole {
         Role::CheckBox => AkRole::CheckBox,
         Role::Switch => AkRole::Switch,
         Role::TextInput => AkRole::TextInput,
+        Role::PasswordInput => AkRole::PasswordInput,
         Role::Image => AkRole::Image,
         Role::Status => AkRole::Status,
         Role::Alert => AkRole::Alert,

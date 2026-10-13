@@ -649,7 +649,7 @@ fn rect_of(at: (i32, i32), size: (u16, u16)) -> Option<(i32, i32, i32, i32)> {
 
 fn control(r: &Reg) -> Spec {
     let mut s = if r.role == "textbox" {
-        let mut s = Spec::new(&r.id, "input").attr("type", "text").attr("aria-label", r.label.clone()).attr("autocomplete", "off");
+        let mut s = Spec::new(&r.id, "input").attr("type", if r.id == "st-key" { "password" } else { "text" }).attr("aria-label", r.label.clone()).attr("autocomplete", "off");
         s.value = r.value.clone();
         // Enter in the twin textbox presses the control next to it
         if r.id == "typed-word" {
