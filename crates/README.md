@@ -32,11 +32,13 @@ cargo run -p vishion-app --bin vishion --release
 #   --size WxH             window size, e.g. 390x844 for the phone layout
 #   --inbox                open on the assignment overview (tabs, run bar, rows) instead of the review screen
 #   --page ID              open with that page selected (e.g. p-omar-1 in the demo)
-#   --dump-controls        print the control list (id, role, label, size) as JSON lines on close
+#   --no-tray              open with the word panel closed
+#   --dump-controls        print the control list (id, role, label, size, position) as JSON lines on close,
+#                          and the transcript lines' rects as `#line` lines
 
 # web build into crates/app/dist (index.html, wasm, JS glue, _headers with CSP + 'wasm-unsafe-eval' + hash).
 # Web URL options: ?demo=1 (sample assignment, nothing stored), ?project=<slug>, ?theme=light|dark,
-# ?view=inbox (assignment overview), ?page=<page id>
+# ?view=inbox (assignment overview), ?page=<page id>, ?tray=0 (word panel closed)
 cd crates/app/web
 npm ci
 node build.mjs            # add --debug for a debug wasm, --no-opt to skip wasm-opt

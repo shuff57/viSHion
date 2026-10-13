@@ -59,7 +59,7 @@ impl H {
 
     /// Wheel over the transcript pane by `dy` points (positive scrolls down), then settle.
     fn wheel(&mut self, dy: f32) {
-        self.events.push(egui::Event::PointerMoved(egui::pos2(900.0, 300.0)));
+        self.events.push(egui::Event::PointerMoved(egui::pos2(900.0, 110.0)));
         self.frames(1);
         self.events.push(egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: egui::vec2(0.0, -dy), modifiers: Default::default() });
         self.frames(30);
@@ -1156,25 +1156,20 @@ fn blind3_transcript_scroll_position_is_persisted_and_restored() {
 }
 
 /// Blind critic round 3, phone 390 x 844 in a real browser: the picture, the crop and the math font arrive
-/// after the word was selected and move the page; the word being decided must still be on screen, between
-/// the top bar and the tray (it was left scrolled off above the header).
+/// after the word was selected and move the page. js never scrolls to the word (the page opens at the top,
+/// on the page image), so the page pane stays under the top bar instead of being scrolled away.
 #[test]
-fn blind3_phone_word_stays_on_screen_while_pictures_arrive() {
+fn blind3_phone_page_stays_at_the_top_while_pictures_arrive() {
     let mut h = H::new("m1");
     h.size = (390.0, 844.0);
     h.frames(8);
-    let w = h.word_id("c:0");
-    // first the picture arrives (a tall page above the transcript), then the crop shows up in the tray
     h.with_picture();
     h.frames(12);
     h.app.host.as_ref().unwrap().1.push(Event::MathFont(vec![]));
     h.frames(12);
-    let hdr_bottom = h.app.controls().iter().filter(|c| c.region == crate::twin::HEADER).map(|c| c.at.1 + c.size.1 as i32).max().unwrap() + 9;
-    let tray_top = h.ctl("prev-word").expect("tray controls").at.1 - 12;
-    let word = h.ctl(&w).expect("word control").at.1;
-    let (top, bottom) = (word + 22 - 15, word + 22 + 15);
-    assert!(top >= hdr_bottom, "the word starts at {top}, under the {hdr_bottom}px top bar");
-    assert!(bottom <= tray_top, "the word ends at {bottom}, behind the tray that starts at {tray_top}");
+    let bar = h.app.controls().iter().filter(|c| c.region == crate::twin::HEADER).map(|c| c.at.1 + c.size.1 as i32).max().unwrap() + 9;
+    let tools = h.ctl("zoom-out").expect("page tools").at.1;
+    assert!(tools >= bar && tools < bar + 40, "page tools at {tools}, top bar ends {bar}");
 }
 
 /// Blind critic round 3: U+1F600 drew as a monochrome outline. The transcript shows emoji as colour pictures
@@ -1199,4 +1194,243 @@ fn blind3_emoji_are_drawn_in_colour_between_the_words() {
         })
         .collect();
     assert!(text.contains('\u{1F600}'), "{text:?}");
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Phase 4 round 4: transcript keyboard after a click, no transcript jumps, phone math wrap, metrics.
+// ---------------------------------------------------------------------------------------------------------
+
+impl H {
+    /// A real pointer click on the canvas at `p` (press, then release on the next frame).
+    fn click(&mut self, p: egui::Pos2) {
+        self.events.push(egui::Event::PointerMoved(p));
+        self.frames(1);
+        self.events.push(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() });
+        self.frames(1);
+        self.events.push(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() });
+        self.frames(3);
+    }
+
+    /// Top left of a transcript paragraph (`line-<page>-<n>`), in points.
+    fn line_pos(&self, id: &str) -> egui::Pos2 {
+        self.app
+            .nodes()
+            .iter()
+            .find_map(|n| match n {
+                Node::Para { id: i, pos, .. } if i == id => Some(egui::pos2(pos.1 as f32, pos.0 as f32 * 16.0)),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("no paragraph {id}"))
+    }
+
+    /// Stroked rectangles of width 2 in the last frame (focus rings), as rects.
+    fn rings(&self) -> Vec<egui::Rect> {
+        let mut v = vec![];
+        for cs in &self.out.shapes {
+            if let egui::epaint::Shape::Rect(r) = &cs.shape {
+                if r.stroke.width == 2.0 && r.fill == egui::Color32::TRANSPARENT {
+                    v.push(r.rect);
+                }
+            }
+        }
+        v
+    }
+}
+
+/// js: `txText` has tabindex 0, so a click on a line focuses the transcript. Arrow keys then move the underline
+/// (page image too), Escape clears it, and the focus ring shows once the keyboard is used.
+#[test]
+fn round4_click_on_a_line_then_arrows_and_escape_drive_the_underline() {
+    let mut h = H::new("m1");
+    h.with_picture();
+    h.act("tray-close");
+    h.frames(5);
+    let p = h.line_pos("line-m1-0");
+    h.click(p + egui::vec2(30.0, 12.0));
+    assert_eq!(h.s().read_line.get("m1"), Some(&0), "click underlines the line");
+    assert_eq!(h.app.ctl.focus.as_deref(), Some("transcript"), "the click focuses the transcript");
+    let wide = |h: &H| h.rings().iter().any(|r| r.width() > 300.0 && r.height() > 100.0);
+    assert!(!wide(&h), "a mouse click alone shows no focus ring (:focus-visible)");
+    h.twin_key("ArrowDown", false);
+    h.twin_key("ArrowDown", false);
+    assert_eq!(h.s().read_line.get("m1"), Some(&2));
+    h.frames(2);
+    assert!(wide(&h), "after a key the transcript shows its ring");
+    h.twin_key("ArrowUp", false);
+    assert_eq!(h.s().read_line.get("m1"), Some(&1));
+    h.twin_key("Escape", false);
+    assert_eq!(h.s().read_line.get("m1"), None, "Escape clears the underline");
+}
+
+/// js leaves `tx-pane.scrollTop` at 0 (or the saved offset) when a page opens or a word is accepted: the name,
+/// pill, legend and Corrected/Original stay in view.
+#[test]
+fn round4_selecting_a_page_or_accepting_a_word_does_not_scroll_the_transcript() {
+    let mut h = H::new("m1");
+    h.with_picture();
+    h.frames(10);
+    let at_open = blind_node_y(&h, "student-name").expect("name");
+    h.act("page-m2");
+    h.frames(20);
+    assert_eq!(blind_node_y(&h, "student-name"), Some(at_open), "opening page 2 moved the transcript");
+    h.act("alt-suggested");
+    h.frames(20);
+    assert_eq!(blind_node_y(&h, "student-name"), Some(at_open), "accepting a suggestion moved the transcript");
+    // and on a phone the page pane stays first
+    let mut h = H::new("m1");
+    h.size = (390.0, 844.0);
+    h.with_picture();
+    h.frames(20);
+    let bar = h.app.controls().iter().filter(|c| c.region == crate::twin::HEADER).map(|c| c.at.1 + c.size.1 as i32).max().unwrap() + 9;
+    let title = h.ctl("zoom-out").expect("page tools").at.1;
+    assert!(title >= bar && title < bar + 40, "the phone opened scrolled: page tools at {title}, top bar ends {bar}");
+}
+
+/// js: KaTeX wraps an inline formula after a binary operator or relation when it is wider than the column;
+/// the 390pt phone showed `9.2 / sqrt(40)` cut off at the right edge.
+#[test]
+fn round4_inline_math_wider_than_the_column_wraps_after_an_operator() {
+    let tex = r"$\bar{x} \pm 1.96 \cdot \frac{s}{\sqrt{n}} = 21.25 \pm 1.96 \cdot \frac{9.2}{\sqrt{40}}$";
+    let setup = |h: &mut H| {
+        let p = h.sess().a.pages.get_mut("m1").unwrap();
+        p.set("raw", serde_json::json!(format!("{tex}\nnext line\nthird")));
+        p.set("corrected", serde_json::json!(""));
+        p.set("corrections", serde_json::json!([]));
+        h.frames(6);
+    };
+    let pitch = |h: &H| h.line_pos("line-m1-1").y - h.line_pos("line-m1-0").y;
+    let mut wide = H::new("m1");
+    wide.size = (2200.0, 900.0);
+    wide.frames(3);
+    setup(&mut wide);
+    let one = pitch(&wide);
+    let mut phone = H::new("m1");
+    phone.size = (390.0, 844.0);
+    phone.frames(3);
+    setup(&mut phone);
+    let many = pitch(&phone);
+    assert!(many > one + 30.0, "one line {one}pt, phone {many}pt: the formula did not wrap");
+    // the picture of each piece stays inside the 390pt screen
+    let right = phone.out.shapes.iter().map(|s| s.shape.visual_bounding_rect().right()).fold(0.0f32, f32::max);
+    assert!(right <= 390.5, "something is painted at x = {right}");
+}
+
+/// A browser sets text with unrounded advances and the font's GPOS kerning; egui rounded every advance to a
+/// pixel and ignored GPOS, so labels came out up to 5% off and every button, chip and legend entry with them.
+/// The widths are what Chrome reported for the same strings (button width minus padding and border).
+#[test]
+fn round4_text_is_as_wide_as_the_browser_sets_it() {
+    let h = H::new("m1");
+    let w = |txt: &str, f: egui::FontId| h.ctx.fonts(|fo| fo.layout_no_wrap(txt.to_string(), f, egui::Color32::BLACK).size().x);
+    for (txt, f, js) in [
+        ("Copy text", theme::sans_semi(14.0), 64.2),
+        ("Done, next student", theme::sans_semi(14.0), 125.5),
+        ("Saved in this browser", theme::sans(14.0), 135.4),
+        ("Unit 5 written response", theme::sans_medium(14.0), 150.9),
+        ("Maya R.", theme::sans_semi(14.0), 50.4),
+        ("Text only", theme::sans_semi(14.0), 59.8),
+    ] {
+        let got = w(txt, f);
+        assert!((got - js).abs() < 0.6, "{txt:?} is {got}, the browser sets it {js}");
+    }
+}
+
+/// The transcript pane shows no scroll bar (the browser's headless Chrome shows none; egui's floating bar
+/// appeared on the right edge in the light theme once the pane was hovered or scrolled).
+#[test]
+fn round4_transcript_pane_draws_no_scroll_bar() {
+    let mut h = H::new("m1");
+    h.act("tray-close");
+    h.size = (1280.0, 400.0);
+    h.frames(3);
+    h.wheel(120.0);
+    h.frames(5);
+    let bars: Vec<_> = h
+        .out
+        .shapes
+        .iter()
+        .filter_map(|s| match &s.shape {
+            egui::epaint::Shape::Rect(r) if r.rect.width() <= 16.0 && r.rect.height() > 40.0 && r.rect.right() > 1230.0 && r.fill.a() > 0 => {
+                Some(r.rect)
+            }
+            _ => None,
+        })
+        .collect();
+    assert!(bars.is_empty(), "a scroll bar is painted: {bars:?}");
+}
+
+/// `.crop-img { border-radius: 6px; background: var(--paper); box-shadow: 0 1px 2px rgba(20,27,45,.25) }`
+/// and the field's placeholder is Chrome's grey (117), not full ink.
+#[test]
+fn round4_crop_has_a_shadow_and_the_placeholder_is_grey() {
+    let mut h = H::new("m1");
+    h.with_picture();
+    let w = h.word_id("c:0");
+    h.act(&w);
+    h.frames(6);
+    let rects: Vec<_> = h
+        .out
+        .shapes
+        .iter()
+        .filter_map(|s| match &s.shape {
+            egui::epaint::Shape::Rect(r) => Some((r.rect, r.fill, r.rounding)),
+            _ => None,
+        })
+        .collect();
+    let paper = crate::theme::LIGHT.paper;
+    let crop = rects.iter().find(|(r, f, _)| *f == paper && r.width() == 280.0).expect("crop background");
+    assert_eq!(crop.2.nw, 6.0, "crop corners are rounded by 6");
+    let shadow = rects.iter().find(|(r, f, _)| (f.a() == 60 || f.a() == 26) && (r.width() - 280.0).abs() < 3.0 && r.top() >= crop.0.top());
+    assert!(shadow.is_some(), "no drop shadow under the crop");
+    // the placeholder of the typed field: text galleys in the tray with the grey of `::placeholder`
+    let mut greys = 0;
+    for cs in &h.out.shapes {
+        if let egui::epaint::Shape::Text(t) = &cs.shape {
+            if t.galley.text() == "Type what it says" && t.override_text_color.is_none() {
+                let c = t.galley.job.sections[0].format.color;
+                if c == egui::Color32::from_rgb(117, 117, 117) {
+                    greys += 1;
+                }
+            }
+        }
+    }
+    assert_eq!(greys, 1, "placeholder is not the browser's grey");
+}
+
+/// Widths and heights Chrome reported for the same screen (js/ui at 1280 x 800 and 390 x 844, demo data).
+#[test]
+fn round4_metrics_match_the_browser() {
+    let mut h = H::new("m1");
+    h.act("tray-close");
+    h.frames(3);
+    let w = |id: &str| h.ctl(id).unwrap_or_else(|| panic!("no {id}")).size.0 as f32;
+    // the ghost buttons under the transcript are 13px text with 16px padding and a 1px border
+    assert!((w("text-view") - 128.0).abs() <= 1.0, "Show plain text is {} wide", w("text-view"));
+    assert!((w("transcribe-again") - 194.0).abs() <= 1.0, "Transcribe again is {} wide", w("transcribe-again"));
+    let (a, b) = (h.ctl("text-view").unwrap(), h.ctl("transcribe-again").unwrap());
+    let gap = b.at.0 - (a.at.0 + a.size.0 as i32);
+    assert!((gap - 16).abs() <= 1, "the buttons are {gap} apart, the row's gap is 16");
+    // header buttons
+    assert!((w("copy") - 98.0).abs() <= 1.0 && (w("done") - 160.0).abs() <= 1.0, "copy {} done {}", w("copy"), w("done"));
+    let (nav, who_next) = (h.ctl("prev-student").unwrap().at.0, h.ctl("next-student").unwrap().at.0);
+    assert_eq!(who_next - nav, 148, "previous and next are 4 + 96 + 4 + 44 apart");
+
+    // the tray's typed row: the field takes what "Use this" (52 + 34) leaves of the 559pt column
+    let mut h = H::new("m1");
+    h.frames(3);
+    assert!((h.ctl("use-typed").unwrap().size.0 as f32 - 86.0).abs() <= 1.0, "Use this is {}", h.ctl("use-typed").unwrap().size.0);
+    assert!((h.ctl("typed-word").unwrap().size.0 as f32 - 465.0).abs() <= 1.0, "field is {}", h.ctl("typed-word").unwrap().size.0);
+}
+
+/// js: the 390pt top bar is 236.6 high (save state is one 19.6 line, rows 8 apart).
+#[test]
+fn round4_phone_top_bar_is_as_tall_as_the_browsers() {
+    let mut h = H::new("m1");
+    h.size = (390.0, 844.0);
+    h.frames(5);
+    let bottom = h.app.controls().iter().filter(|c| c.region == crate::twin::HEADER).map(|c| c.at.1 + c.size.1 as i32).max().unwrap();
+    // js: Done and Settings end at 227.6, the bar's padding and border make 236.6
+    assert!((bottom - 228).abs() <= 1, "header controls end at {bottom}");
+    let split = h.ctl("layout-split").unwrap().at.1;
+    assert!((split - 132).abs() <= 1, "layout toggle at {split} (js 131.6)");
 }

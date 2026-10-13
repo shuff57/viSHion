@@ -28,3 +28,19 @@ default 1.0) instead of egui's fixed 0.55. At 0.55 dark text on the light theme 
 browser's rendering of the same face at the same size (the review screen's transcript is the compared
 surface), while light text on the dark theme wants a boost, so `ui::theme` sets the gamma per theme and sets
 the fonts again to rebuild the atlas. Wired in with `[patch.crates-io]`. Drop it when egui exposes the gamma.
+
+## epaint 0.28.1
+
+Copy of the crates.io release (src, README, `Cargo.toml`; the font files are only used by `default_fonts`, which
+the app does not enable) with two changes. `LayoutJob::default()` has `round_output_size_to_nearest_ui_point:
+false` (a galley is as wide as its text, not rounded to a whole point). And one line is removed in
+`src/text/text_layout.rs`: `layout_section` rounded the
+cursor to a whole pixel after every glyph, which makes each glyph advance an integer (a 14px face comes out up
+to 5% wider or narrower than a browser sets it, so buttons, chips and the header land a few pixels off the
+design). Advances now stay fractional and each glyph is still snapped to a pixel when the row is placed, so
+widths match the browser's. The size handed to the font is also not rounded when advances are computed (the glyph
+bitmaps still are), and `src/text/kern.rs` (new) reads GPOS pair kerning (`kern` feature, via `owned_ttf_parser`),
+which epaint ignores (it only reads the legacy `kern` table); the two Latin families only have GPOS kerning.
+Together the widths of Instrument Sans and Source Serif 4 strings are within 0.6 px of what Chrome reports
+(`app_tests::round4_text_is_as_wide_as_the_browser_sets_it`). Wired in with `[patch.crates-io]`. Drop it when
+egui exposes the setting.

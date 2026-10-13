@@ -56,6 +56,7 @@ mod web {
         let theme = get("theme").filter(|t| t == "light" || t == "dark");
         let inbox_first = get("view").is_some_and(|v| v == "inbox");
         let page = get("page");
+        let no_tray = get("tray").is_some_and(|v| v == "0");
 
         let now = || js_sys::Date::now() as i64;
         let backend: Rc<Backend> = Rc::new(if demo {
@@ -107,7 +108,7 @@ mod web {
                             inbox.push(e);
                         });
                     }
-                    let mut app = vishion_ui::App::new(cc.egui_ctx.clone()).with_host(dispatch, inbox).inbox(inbox_first);
+                    let mut app = vishion_ui::App::new(cc.egui_ctx.clone()).with_host(dispatch, inbox).inbox(inbox_first).no_tray(no_tray);
                     if let Some(t) = theme {
                         app = app.theme(&t);
                     }

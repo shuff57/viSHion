@@ -275,8 +275,12 @@ pub fn install(ctx: &egui::Context) {
     style.spacing.interact_size.y = 44.0;
     style.spacing.button_padding = egui::vec2(14.0, 6.0);
     // overlay scrollbars that are not drawn at rest (the page pane has none until it is scrolled or hovered)
+    // (also not while the pointer is over the pane or the pane is scrolling: the app's panes show no scroll bar,
+    // wheel and touch scroll them; the bar appears only under the pointer, so it can still be dragged)
     style.spacing.scroll.dormant_handle_opacity = 0.0;
     style.spacing.scroll.dormant_background_opacity = 0.0;
+    style.spacing.scroll.active_handle_opacity = 0.0;
+    style.spacing.scroll.active_background_opacity = 0.0;
     style.spacing.item_spacing = egui::vec2(8.0, 8.0);
     style.text_styles.insert(egui::TextStyle::Body, sans(14.0));
     style.text_styles.insert(egui::TextStyle::Button, sans_semi(14.0));

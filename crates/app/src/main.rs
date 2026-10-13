@@ -19,13 +19,13 @@ fn main() -> eframe::Result<()> {
 
     let mut root: Option<PathBuf> = None;
     let (mut project, mut demo, mut theme) = (None::<String>, false, None::<String>);
-    let mut inbox = false;
+    let (mut inbox, mut no_tray) = (false, false);
     let mut page_id = None::<String>;
     let mut seed_to: Option<PathBuf> = None;
     let (mut exit_after, mut shot, mut dump) = (None, None::<PathBuf>, false);
     let mut size = (1280.0f32, 800.0f32);
     let mut args = std::env::args().skip(1);
-    let usage = "usage: vishion [--root DIR] [--project SLUG] [--demo] [--seed-demo-to DIR] [--theme light|dark] [--size WxH] [--inbox] [--page ID] [--exit-after-ms N] [--screenshot FILE.png] [--dump-controls]";
+    let usage = "usage: vishion [--root DIR] [--project SLUG] [--demo] [--seed-demo-to DIR] [--theme light|dark] [--size WxH] [--inbox] [--no-tray] [--page ID] [--exit-after-ms N] [--screenshot FILE.png] [--dump-controls]";
     let need = |a: Option<String>, flag: &str| -> String {
         a.unwrap_or_else(|| {
             eprintln!("{flag} needs a value\n{usage}");
@@ -58,6 +58,7 @@ fn main() -> eframe::Result<()> {
             "--screenshot" => shot = Some(PathBuf::from(need(args.next(), &a))),
             "--demo" => demo = true,
             "--inbox" => inbox = true,
+            "--no-tray" => no_tray = true,
             "--page" => page_id = Some(need(args.next(), &a)),
             "--seed-demo-to" => seed_to = Some(PathBuf::from(need(args.next(), &a))),
             "--dump-controls" => dump = true,
@@ -114,7 +115,7 @@ fn main() -> eframe::Result<()> {
             let dispatch: vishion_ui::Dispatch = Box::new(move |c| {
                 let _ = tx.send(c);
             });
-            let mut app = vishion_ui::App::new(cc.egui_ctx.clone()).with_host(dispatch, inbox_box).inbox(inbox);
+            let mut app = vishion_ui::App::new(cc.egui_ctx.clone()).with_host(dispatch, inbox_box).inbox(inbox).no_tray(no_tray);
             if let Some(t) = &theme {
                 app = app.theme(t);
             }

@@ -98,6 +98,11 @@ pub struct Ctl {
     /// A dialog was open at the end of the last frame, and where focus goes back to when it closes.
     pub(crate) dialog_was: bool,
     pub(crate) restore_focus: Option<String>,
+    /// The last input was the keyboard, so a focused non-text region shows its ring (`:focus-visible`: a mouse
+    /// click on the transcript focuses it without a ring; the first arrow key brings the ring up).
+    pub(crate) kbd: bool,
+    /// Rects of this frame's transcript lines (`--dump-controls` prints them, to compare with the DOM).
+    pub(crate) lines: Vec<(String, egui::Rect)>,
 }
 
 /// What a control is, for the twin.
@@ -139,10 +144,11 @@ impl Ctl {
             self.dom_focus = Some(id.to_string());
         }
         if self.focus.as_deref() == Some(id) || r.has_focus() {
-            match ring {
-                Some((rect, radius)) => ui.painter().rect_stroke(rect, radius, Stroke::new(2.0, self.ring)),
-                None => ui.painter().rect_stroke(r.rect.expand(2.0), 6.0, Stroke::new(2.0, self.ring)),
-            };
+            let visible = self.kbd || id != "transcript";
+            if visible {
+                let (rect, radius) = ring.unwrap_or((r.rect.expand(2.0), 6.0));
+                ui.painter().rect_stroke(rect, radius, Stroke::new(2.0, self.ring));
+            }
             self.focused = Some((id.to_string(), region));
         }
     }
@@ -198,7 +204,7 @@ impl Ctl {
         // one pixel left of its content, so it sorts just before the first paragraph it governs
         let pos = twin::pos_of(r.rect.min - egui::vec2(1.0, 0.0));
         self.nodes.push(Node::Group { id: id.into(), label: label.into(), keys, region, pos });
-        self.track_focus(ui, r, id, region, None);
+        self.track_focus(ui, r, id, region, Some((r.rect.expand(3.0), 0.0)));
     }
 
     fn push(&mut self, reg: Reg) {
@@ -272,6 +278,7 @@ impl Ctl {
                     None => (rest, false),
                 };
                 self.keys.push(KeyEv { key: key.into(), alt });
+                self.kbd = true;
             } else if let Some(rest) = m.strip_prefix("text:") {
                 if let Some((id, v)) = rest.split_once('\u{1}') {
                     self.typed.insert(id.into(), v.into());
@@ -351,6 +358,8 @@ pub struct App {
     start_inbox: bool,
     /// Select this page when the assignment opens (`--page`, `?page=`).
     start_page: Option<String>,
+    /// Open with the word panel closed (`--no-tray`, `?tray=0`), as after its Close button.
+    start_no_tray: bool,
     dark_applied: Option<bool>,
     exit_after: Option<Duration>,
     #[cfg(not(target_arch = "wasm32"))]
@@ -406,6 +415,7 @@ impl App {
             theme_override: None,
             start_inbox: false,
             start_page: None,
+            start_no_tray: false,
             dark_applied: None,
             exit_after: None,
             #[cfg(not(target_arch = "wasm32"))]
@@ -432,6 +442,12 @@ impl App {
     /// Open with this page selected.
     pub fn page(mut self, id: &str) -> Self {
         self.start_page = Some(id.to_string());
+        self
+    }
+
+    /// Open with the word panel closed.
+    pub fn no_tray(mut self, on: bool) -> Self {
+        self.start_no_tray = on;
         self
     }
 
@@ -533,6 +549,9 @@ impl App {
                     }
                     if self.start_inbox {
                         sess.view = state::View::Inbox;
+                    }
+                    if self.start_no_tray {
+                        sess.tray_open = false;
                     }
                     self.session = Some(sess);
                     self.boot = Boot::Ready;
@@ -849,10 +868,14 @@ impl eframe::App for App {
 impl App {
     /// One frame: twin and host input, the screen, the twin output, saves, image requests, exit rules.
     fn step(&mut self, ctx: &egui::Context, system_dark: bool) {
+        if ctx.input(|i| i.pointer.any_pressed()) {
+            self.ctl.kbd = false;
+        }
         self.ctl.drain(&self.queue);
         self.collect_egui_keys(ctx);
         self.handle_events();
         self.ctl.focused = None;
+        self.ctl.lines.clear();
         self.ui_frame(ctx, system_dark);
         // an activation or typed text whose control was not on screen this frame is dropped, not kept; what a
         // control has queued beyond the one it took this frame waits for the next frame
@@ -935,6 +958,7 @@ impl App {
                     _ => continue,
                 };
                 self.ctl.keys.push(KeyEv { key: name.into(), alt: modifiers.alt });
+                self.ctl.kbd = true;
             }
         }
     }
@@ -970,8 +994,11 @@ impl App {
             return;
         }
         if self.dump_controls {
+            for (id, r) in &self.ctl.lines {
+                println!("#line {}", serde_json::json!({"id": id, "at": [r.min.x, r.min.y], "size": [r.width(), r.height()]}));
+            }
             for c in self.controls() {
-                println!("{}", serde_json::json!({"id": c.id, "role": c.role, "label": c.label, "pressed": c.pressed, "size": [c.size.0, c.size.1]}));
+                println!("{}", serde_json::json!({"id": c.id, "role": c.role, "label": c.label, "pressed": c.pressed, "size": [c.size.0, c.size.1], "at": [c.at.0, c.at.1]}));
             }
         }
         ctx.send_viewport_cmd(egui::ViewportCommand::Close);

@@ -32,6 +32,8 @@ egui = { version = "0.28", default-features = false }
 eframe = { path = "crates/vendor/eframe" }
 # Font atlas gamma (text weight), one line, see crates/vendor/PATCHES.md.
 egui_glow = { path = "crates/vendor/egui_glow" }
+# Text advances are not rounded to whole pixels (one line), see crates/vendor/PATCHES.md.
+epaint = { path = "crates/vendor/epaint" }
 # latex-rust 2.1.1 with `egui` built without default_fonts (wasm size, plan risk "wasm size").
 latex-rust = { path = "crates/vendor/latex-rust" }
 

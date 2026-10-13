@@ -2,12 +2,14 @@
 //! lists per (tex, display, size, colour). A layout error is not an error for the screen: the source is
 //! shown in red monospace, exactly as `render.js` does with `<code class="math-fb">`.
 use egui::{Color32, Pos2, Shape, Vec2};
-use latex_rust::{latex_to_shapes, Color, Dim, EguiOptions, MathFont};
+use latex_rust::{Color, Dim, EguiOptions, MathFont};
 use std::collections::HashMap;
 
 pub struct Rendered {
     shapes: Vec<Shape>,
     pub size: Vec2,
+    /// Distance from the top of `size` to the baseline, so pieces of one formula can share a baseline.
+    pub ascent: f32,
 }
 
 impl Rendered {
@@ -83,7 +85,11 @@ impl MathCache {
                 o.font_size_pt = Dim::from_i64(key.px as i64);
                 o.color = Color::rgb(color.r(), color.g(), color.b());
                 o.display = display;
-                latex_to_shapes(tex, f, &o, Pos2::ZERO, 1.0).ok().map(|(shapes, rect)| Rendered { shapes, size: rect.size() })
+                let ast = latex_rust::parse(tex).ok()?;
+                let style = if display { latex_rust::MathStyle::Display } else { latex_rust::MathStyle::Text };
+                let tree = latex_rust::layout_with_em_size_pt(&ast, f, style, &o.font_size_pt).ok()?;
+                let ascent = tree.height.to_dec_string().parse::<f32>().unwrap_or(0.0) * key.px as f32;
+                latex_rust::shapes(&tree, f, &o, Pos2::ZERO, 1.0).ok().map(|(shapes, rect)| Rendered { shapes, size: rect.size(), ascent })
             });
             if r.is_none() && font.is_some() {
                 self.failed.push(tex.into());
@@ -112,6 +118,146 @@ impl MathCache {
     }
 }
 
+
+/// Binary operators and relations KaTeX may break a line after (`buildHTML` puts an allowed break after an
+/// `mbin` or `mrel` at the top level of an inline formula).
+const BREAK_AFTER: &[&str] = &[
+    "pm", "mp", "cdot", "times", "div", "ast", "star", "circ", "bullet", "cap", "cup", "wedge", "vee", "oplus", "ominus", "otimes",
+    "setminus", "le", "leq", "ge", "geq", "ne", "neq", "approx", "sim", "simeq", "cong", "equiv", "propto", "in", "ni", "notin",
+    "subset", "supset", "subseteq", "supseteq", "to", "rightarrow", "leftarrow", "Rightarrow", "Leftarrow", "Longrightarrow",
+    "longrightarrow", "mapsto", "leftrightarrow", "Leftrightarrow", "iff", "implies", "perp", "parallel", "mid", "ll", "gg", "prec",
+    "succ",
+];
+
+/// Split an inline formula where a browser could wrap it (css `.katex`: breaks only between top-level atoms,
+/// after a binary operator or relation, never inside a group, fraction or `\left ... \right`). Every piece but
+/// the last ends with `{}` so the operator keeps the space TeX sets around it when the pieces share a line.
+/// A formula with no such place comes back whole.
+pub fn split_breaks(tex: &str) -> Vec<String> {
+    #[derive(PartialEq, Clone, Copy)]
+    enum Prev {
+        Start,
+        Ord,
+        Open,
+        Op,
+    }
+    if tex.contains("\\begin") || tex.contains("\\\\") {
+        return vec![tex.to_string()];
+    }
+    let b = tex.as_bytes();
+    let mut cuts: Vec<usize> = vec![];
+    let (mut depth, mut i, mut prev) = (0i32, 0usize, Prev::Start);
+    // after `\left` / `\right` / `^` / `_` the next token belongs to the atom before it
+    let mut skip_token = false;
+    while i < b.len() {
+        let c = b[i] as char;
+        let token_end;
+        let mut op = false;
+        let mut open = false;
+        if c == '\\' {
+            let mut j = i + 1;
+            if j < b.len() && (b[j] as char).is_ascii_alphabetic() {
+                while j < b.len() && (b[j] as char).is_ascii_alphabetic() {
+                    j += 1;
+                }
+            } else if j < b.len() {
+                j += tex[j..].chars().next().map_or(1, |c| c.len_utf8());
+            }
+            token_end = j;
+            let name = &tex[i + 1..j];
+            match name {
+                "left" | "right" => {
+                    if name == "left" {
+                        depth += 1;
+                    } else {
+                        depth -= 1;
+                    }
+                    skip_token = true;
+                    i = j;
+                    continue;
+                }
+                " " | "," | ";" | ":" | "!" | "quad" | "qquad" => {
+                    i = j;
+                    continue;
+                }
+                "{" => open = true,
+                _ => op = BREAK_AFTER.contains(&name),
+            }
+        } else if c.is_whitespace() {
+            i += 1;
+            continue;
+        } else if c == '{' {
+            // a whole group is one atom
+            let mut d = 0;
+            let mut j = i;
+            while j < b.len() {
+                match b[j] {
+                    b'\\' => j += 1,
+                    b'{' => d += 1,
+                    b'}' => {
+                        d -= 1;
+                        if d == 0 {
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+                j += 1;
+            }
+            i = (j + 1).min(b.len());
+            if skip_token {
+                skip_token = false;
+            } else {
+                prev = Prev::Ord;
+            }
+            continue;
+        } else {
+            token_end = i + tex[i..].chars().next().map_or(1, |c| c.len_utf8());
+            match c {
+                '+' | '-' | '=' | '<' | '>' => op = true,
+                '(' | '[' | ',' | ';' => open = true,
+                '^' | '_' => {
+                    skip_token = true;
+                    i = token_end;
+                    continue;
+                }
+                _ => {}
+            }
+        }
+        if skip_token {
+            skip_token = false;
+            i = token_end;
+            continue;
+        }
+        if depth == 0 && op && matches!(prev, Prev::Ord) {
+            cuts.push(token_end);
+            prev = Prev::Op;
+        } else if open || (op && depth == 0) {
+            prev = Prev::Open;
+        } else if op {
+            // inside \left..\right: not a place to break
+        } else {
+            prev = Prev::Ord;
+        }
+        i = token_end;
+    }
+    // a break at the very end is no break
+    while cuts.last().is_some_and(|&e| tex[e..].trim().is_empty()) {
+        cuts.pop();
+    }
+    if cuts.is_empty() {
+        return vec![tex.to_string()];
+    }
+    let mut out = vec![];
+    let mut at = 0;
+    for e in cuts {
+        out.push(format!("{}{{}}", tex[at..e].trim()));
+        at = e;
+    }
+    out.push(tex[at..].trim().to_string());
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -124,6 +270,34 @@ mod tests {
         // known gap from S7: \pmod is unsupported, the caller shows the source
         assert!(c.get("a \\pmod{n}", false, 22.0, Color32::BLACK).is_none());
         assert_eq!(c.failed, vec!["a \\pmod{n}".to_string()]);
+    }
+
+    #[test]
+    fn breaks_come_after_binary_operators_and_relations_at_the_top_level() {
+        let one = |s: &str| split_breaks(s);
+        assert_eq!(one("a + b"), vec!["a +{}", "b"]);
+        assert_eq!(one("-x + 1"), vec!["-x +{}", "1"]);
+        assert_eq!(one("\\frac{a+b}{c}"), vec!["\\frac{a+b}{c}"]);
+        assert_eq!(one("x^{2+1}"), vec!["x^{2+1}"]);
+        assert_eq!(one("x^- + 1").len(), 2);
+        assert_eq!(one("\\left(a+b\\right) = c"), vec!["\\left(a+b\\right) ={}", "c"]);
+        assert_eq!(one("\\bar{x} \\pm 1.96 \\cdot \\frac{s}{\\sqrt{n}} = 21.25").len(), 4);
+        assert_eq!(one("a ="), vec!["a ="]);
+        assert_eq!(one("x"), vec!["x"]);
+    }
+
+    /// The pieces put back together are as wide as the formula whole: the empty group keeps the space the
+    /// operator has in TeX, so a formula that fits on a line looks the same split or not.
+    #[test]
+    fn pieces_are_as_wide_as_the_whole() {
+        let mut c = MathCache::new();
+        for tex in ["a + b", "\\bar{x} \\pm 1.96 \\cdot \\frac{s}{\\sqrt{n}} = 21.25 \\pm 1.96", "x \\le y - 3"] {
+            let whole = c.get(tex, false, 26.0, Color32::BLACK).unwrap().size.x;
+            let parts = split_breaks(tex);
+            assert!(parts.len() > 1);
+            let sum: f32 = parts.iter().map(|p| c.get(p, false, 26.0, Color32::BLACK).unwrap_or_else(|| panic!("{p}")).size.x).sum();
+            assert!((whole - sum).abs() < 1.0, "{tex}: whole {whole}, pieces {sum}");
+        }
     }
 
     /// The web path: the font arrives as bytes (fetched), and typesetting is identical to the embedded one.

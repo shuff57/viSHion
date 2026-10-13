@@ -313,6 +313,45 @@ try {
     await ctx4.close();
   }
 
+  // ---- transcript by mouse then keyboard, and no scroll jumps (fresh demo, tray closed with ?tray=0)
+  {
+    const ctx7 = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+    const p7 = await ctx7.newPage();
+    const reqs7 = [];
+    p7.on('request', r => reqs7.push(r.url()));
+    await p7.addInitScript(track);
+    await p7.goto(base + '/?demo=1&theme=light&tray=0', { waitUntil: 'load' });
+    await settled(p7);
+    const pump7 = async (n = 4) => { for (let i = 0; i < n; i++) { await p7.mouse.move(300 + i, 600 + i); await p7.waitForTimeout(70); } };
+    await pump7(8);
+    await p7.waitForSelector('#controls [data-id="done"]', { timeout: 20000 });
+    for (let i = 0; i < 40 && !reqs7.some(u => u.endsWith('/stix-two-math.otf')); i++) await pump7(2);
+    await pump7(12);
+    const reading7 = () => p7.evaluate(() => { const e = document.querySelector('#controls p[data-reading]'); return e ? e.dataset.id : null; });
+    const wait7 = async (fn, ms = 6000) => { const t0 = Date.now(); while (Date.now() - t0 < ms) { if (await fn()) return true; await pump7(2); } return false; };
+    const clipOf = async () => (await p7.screenshot({ clip: { x: 660, y: 130, width: 600, height: 150 } })).toString('base64');
+    const top0 = await clipOf();
+    // js: txText is tabindex=0, a click focuses it, and the arrows and Escape then drive the underline
+    await p7.mouse.click(700, 425);
+    expect(await wait7(async () => /-0$/.test((await reading7()) || '')), 'a click on a transcript line underlines it: ' + await reading7());
+    expect((await p7.evaluate(() => document.activeElement && document.activeElement.getAttribute('data-id'))) === 'transcript', 'and focuses the transcript');
+    await p7.keyboard.press('ArrowDown');
+    await p7.keyboard.press('ArrowDown');
+    expect(await wait7(async () => /-2$/.test((await reading7()) || '')), 'ArrowDown twice moves the underline to the third line: ' + await reading7());
+    await p7.keyboard.press('ArrowUp');
+    expect(await wait7(async () => /-1$/.test((await reading7()) || '')), 'ArrowUp moves it back one line');
+    await p7.keyboard.press('Escape');
+    expect(await wait7(async () => (await reading7()) === null), 'Escape clears the underline');
+    // js leaves the transcript where it is (the saved offset, here the top) when another page opens
+    await p7.mouse.click(92, 200);
+    await pump7(10);
+    await p7.waitForTimeout(400);
+    expect((await clipOf()) === top0, 'opening page 2 does not scroll the transcript (name, status and legend stay put)');
+    await p7.screenshot({ path: path.join(here, '../dist/check-click-line.png') });
+    expect((await p7.evaluate(() => window.__violations)).length === 0, 'zero CSP violations');
+    await ctx7.close();
+  }
+
   // ---- the assignment overview: tabs with counts, the run bar, and Retry reading a page in demo mode
   {
     const ctx6 = await browser.newContext({ viewport: { width: 1280, height: 800 } });
@@ -450,7 +489,7 @@ try {
     // the transcript pane's scroll position is written into project.json (meta.ui.scroll / scrollId), as review.js does
     await p3.setViewportSize({ width: 1280, height: 520 });
     await empty();
-    await p3.mouse.move(900, 250);
+    await p3.mouse.move(900, 120); // over the transcript (the tray fills the lower part of a 520pt window)
     await p3.mouse.wheel(0, 240);
     const readMeta = () => p3.evaluate(async () => {
       const db = await new Promise((res, rej) => { const r = indexedDB.open('ocr_fs', 1); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });

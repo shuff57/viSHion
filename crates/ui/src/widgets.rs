@@ -5,6 +5,8 @@ use crate::{Ctl, C};
 use egui::{pos2, vec2, Color32, Rect, Response, Sense, Shape, Stroke, Ui};
 
 pub const TARGET: f32 = 44.0;
+/// `.btn { padding: 0 16px; border: 1px solid }`: what a text button adds to its label's width.
+pub const BTN_PAD: f32 = 34.0;
 
 /// Where a text of `size` goes to be centred in `rect`, on a whole pixel. A 14px label centred in a 44 high
 /// control lands exactly on a half pixel (22 - 17 / 2), where floating point noise in the layout above decides
@@ -46,7 +48,7 @@ fn paint_look(ui: &Ui, r: &Response, t: &Tokens, look: Look, on: bool, disabled:
 
 /// A text button. `min_w` keeps related buttons aligned; the height is always 44.
 pub fn button(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, c: C, text: &str, look: Look, min_w: f32) -> bool {
-    button_pad(ctl, ui, t, c, text, look, min_w, 36.0)
+    button_pad(ctl, ui, t, c, text, look, min_w, BTN_PAD)
 }
 
 /// `button` with its own horizontal padding in total (the zoom label has 6 on each side, buttons 16 + border).
@@ -60,6 +62,19 @@ pub fn button_pad(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, c: C, text: &str, look
     let w = (g.size().x + pad).max(min_w);
     let sense = if c.disabled { Sense::hover() } else { Sense::click() };
     let r = ui.allocate_response(vec2(w, TARGET), sense);
+    paint_button(ui, &r, t, &c, g, look);
+    ctl.reg(ui, &r, c)
+}
+
+/// A text button whose label is `size` px (buttons inherit the font size of what holds them: `.tx-foot` is 13).
+pub fn button_sized(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, c: C, text: &str, look: Look, size: f32) -> bool {
+    let fg = match look {
+        Look::Primary => t.on_ink,
+        _ => if c.disabled { t.faint } else { t.ink },
+    };
+    let g = ui.painter().layout_no_wrap(text.to_string(), theme::sans_semi(size), fg);
+    let sense = if c.disabled { Sense::hover() } else { Sense::click() };
+    let r = ui.allocate_response(vec2(g.size().x + BTN_PAD, TARGET), sense);
     paint_button(ui, &r, t, &c, g, look);
     ctl.reg(ui, &r, c)
 }
@@ -82,7 +97,7 @@ pub fn button_at(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, c: C, text: &str, look:
         _ => if c.disabled { t.faint } else { t.ink },
     };
     let g = ui.painter().layout_no_wrap(text.to_string(), theme::sans_semi(14.0), fg);
-    let rect = Rect::from_min_size(at, vec2(g.size().x + 36.0, TARGET));
+    let rect = Rect::from_min_size(at, vec2(g.size().x + BTN_PAD, TARGET));
     let sense = if c.disabled { Sense::hover() } else { Sense::click() };
     let r = ui.interact(rect, ui.id().with(("button-at", c.id)), sense);
     paint_button(ui, &r, t, &c, g, look);
@@ -174,12 +189,13 @@ pub fn paint_icon(ui: &Ui, rect: Rect, icon: Icon, color: Color32) {
 pub fn icon_text_button(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, c: C, icon: Icon, text: &str, look: Look) -> bool {
     let fg = if c.disabled { t.faint } else { t.ink };
     let g = ui.painter().layout_no_wrap(text.to_string(), theme::sans_semi(14.0), fg);
-    let w = g.size().x + 20.0 + 8.0 + 28.0;
+    // `.btn`: 1px border and 16px padding each side, a 20px icon and a gap of 8
+    let w = g.size().x + BTN_PAD + 20.0 + 8.0;
     let sense = if c.disabled { Sense::hover() } else { Sense::click() };
     let r = ui.allocate_response(vec2(w, TARGET), sense);
     paint_look(ui, &r, t, look, false, c.disabled);
-    paint_icon(ui, Rect::from_center_size(pos2(r.rect.left() + 14.0 + 10.0, r.rect.center().y), vec2(20.0, 20.0)), icon, fg);
-    ui.painter().galley(pos2(r.rect.left() + 14.0 + 28.0, r.rect.center().y - g.size().y / 2.0), g, fg);
+    paint_icon(ui, Rect::from_center_size(pos2(r.rect.left() + 17.0 + 10.0, r.rect.center().y), vec2(20.0, 20.0)), icon, fg);
+    ui.painter().galley(pos2(r.rect.left() + 17.0 + 28.0, r.rect.center().y - g.size().y / 2.0), g, fg);
     let disabled = c.disabled;
     ctl.reg(ui, &r, c) && !disabled
 }
@@ -195,11 +211,12 @@ pub fn crumb(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, c: C, name: &str, max_w: f3
         shown = chars.iter().collect::<String>() + "\u{2026}";
         g = ui.painter().layout_no_wrap(shown.clone(), font.clone(), t.ink);
     }
-    let w = (g.size().x + 20.0 + 6.0 + 24.0).max(TARGET);
+    // `.crumb { gap: 6px; padding: 0 }`: a 20px arrow, 6, then the name
+    let w = (g.size().x + 20.0 + 6.0).max(TARGET);
     let r = ui.allocate_response(vec2(w, TARGET), Sense::click());
     let col = if r.hovered() { t.accent } else { t.ink };
-    paint_icon(ui, Rect::from_center_size(pos2(r.rect.left() + 12.0 + 10.0, r.rect.center().y), vec2(20.0, 20.0)), Icon::Left, col);
-    ui.painter().galley(pos2(r.rect.left() + 12.0 + 26.0, r.rect.center().y - g.size().y / 2.0), g, col);
+    paint_icon(ui, Rect::from_center_size(pos2(r.rect.left() + 10.0, r.rect.center().y), vec2(20.0, 20.0)), Icon::Left, col);
+    ui.painter().galley(pos2(r.rect.left() + 26.0, r.rect.center().y - g.size().y / 2.0), g, col);
     ctl.reg(ui, &r, c)
 }
 
