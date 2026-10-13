@@ -1378,7 +1378,7 @@ mod tests {
         assert!(tex_speech(r"\triangle ABC \cong \triangle DEF").contains("congruent"));
         assert!(tex_speech(r"\mathbb{R}^n").contains("real numbers"));
         assert_eq!(tex_speech(r"\|\vec{v}\|"), "norm of vector v end norm");
-        assert!(!tex_speech(r"\textcolor{red}{x^2}").contains("red"));
+        assert!(!tex_speech(r"\textcolor{blue}{x^2}").contains("blue"));
         assert!(tex_speech(r"f: \mathbb{R} \to \mathbb{R}").contains("real numbers to real numbers"));
         assert!(tex_speech(r"\mathbb{Z}^+").contains("positive integers"));
     }
