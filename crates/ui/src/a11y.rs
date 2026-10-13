@@ -22,6 +22,25 @@ pub fn group_of(id: &str) -> Option<(&'static str, &'static str, &'static str)> 
     }
 }
 
+/// Why a control is unavailable, where the JS app says so in a `title` (js/ui/review.js: the `Which text to
+/// show` group when both versions read the same). A dimmed button with no reason is a puzzle to someone who
+/// cannot see the page; the web twin gives it as `aria-description`, the native tree in the name.
+pub fn disabled_reason(id: &str) -> Option<&'static str> {
+    match id {
+        "ver-original" => Some("Nothing has been corrected on this page yet, so the original and corrected text are the same."),
+        _ => None,
+    }
+}
+
+/// The description of a group of controls (the reason one of its members is unavailable).
+pub fn group_description(key: &str, members: &[&Node]) -> Option<&'static str> {
+    let off = |id: &str| members.iter().any(|n| matches!(n, Node::Control(r) if r.id == id && r.disabled));
+    match key {
+        "version" if off("ver-original") => disabled_reason("ver-original"),
+        _ => None,
+    }
+}
+
 /// The landmark a region of the screen becomes: (role, accessible name). `None`: a plain container.
 /// The page image and the transcript are the two sections of `<main>`, as in index.html of the JS app.
 pub fn landmark(region: u8, nodes: &[&Node]) -> Option<(&'static str, String)> {

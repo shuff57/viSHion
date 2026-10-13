@@ -162,7 +162,17 @@ pub(crate) fn show(app: &mut App, ctx: &egui::Context, t: &Tokens) {
     let screen = ctx.screen_rect();
     // a page zoomed to 400% or a phone on its side is a few hundred points high: stacked panes, and a header
     // that scrolls away with the page, as the document does in a browser
-    let short = screen.height() < 300.0;
+    // The same when the wrapped header is taller than the half of the screen it is allowed in a panel of its
+    // own (a phone at 400%: five rows, the last of them Settings): it would be clipped in its scroll area, and
+    // a control the person cannot see is a control they cannot use (WCAG 1.4.10). Measured on the last frame,
+    // with a margin so that the two layouts do not flip each other.
+    let half = screen.height() * 0.5;
+    let tall_header = if ctl.header_inline { ctl.header_h > half * 0.9 } else { ctl.header_h > half };
+    let short = screen.height() < 300.0 || tall_header;
+    if ctl.header_inline != short {
+        ctl.header_inline = short;
+        ctx.request_repaint();
+    }
     let narrow = screen.width() < NARROW || short;
     match (&*boot, session.as_ref()) {
         (Boot::Ready, Some(s)) => {
@@ -199,7 +209,7 @@ pub(crate) fn show(app: &mut App, ctx: &egui::Context, t: &Tokens) {
                         // scroll area is given its cap here and shrinks to what the header needs)
                         let cap = screen.height() * 0.5;
                         ui.allocate_ui(vec2(ui.available_width(), cap), |ui| {
-                            egui::ScrollArea::vertical()
+                            let out = egui::ScrollArea::vertical()
                                 .id_source("hdr-scroll")
                                 .max_height(cap)
                                 .min_scrolled_height(0.0)
@@ -209,6 +219,7 @@ pub(crate) fn show(app: &mut App, ctx: &egui::Context, t: &Tokens) {
                                     header(ui, &mut cx, s);
                                     cx.ctl.flush_scroll(ui, &[HEADER]);
                                 });
+                            cx.ctl.header_h = out.content_size.y;
                         });
                     });
                 let hr = hdr.response.rect;
@@ -346,9 +357,11 @@ fn apply(
     send: &dyn Fn(Cmd),
 ) {
     let slug = s.slug.clone();
+    let mut said_n = 0u64;
     let mut say = |m: String, err: bool| {
         *status = Some(m);
         *status_err = err;
+        said_n += 1;
     };
     match a {
         Act::Pick(p, k) => s.pick_word(&p, &k),
@@ -599,6 +612,7 @@ fn apply(
             *dialog = None;
         }
     }
+    ctl.toast_serial += said_n;
 }
 
 // ------------------------------------------------------------------ header
@@ -617,6 +631,7 @@ fn header_inline(ui: &mut Ui, cx: &mut Cx, s: &Session) {
         })
         .response
         .rect;
+    cx.ctl.header_h = r.height() - 17.0;
     ui.painter().hline(r.x_range(), r.bottom() - 0.5, Stroke::new(1.0, t.line));
 }
 

@@ -111,6 +111,13 @@ pub struct Ctl {
     /// Which regions sit inside a scroll area this frame (`ui.scroll_to_rect` outside one would leak to the
     /// next scroll area drawn). Set by the screen, indexed by region.
     pub(crate) scrolls: [bool; 5],
+    /// Height of the header's content on the last frame and whether it was laid out inside the page (it is
+    /// when it is too tall for a panel of its own): see `review::show`.
+    pub(crate) header_h: f32,
+    pub(crate) header_inline: bool,
+    /// Counts every time a line is put on the toast, so the same words said again (Copy text twice) are
+    /// spoken again: the live region only reads what changed, and the JS toast adds a new node each time.
+    pub(crate) toast_serial: u64,
     /// Height of a sticky tray that covers the bottom of the page this frame: focus is scrolled clear of it.
     pub(crate) tray_cover: f32,
     pending_scroll: Option<(u8, egui::Rect)>,
@@ -493,6 +500,12 @@ pub struct App {
     status_msg: Option<String>,
     /// What the live region was last given (the toast, the save state), so a change is spoken once.
     last_toast: Option<String>,
+    last_toast_serial: u64,
+    /// The control that had focus at the end of the last frame (native Tab), and the Tab presses waiting for
+    /// the next frame (`true`: with Shift).
+    prev_focus: Option<String>,
+    #[cfg(not(target_arch = "wasm32"))]
+    tab_queue: Vec<bool>,
     last_save: Option<String>,
     said_log: Vec<String>,
     /// The last utterance and how many there were (native: the live region of the accessibility tree).
@@ -577,6 +590,10 @@ impl App {
             typed_for: None,
             status_msg: None,
             last_toast: None,
+            last_toast_serial: 0,
+            prev_focus: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            tab_queue: vec![],
             last_save: None,
             said_log: vec![],
             #[cfg(not(target_arch = "wasm32"))]
@@ -779,6 +796,7 @@ impl App {
                 Event::Notice { text, error } => {
                     if !text.is_empty() {
                         self.status_msg = Some(text);
+                        self.ctl.toast_serial += 1;
                         self.status_err = error;
                     }
                 }
@@ -790,6 +808,7 @@ impl App {
                     let slot = decode_image(&self.ctx, &id, &bytes).map_or(Slot::Missing, Slot::Ready);
                     self.images.insert(id, slot);
                     self.status_msg = Some("Page replaced. Transcribe it again from this screen.".into());
+                    self.ctl.toast_serial += 1;
                     self.status_err = false;
                 }
                 Event::PagesAdded { pages } => {
@@ -812,6 +831,7 @@ impl App {
                     }
                     if n > 0 {
                         self.status_msg = Some(format!("Added {}.", state::plural(n, "page", "pages")));
+                        self.ctl.toast_serial += 1;
                         self.status_err = false;
                     }
                 }
@@ -836,6 +856,7 @@ impl App {
                         "The page was already level.".to_string()
                     };
                     self.status_msg = Some(msg);
+                    self.ctl.toast_serial += 1;
                     self.status_err = false;
                 }
                 Event::Transcribed { id, outcome } => {
@@ -852,6 +873,7 @@ impl App {
                         }
                         Unreachable(m) => {
                             self.status_msg = Some(m);
+                            self.ctl.toast_serial += 1;
                             self.status_err = true;
                         }
                         Failed(m) => {
@@ -869,6 +891,7 @@ impl App {
                     }
                     Err(m) => {
                         self.status_msg = Some(m);
+                        self.ctl.toast_serial += 1;
                         self.status_err = true;
                     }
                 },
@@ -1066,6 +1089,11 @@ impl eframe::App for App {
         let system_dark = frame.info().system_theme.map_or(false, |t| t == eframe::Theme::Dark);
         self.step(ctx, system_dark);
     }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn raw_input_hook(&mut self, _ctx: &egui::Context, raw: &mut egui::RawInput) {
+        self.filter_tab(raw);
+    }
 }
 
 impl App {
@@ -1075,13 +1103,21 @@ impl App {
         web::fit_scale(ctx);
         if ctx.input(|i| i.pointer.any_pressed()) {
             self.ctl.kbd = false;
+            // (native: focus the mouse gave is egui's; the twin's own record of it is only for Tab)
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                self.ctl.focus = None;
+            }
         }
         self.ctl.drain(&self.queue);
         self.collect_egui_keys(ctx);
         self.handle_events();
+        #[cfg(not(target_arch = "wasm32"))]
+        self.run_tabs();
         self.ctl.focused = None;
         self.ctl.lines.clear();
         self.ui_frame(ctx, system_dark);
+        self.prev_focus = self.ctl.focused.as_ref().map(|f| f.0.clone());
         // an activation or typed text whose control was not on screen this frame is dropped, not kept; what a
         // control has queued beyond the one it took this frame waits for the next frame
         let consumed = std::mem::take(&mut self.ctl.consumed);
@@ -1174,12 +1210,13 @@ impl App {
             self.ctx.request_repaint();
         }
         let toast = text_of(&self.ctl.nodes, "toast").map(String::from);
-        if toast != self.last_toast {
+        if toast != self.last_toast || (toast.is_some() && self.ctl.toast_serial != self.last_toast_serial) {
             if let Some(t) = &toast {
                 self.ctl.said.push((t.clone(), self.status_err));
             }
             self.last_toast = toast;
         }
+        self.last_toast_serial = self.ctl.toast_serial;
         let save = text_of(&self.ctl.nodes, "save-state").map(String::from);
         if save != self.last_save {
             match (&self.last_save, &save) {
@@ -1271,6 +1308,35 @@ impl App {
 
 #[cfg(not(target_arch = "wasm32"))]
 impl App {
+    /// Tab is the screen's, not egui's: the keys are taken out of the input before egui sees them (it would
+    /// walk its widgets in drawing order) and `step` moves focus along the twin's reading order instead.
+    fn filter_tab(&mut self, raw: &mut egui::RawInput) {
+        let mut tabs = vec![];
+        raw.events.retain(|e| match e {
+            egui::Event::Key { key: egui::Key::Tab, pressed, modifiers, .. } if !modifiers.ctrl && !modifiers.alt && !modifiers.command => {
+                if *pressed {
+                    tabs.push(modifiers.shift);
+                }
+                false
+            }
+            _ => true,
+        });
+        self.tab_queue.extend(tabs);
+    }
+
+    /// Carry out the Tab presses of this frame: the next stop of the twin's reading order gets focus.
+    fn run_tabs(&mut self) {
+        let mut cur = self.prev_focus.clone();
+        for back in std::mem::take(&mut self.tab_queue) {
+            if let Some(next) = twin::next_stop(&self.last_nodes, cur.as_deref(), back) {
+                self.ctl.focus = None;
+                self.ctl.want_focus = Some(next.clone());
+                self.ctl.kbd = true;
+                cur = Some(next);
+            }
+        }
+    }
+
     fn native_exit(&mut self, ctx: &egui::Context, t: f64) {
         if let Some((path, settle)) = self.screenshot.clone() {
             let shot = ctx.input(|i| {

@@ -40,6 +40,12 @@ try {
     Check ($named -contains 'Maya R.' -or ($named | Where-Object { $_ -like 'Maya R.*' })) 'the student heading is there'
     Check (($named | Where-Object { $_ -like 'The 95%*' }).Count -ge 1) 'the transcript text is readable'
     Check (($named | Where-Object { $_ -like 'Spelling to check*' }).Count -ge 1) 'flagged words are named buttons'
+    # UI Automation as AccessKit implements it has no landmark type or heading level property: the words are in
+    # the name ("Maya R., heading level 1", "banner landmark"), which Narrator and NVDA read on arriving
+    Check (($named | Where-Object { $_ -eq 'banner landmark' }).Count -ge 1) 'the banner landmark is named'
+    Check (($named | Where-Object { $_ -eq 'main landmark' }).Count -ge 1) 'the main landmark is named'
+    Check (($named | Where-Object { $_ -eq 'Word panel, complementary landmark' }).Count -ge 1) 'the word panel landmark is named'
+    Check (($named | Where-Object { $_ -match '^Maya R\., heading level 1$' }).Count -ge 1) 'the student heading says its level'
     Check ($unnamedCustom -lt 10) "almost no unnamed custom nodes ($unnamedCustom)"
     # press Zoom in through UI Automation: the Fit button's name carries the zoom level
     $zin = $all | Where-Object { $_.Current.Name -eq 'Zoom in' -and $_.Current.ControlType.ProgrammaticName -eq 'ControlType.Button' } | Select-Object -First 1

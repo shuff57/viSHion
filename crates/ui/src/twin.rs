@@ -104,3 +104,45 @@ pub fn controls(nodes: &[Node]) -> Vec<&Reg> {
 pub fn pos_of(min: egui::Pos2) -> (i32, i32) {
     (min.y as i32 / 16, min.x as i32)
 }
+
+/// What Tab visits, in reading order: every enabled control (those inline in a paragraph included) and the
+/// focusable key regions. The web gets this from the DOM; the native window has to be told, because egui
+/// would walk widgets in the order they were drawn (a panel docked at the bottom is drawn before the page
+/// that surrounds it) and stop on its own scroll areas and splitters, which have no name.
+pub fn tab_stops(nodes: &[Node]) -> Vec<&str> {
+    let mut out = vec![];
+    for n in nodes {
+        match n {
+            Node::Control(c) if !c.disabled => out.push(c.id.as_str()),
+            Node::Group { id, .. } => out.push(id.as_str()),
+            Node::Para { parts, .. } => {
+                for p in parts {
+                    if let Part::Control(c) = p {
+                        if !c.disabled {
+                            out.push(c.id.as_str());
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// The stop after (or, `back`, before) `current`, wrapping round at the ends. With no current stop, or one
+/// the screen no longer has, forward goes to the first and back to the last.
+pub fn next_stop(nodes: &[Node], current: Option<&str>, back: bool) -> Option<String> {
+    let stops = tab_stops(nodes);
+    if stops.is_empty() {
+        return None;
+    }
+    let at = current.and_then(|c| stops.iter().position(|s| *s == c));
+    let i = match (at, back) {
+        (Some(i), false) => (i + 1) % stops.len(),
+        (Some(i), true) => (i + stops.len() - 1) % stops.len(),
+        (None, false) => 0,
+        (None, true) => stops.len() - 1,
+    };
+    Some(stops[i].to_string())
+}

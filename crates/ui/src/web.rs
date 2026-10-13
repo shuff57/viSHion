@@ -301,6 +301,7 @@ fn control(r: &Reg) -> Spec {
         s.attrs.push(("aria-pressed", state));
     }
     s.attrs.push(("disabled", if r.disabled { Some(String::new()) } else { None }));
+    s.attrs.push(("aria-description", if r.disabled { a11y::disabled_reason(&r.id).map(String::from) } else { None }));
     if r.size.0 > 0 && r.size.1 > 0 {
         s.rect = Some((r.at.0, r.at.1, r.size.0 as i32, r.size.1 as i32));
     }
@@ -393,7 +394,12 @@ fn region_specs(nodes: &[&Node]) -> Vec<Spec> {
             } else {
                 Spec::new(&format!("grp-{key}"), "div").attr("role", role)
             };
-            open = Some((key, g.attr("aria-label", label).kids(vec![])));
+            let mut g = g.attr("aria-label", label).kids(vec![]);
+            // the same words as the JS group's `title`, read when the group is entered
+            if let Some(d) = a11y::group_description(key, nodes) {
+                g = g.attr("aria-description", d).attr("title", d);
+            }
+            open = Some((key, g));
         }
         let item = spec_of(n);
         if let Some((_, g)) = open.as_mut() {

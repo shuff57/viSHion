@@ -42,6 +42,8 @@ pub struct Tree {
     pub level: Option<u8>,
     pub checked: Option<bool>,
     pub disabled: bool,
+    /// Why it is unavailable, or what a group is for (`a11y::disabled_reason`).
+    pub description: Option<String>,
     /// Rectangle in points (x0, y0, x1, y1), where known; a container's is the union of its children's.
     pub at: Option<(i32, i32, i32, i32)>,
     pub children: Vec<Tree>,
@@ -49,7 +51,7 @@ pub struct Tree {
 
 impl Tree {
     fn new(key: impl Into<String>, role: Role, name: impl Into<String>) -> Tree {
-        Tree { key: key.into(), role, name: name.into(), value: None, level: None, checked: None, disabled: false, at: None, children: vec![] }
+        Tree { key: key.into(), role, name: name.into(), value: None, level: None, checked: None, disabled: false, description: None, at: None, children: vec![] }
     }
 
     /// First node (depth first) with this key.
@@ -94,6 +96,9 @@ fn control_node(r: &Reg) -> Tree {
     let mut t = Tree::new(&r.id, role, &r.label);
     t.checked = checked;
     t.disabled = r.disabled;
+    if r.disabled {
+        t.description = crate::a11y::disabled_reason(&r.id).map(String::from);
+    }
     if r.role == "textbox" {
         t.value = Some(r.value.clone().unwrap_or_default());
     }
@@ -190,7 +195,9 @@ pub fn of(nodes: &[Node]) -> Vec<Tree> {
                     kids.push(g);
                 }
                 let r = if role == "list" { Role::List } else { Role::Group };
-                open = Some((key, Tree::new(format!("grp-{key}"), r, label)));
+                let mut g = Tree::new(format!("grp-{key}"), r, label);
+                g.description = crate::a11y::group_description(key, list).map(String::from);
+                open = Some((key, g));
             }
             let item = node_of(n);
             if let Some((_, g)) = open.as_mut() {

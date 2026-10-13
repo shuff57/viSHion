@@ -34,6 +34,30 @@ fn role(r: Role) -> AkRole {
     }
 }
 
+/// The name a node is given. UI Automation as AccessKit implements it (accesskit_windows 0.15) carries a
+/// control type and a name but not the landmark type or the heading level, so there Narrator and NVDA read a
+/// banner, a main and a heading as a bare group or text. The words are put in the name instead, as a web page
+/// does with `aria-label`: "Maya R., heading level 1", "Word panel, complementary landmark". Other platforms
+/// get the role and level natively and the name stays what it is.
+pub fn platform_name(t: &Tree, uia: bool) -> String {
+    if !uia {
+        return t.name.clone();
+    }
+    let with = |name: &str, kind: String| if name.is_empty() { kind } else { format!("{name}, {kind}") };
+    // no description property either: the reason a control is unavailable is said with its name
+    if let (Some(d), false) = (&t.description, matches!(t.role, Role::Group | Role::List)) {
+        return format!("{}, unavailable: {d}", t.name);
+    }
+    match t.role {
+        Role::Heading => with(&t.name, format!("heading level {}", t.level.unwrap_or(2))),
+        Role::Banner => with(&t.name, "banner landmark".into()),
+        Role::Main => with(&t.name, "main landmark".into()),
+        Role::Complementary => with(&t.name, "complementary landmark".into()),
+        Role::Region => with(&t.name, "region landmark".into()),
+        _ => t.name.clone(),
+    }
+}
+
 fn id_of(key: &str, widgets: &HashMap<String, Id>) -> Id {
     widgets.get(key).copied().unwrap_or_else(|| Id::new(("twin", key)))
 }
@@ -43,8 +67,12 @@ fn write(ctx: &egui::Context, t: &Tree, widgets: &HashMap<String, Id>, used: &mu
     let id = id_of(&t.key, widgets);
     ctx.accesskit_node_builder(id, |b: &mut NodeBuilder| {
         b.set_role(role(t.role));
-        if !t.name.is_empty() {
-            b.set_name(t.name.clone());
+        let name = platform_name(t, cfg!(windows) && !cfg!(test));
+        if !name.is_empty() {
+            b.set_name(name);
+        }
+        if let Some(d) = &t.description {
+            b.set_description(d.clone());
         }
         if let Some(v) = &t.value {
             b.set_value(v.clone());
@@ -116,4 +144,37 @@ pub fn publish(ctx: &egui::Context, tree: &[Tree], widgets: &HashMap<String, Id>
         b.set_name(title.to_string());
         b.set_children(top);
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::twin::Node;
+
+    /// Narrator and NVDA get the landmark and the heading level in the name on Windows, and nothing is changed
+    /// elsewhere or for ordinary controls.
+    #[test]
+    fn uia_names_carry_landmarks_and_heading_levels() {
+        let nodes = vec![Node::Heading { id: "student-name".into(), level: 1, text: "Maya R.".into(), region: 2, pos: (0, 0) }];
+        let t = crate::tree::of(&nodes);
+        let h = t[0].find("student-name").unwrap();
+        assert_eq!(platform_name(h, true), "Maya R., heading level 1");
+        assert_eq!(platform_name(h, false), "Maya R.");
+        let banner = crate::tree::Tree::find(&t[0], "student-name").map(|_| ()).is_some();
+        assert!(banner);
+        for (role, want) in [(Role::Banner, "banner landmark"), (Role::Main, "main landmark")] {
+            let mut tr = h.clone();
+            tr.role = role;
+            tr.name = String::new();
+            assert_eq!(platform_name(&tr, true), want);
+        }
+        let mut tray = h.clone();
+        tray.role = Role::Complementary;
+        tray.name = "Word panel".into();
+        assert_eq!(platform_name(&tray, true), "Word panel, complementary landmark");
+        let mut b = h.clone();
+        b.role = Role::Button;
+        b.name = "Zoom in".into();
+        assert_eq!(platform_name(&b, true), "Zoom in");
+    }
 }

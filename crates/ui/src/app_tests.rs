@@ -44,6 +44,7 @@ impl H {
             };
             input.events.append(&mut self.events);
             let app = &mut self.app;
+            app.filter_tab(&mut input);
             self.out = self.ctx.run(input, |c| app.step(c, false));
             if !self.out.platform_output.copied_text.is_empty() {
                 self.copied = self.out.platform_output.copied_text.clone();
@@ -1912,4 +1913,95 @@ fn spoken_math_says_which_part_belongs_to_which() {
     // truncated environments do not panic
     let _ = t(r"\begin{pmatrix} a & b \\");
     let _ = t(r"\begin{");
+}
+
+// ---- phase 4 a11y twin, round 4
+
+fn tab_key(shift: bool) -> egui::Event {
+    egui::Event::Key {
+        key: egui::Key::Tab,
+        physical_key: Some(egui::Key::Tab),
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers { shift, ..Default::default() },
+    }
+}
+
+/// Native Tab walks the twin's reading order (header, tools, page, transcript, then the word panel), not the
+/// order egui drew the widgets in (the docked panel first), and never stops on an unnamed egui widget.
+#[test]
+fn native_tab_follows_reading_order_and_visits_only_named_stops() {
+    let mut h = H::new("m1");
+    let w = h.word_id("i:0");
+    h.act(&w);
+    let stops: Vec<String> = twin::tab_stops(h.app.nodes()).into_iter().map(String::from).collect();
+    let iw = stops.iter().position(|s| s.starts_with("word-")).expect("a flagged word");
+    let it = stops.iter().position(|s| s == "typed-word").expect("the panel's text box");
+    assert!(iw < it, "the transcript comes before the word panel: {iw} {it}");
+    h.app.prev_focus = None;
+    let mut walked = vec![];
+    for _ in 0..stops.len() {
+        h.events.push(tab_key(false));
+        h.frames(2);
+        walked.push(h.app.prev_focus.clone().unwrap_or_default());
+    }
+    assert_eq!(walked, stops, "Tab visits each stop once, in reading order");
+    // Shift+Tab goes back one
+    h.events.push(tab_key(true));
+    h.frames(2);
+    assert_eq!(h.app.prev_focus.as_deref(), Some(stops[stops.len() - 2].as_str()));
+    // every stop has a name
+    let named: std::collections::HashSet<&str> = twin::controls(h.app.nodes()).iter().filter(|c| !c.label.is_empty()).map(|c| c.id.as_str()).collect();
+    for s in &stops {
+        let group = h.app.nodes().iter().any(|n| matches!(n, Node::Group { id, label, .. } if id == s && !label.is_empty()));
+        assert!(named.contains(s.as_str()) || group, "unnamed stop {s}");
+    }
+}
+
+/// The same words twice are two announcements: a live region only reads what changed, so the toast carries a
+/// serial (the JS toast adds a node every time).
+#[test]
+fn repeating_an_action_announces_it_again() {
+    let mut h = H::new("m1");
+    let n = |h: &H| h.app.said_log.iter().filter(|s| s.starts_with("Copied")).count();
+    h.act("copy");
+    h.frames(3);
+    assert_eq!(n(&h), 1, "{:?}", h.app.said_log);
+    h.act("copy");
+    h.frames(3);
+    assert_eq!(n(&h), 2, "{:?}", h.app.said_log);
+}
+
+/// At 400% on a phone the wrapped header is taller than half the screen: it moves into the page rather than
+/// being clipped in a panel (Settings was drawn under the page pane, WCAG 1.4.10). A desktop keeps its panel.
+#[test]
+fn tall_wrapped_header_is_not_clipped() {
+    let mut h = H::new("m1");
+    h.size = (320.0, 420.0);
+    h.frames(6);
+    assert!(h.app.ctl.header_inline, "header height {}", h.app.ctl.header_h);
+    let g = h.ctl("settings").expect("settings");
+    assert!(g.at.1 >= 0 && g.at.1 + g.size.1 as i32 <= 420, "Settings at {:?} is on the screen", g.at);
+    let b = h.ctl("brand").expect("brand");
+    assert!(b.at.1 < g.at.1, "the header reads top to bottom");
+    h.size = (1280.0, 800.0);
+    h.frames(6);
+    assert!(!h.app.ctl.header_inline);
+}
+
+/// js puts a `title` on the "Which text to show" group while nothing has been corrected: the twin gives the
+/// group and the dimmed button the same reason, and the native tree says it in the button's name.
+#[test]
+fn disabled_original_toggle_says_why() {
+    let h = H::new("m1");
+    let c = h.ctl("ver-original").expect("original toggle").clone();
+    assert!(c.disabled, "nothing is corrected in the fixture");
+    let why = a11y::disabled_reason("ver-original").unwrap();
+    assert!(why.starts_with("Nothing has been corrected"));
+    let t = crate::tree::of(h.app.nodes());
+    let g = t.iter().find_map(|n| n.find("grp-version")).expect("version group");
+    assert_eq!(g.description.as_deref(), Some(why));
+    let b = g.find("ver-original").unwrap();
+    assert_eq!(b.description.as_deref(), Some(why));
+    assert!(native::platform_name(b, true).contains("Original, unavailable: Nothing has been corrected"));
 }

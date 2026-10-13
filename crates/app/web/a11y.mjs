@@ -239,6 +239,7 @@ try {
     expect(/^.+ \| viSHion$/.test(await page.title()), 'document title names the assignment: ' + JSON.stringify(await page.title()));
     // a typed fix leaves the text box empty in the twin as it is on the canvas (the box keeps focus)
     const val = () => page.evaluate(() => document.querySelector('#controls [data-id="typed-word"]')?.value ?? null);
+    const pageBefore = await page.evaluate(() => document.querySelector('#controls [data-id^="page-"][aria-pressed="true"]')?.dataset.id);
     await page.evaluate(() => document.querySelector('#controls [data-id="word-p-maya-1-i:0"]').focus());
     await page.keyboard.press('Enter');
     expect(await a.wait(async () => await a.has('typed-word')), 'the illegible word opens its text box');
@@ -248,7 +249,11 @@ try {
     await page.keyboard.press('Enter');
     expect(await a.wait(async () => (await val()) === ''), 'after the typed word is used the box is empty, not stale: ' + JSON.stringify(await val()));
     expect(await a.wait(async () => /Used .mean.\./.test((await a.announced())[0])), 'the typed decision is announced: ' + JSON.stringify(await a.announced()));
-    expect(/Now on page 2 of 2/.test((await a.announced())[0]), 'a decision that moves to the other page says so: ' + JSON.stringify(await a.announced()));
+    // the page is named exactly when the decision carried the panel to another page (the cross-page case
+    // itself is the alt-marked fixture below)
+    const pageNow = () => page.evaluate(() => document.querySelector('#controls [data-id^="page-"][aria-pressed="true"]')?.dataset.id);
+    const told = /Now on page/.test((await a.announced())[0]);
+    expect(told === ((await pageNow()) !== pageBefore), `the page is named only when it changed (was ${pageBefore}, now ${await pageNow()}, told ${told}): ` + JSON.stringify(await a.announced()));
     // a control that disables itself under the keyboard hands focus on, and says so
     expect(await a.tabTo('zoom-in'), 'Tab reaches Zoom in');
     for (let i = 0; i < 4; i++) { await page.keyboard.press('Enter'); await a.pump(4); }
@@ -256,6 +261,52 @@ try {
     expect(now && now !== 'body' && now !== 'html' && now !== 'zoom-in', 'at the largest zoom focus moved to a control beside it: ' + now);
     expect(await a.wait(async () => /not available now/.test((await a.announced())[0])), 'and it says why: ' + JSON.stringify(await a.announced()));
     expect(await a.attr('zoom-in', 'disabled') !== null, 'Zoom in is disabled at 400%');
+    await a.close();
+  }
+
+  // ---------------------------------------------------------------- a decision that crosses pages, repeats, reasons
+  {
+    const a = await open('cross');
+    const { page } = a;
+    // marking the page's first word as written-in-full-alt carries the panel to a word on page 2
+    await page.evaluate(() => document.querySelector('#controls [data-id="word-p-maya-1-i:0"]').focus());
+    await page.keyboard.press('Enter');
+    expect(await a.wait(async () => await a.has('alt-marked')), 'the word panel offers "alt-marked"');
+    await page.evaluate(() => document.querySelector('#controls [data-id="alt-marked"]').focus());
+    await page.keyboard.press('Enter');
+    expect(await a.wait(async () => /Now on page 2 of 2/.test((await a.announced())[0])), 'a decision that moves to the other page says so: ' + JSON.stringify(await a.announced()));
+    // Original is dimmed while nothing is corrected: the twin says why (the JS group has a title)
+    const reload = await open('reason');
+    const g = await reload.page.evaluate(() => { const b = document.querySelector('#controls [data-id="ver-original"]'); return { btn: b?.getAttribute('aria-description'), grp: b?.closest('[role=group]')?.getAttribute('aria-description'), dis: b?.disabled }; });
+    expect(g.dis === true && /Nothing has been corrected/.test(g.btn || '') && /Nothing has been corrected/.test(g.grp || ''), 'disabled Original says why on the button and its group: ' + JSON.stringify(g));
+    // the same words twice are two announcements (a live region only reads what changed)
+    await reload.page.evaluate(() => { window.__w = 0; new MutationObserver(() => { window.__w++; }).observe(document.getElementById('announce'), { childList: true, characterData: true, subtree: true }); });
+    const writes = [];
+    for (let i = 0; i < 3; i++) {
+      await reload.page.evaluate(() => document.querySelector('#controls [data-id="copy"]').focus());
+      await reload.page.keyboard.press('Enter'); await reload.pump(6); await reload.page.waitForTimeout(600);
+      writes.push(await reload.page.evaluate(() => window.__w));
+    }
+    expect(writes[0] > 0 && writes[1] > writes[0] && writes[2] > writes[1], 'pressing Copy text three times writes the live region three times: ' + writes);
+    await reload.close();
+    await a.close();
+  }
+
+  // ---------------------------------------------------------------- 400% on a phone: every header tool is where it is drawn
+  {
+    const a = await open('phone 400%', { viewport: { width: 320, height: 568 }, deviceScaleFactor: 2 });
+    const { page } = a;
+    const r = await page.evaluate(() => { const b = document.querySelector('#controls [data-id="settings"]').getBoundingClientRect(); return { x: b.x, y: b.y, w: b.width, h: b.height }; });
+    expect(r.y >= 0 && r.y + r.h <= 568 && r.x >= 0 && r.x + r.w <= 320, 'Settings is inside the 320 x 568 viewport: ' + JSON.stringify(r));
+    // the pixels under the twin rect must not be the page pane (it was drawn beneath it)
+    const url = 'data:image/png;base64,' + (await page.screenshot()).toString('base64');
+    const pane = await page.evaluate(async ([u, r]) => {
+      const i = new Image(); i.src = u; await i.decode(); const c = document.createElement('canvas'); c.width = i.width; c.height = i.height;
+      const x = c.getContext('2d'); x.drawImage(i, 0, 0); const d = x.getImageData(0, 0, i.width, i.height).data; let n = 0, t = 0;
+      for (let yy = Math.round(r.y * 2) + 2; yy < (r.y + r.h) * 2 - 2; yy += 4) for (let xx = Math.round(r.x * 2) + 2; xx < (r.x + r.w) * 2 - 2; xx += 4) { const k = (yy * i.width + xx) * 4; t++; if (d[k] < 235 && d[k + 2] > d[k] + 8 && d[k + 1] > 190) n++; }
+      return t ? n / t : 1;
+    }, [url, r]);
+    expect(pane < 0.1, 'Settings is drawn (not under the page pane): ' + Math.round(pane * 100) + '% pane colour');
     await a.close();
   }
 
