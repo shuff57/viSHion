@@ -320,6 +320,15 @@ fn rust_matches_js_on_every_fixture_case() {
                     .map(|p| json!(match jsx::nat_compare(s(&p[0]), s(&p[1])) { std::cmp::Ordering::Less => -1, std::cmp::Ordering::Equal => 0, _ => 1 }))
                     .collect(),
             ),
+            "natsort" => Value::Array(
+                input["lists"].as_array().unwrap().iter()
+                    .map(|l| {
+                        let mut v = strs(l);
+                        vishion_core::v8sort::sort_by(&mut v, |a, b| jsx::nat_compare(a, b));
+                        json!(v)
+                    })
+                    .collect(),
+            ),
             "slug" => Value::Array(strs(&input["slugs"]).iter().map(|x| json!(export::slug(x))).collect()),
             "number_str" => Value::Array(strs(&input["strs"]).iter().map(|x| json!(jsx::num_str(jsx::string_to_number(x)))).collect()),
             "to_fixed" => Value::Array(input["xs"].as_array().unwrap().iter().map(|x| json!(jsx::to_fixed1(x.as_f64().unwrap()))).collect()),

@@ -14,6 +14,7 @@ mod hanfold;
 pub mod jsx;
 pub mod model;
 pub mod render;
+pub mod v8sort;
 pub mod student;
 pub mod words;
 

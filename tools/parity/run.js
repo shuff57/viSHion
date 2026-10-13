@@ -383,6 +383,29 @@ function natCases() {
   }
   const allPairs = pairs.concat(wp);
   add('nat', { pairs: allPairs }, allPairs.map(([a, b]) => Math.sign(j.OCR.natCompare(a, b))));
+  // Round-6: whole-list Array.sort (V8 TimSort) with natCompare as groups.list does; natCompare is not a total
+  // order for BMP/supplementary digit mixes, so only a V8-identical sort reproduces the order. Sizes cross the
+  // 64-element merge/gallop thresholds; lists mix presorted runs, reversed runs and digit-heavy cyclic names.
+  {
+    const dig = ['0', '1', '2', '7', '9', '\u{661}', '\u{967}', '\u{6F7}', '\u{E58}', '９', '\u{1CCF0}', '\u{1CCF6}', '\u{1D7CE}', '\u{1D7D3}', '\u{1D7E3}', '\u{1D7FF}', '\u{1FBF0}',
+      '\u{11066}', '\u{16A62}', '\u{104A1}', 'a', 'e', 'x', 'Å', '\u{133}', '\u{1FB3}', '\u{4E43}', '\u{300}', ' ', '\u{1D400}', '\u{1D2E8}', 'j'];
+    let sd = 31337; const r = () => (sd = (sd * 1103515245 + 12345) % 2147483648) / 2147483648;
+    const mk = () => { let t = ''; const n = 1 + Math.floor(r() * 6); for (let k = 0; k < n; k++) t += dig[Math.floor(r() * dig.length)]; return t; };
+    const nc = (a, b) => j.OCR.natCompare(a, b);
+    const lists = [['\u{96f}\u{1d7d8}00\u{133}e', '\u{96f}\u{1d7e3}\u{1fb3}0\u{c5}\u{0}f', '0j\u{1d2e8}', '\u{1d7d3}\u{1d7d6}\u{1d7d1}\u{1d400}']];
+    for (let i = 0; i < 400; i++) {
+      const n = [3, 5, 12, 20, 33, 63, 64, 65, 100, 150, 300][Math.floor(r() * 11)];
+      let l = []; for (let k = 0; k < n; k++) l.push(mk());
+      const m = r();
+      if (m < 0.3) { const h = Math.floor(n / 2); l = l.slice(0, h).sort(nc).concat(l.slice(h)); }
+      else if (m < 0.5) { l = l.slice().sort(nc).reverse().concat(l.slice(0, 7)); }
+      else if (m < 0.6) { l = l.concat(l.slice(0, Math.floor(n / 3))); }
+      lists.push(l);
+    }
+    const words = ['Maya R.', 'maya r', 'Zoe', 'Zoë', 'Ünal', 'Unal', 'Åsa', 'Đorđe', 'Łukasz', 'Øystein', 'Straße', 'page2', 'page10', 'page1', 'Devon T.', '王芳', 'Анна', 'a', 'A', 'á'];
+    for (let i = 0; i < 100; i++) { const n = 2 + Math.floor(r() * 150); const l = []; for (let k = 0; k < n; k++) l.push(words[Math.floor(r() * words.length)] + (r() < 0.5 ? '' : String(Math.floor(r() * 30)))); lists.push(l); }
+    add('natsort', { lists }, lists.map((l) => l.slice().sort(nc)));
+  }
   const slugs = ['Period 3 Quiz', '  --Hello, World!--  ', 'Café Ünal', 'ÀÉÎÕÜ', '', '!!!', 'a'.repeat(60), 'Ab-Cd_Ef', 'ﬁne ﬀ', '①②③', '日本語 test', 'x'.repeat(47) + ' y z', 'x'.repeat(47) + '--y', 'ǅ', 'ＡＢＣ'];
   add('slug', { slugs }, slugs.map((s) => j.OCR.slug(s)));
 }

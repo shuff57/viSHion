@@ -38,6 +38,10 @@ later phase. Quirks of the JS (for example `$&` in a glossary term being expande
   the blind-critic cases. Remaining: the data versions differ (node ICU 78 / CLDR 48 vs the crate's CLDR data), so
   characters added or reordered between those releases could differ; JS uses the host locale, the fixture is
   node's default (root/en).
+  The ICU prefix-skip emulation makes the comparator non-transitive for names mixing BMP and supplementary digits, so
+  `groups::list` sorts with `v8sort::sort_by`, a port of V8's TimSort (`array-sort.tq`): it never panics (std `sort_by`
+  can) and orders cyclic inputs exactly like `Array.prototype.sort`. The fixture `natsort` kind replays 501 whole
+  lists (3 to 300 names, presorted/reversed runs, digit-heavy mixes) sorted by node.
 * **Case folding.** `to_lowercase` uses Rust's Unicode tables, V8 uses ICU's; equal for current Unicode data.
 * **Non-string values in string fields.** `page.corrected` as a number or `edits[].text` missing are treated as
   empty by the typed accessors; JS would coerce or throw. Real projects never contain these.

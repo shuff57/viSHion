@@ -10,7 +10,7 @@ fn nat_list_sorts() {
         let list: Vec<String> = v[0].as_array().unwrap().iter().map(|x| x.as_str().unwrap().to_string()).collect();
         let exp: Vec<String> = v[1].as_array().unwrap().iter().map(|x| x.as_str().unwrap().to_string()).collect();
         let mut got = list.clone();
-        let r = std::panic::catch_unwind(move || { got.sort_by(|a, b| vishion_core::jsx::nat_compare(a, b)); got });
+        let r = std::panic::catch_unwind(move || { vishion_core::v8sort::sort_by(&mut got, |a, b| vishion_core::jsx::nat_compare(a, b)); got });
         n += 1;
         match r {
             Ok(g) if g == exp => {}
@@ -29,7 +29,7 @@ fn nat_sort_cyclic_comparator_matches_v8() {
     let mut l: Vec<String> = ["\u{96f}\u{1d7d8}00\u{133}e", "\u{96f}\u{1d7e3}\u{1fb3}0\u{c5}\u{0}f", "0j\u{1d6a8}".trim_end_matches('\u{1d6a8}'), "\u{1d7d3}\u{1d7d6}\u{1d7d1}\u{1d400}"].iter().map(|s| s.to_string()).collect();
     l[2] = "0j\u{1d2e8}".to_string();
     let exp = ["0j\u{1d2e8}", "\u{1d7d3}\u{1d7d6}\u{1d7d1}\u{1d400}", "\u{96f}\u{1d7d8}00\u{133}e", "\u{96f}\u{1d7e3}\u{1fb3}0\u{c5}\u{0}f"];
-    l.sort_by(|a, b| vishion_core::jsx::nat_compare(a, b));
+    vishion_core::v8sort::sort_by(&mut l, |a, b| vishion_core::jsx::nat_compare(a, b));
     assert_eq!(l, exp);
 }
 
@@ -39,5 +39,5 @@ fn nat_sort_cyclic_comparator_matches_v8() {
 fn nat_sort_must_not_panic() {
     let l = ["𐒩٦", "𞥙0", "Å𝟮𝟬𝟮🯳", "7𝟟", "ĳ𝟶4", "e𝟽𐒦７", "a٢𝟱𐒧٧", "x𝟮𐒣९", "a𐒣", "ĳ٧𝟕", "𝟓00", "Å𝟛𝟟2४", "x9𞥓𝟏𞥑", "٠𝟱𝟫𝟣a", "𝟷𝟔", "٩🯴𝟘𝟫", "𞥙٨𝟽", "९𝟰𝟚𝟠", "𝟝8１𝟻", "Å𝟼", "Å𝟪٠a", "x𐒤𝟾𐒠２", "x٧8", "a0𝟬９a", "٠000", "🯸🯲", "७4e", "９𝟗0", "𝟷𝟐𝟢00", "9२", "Å𝟎9", "𝟱", "𐒠🯵", "Å0e", "𝟯𞥗١", "a٨𝟻٧𝟻", "𝟐🯹00", "ĳ🯵𐒧𝟔", "𐒥𐒠𐒠𐒥", "e2𞥓", "५🯶", "x٠", "e🯳𝟹", "٠𝟗١", "Å9５0", "e𐒦६𐒢𝟒", "७𝟠𝟼00", "٢５", "𝟠٣e", "٠e", "e𝟥𝟫𞥗a", "ĳ🯶८", "🯳𝟩", "Å𐒧𝟘𝟦𝟝", "𝟚", "e𝟯𝟐e", "６٥𝟠", "x٤𝟠𐒥𝟫𝟯𞥖e", "a𝟥١𝟼", "x𐒣𐒨a", "3３🯳٦1", "٩", "x𝟥𝟬", "ĳ𝟯", "𝟙３"];
     let mut v: Vec<String> = l.iter().map(|s| s.to_string()).collect();
-    v.sort_by(|a, b| vishion_core::jsx::nat_compare(a, b));
+    vishion_core::v8sort::sort_by(&mut v, |a, b| vishion_core::jsx::nat_compare(a, b));
 }

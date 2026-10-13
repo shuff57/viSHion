@@ -146,7 +146,7 @@ pub fn list(pages: &[&Page], is_queued: &dyn Fn(&str) -> bool) -> Vec<Group> {
             }
         })
         .collect();
-    out.sort_by(|a, b| nat_compare(&a.name, &b.name));
+    crate::v8sort::sort_by(&mut out, |a, b| nat_compare(&a.name, &b.name));
     out
 }
 
