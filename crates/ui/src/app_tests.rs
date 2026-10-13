@@ -2699,3 +2699,22 @@ fn dom_click_on_a_line_underlines_it_and_a_word_keeps_its_measured_rectangle() {
     let c = h.app.controls().into_iter().find(|c| c.id == w).unwrap().clone();
     assert_eq!(c.size, (150, 30));
 }
+
+/// Blind critic, DOM transcript round 4: while a page is being read its text streams in; that text is painted by
+/// the canvas only (`css_text` in the `transcribing` arm of `transcript_pane` registers no twin node), so it is
+/// not DOM text on the web (no find, selection, user stylesheet) and a screen reader never gets it.
+#[test]
+#[ignore = "failing by design: the streamed transcript is canvas-only text with no node in the twin"]
+fn critic4_streamed_transcript_is_a_node_of_the_twin() {
+    let mut h = H::new("m1");
+    h.app.ctl.dom_text = true;
+    h.sess().a.pages.get_mut("m1").unwrap().set("status", serde_json::json!("transcribing"));
+    h.sess().a.pages.get_mut("m1").unwrap().set("raw", serde_json::json!("The mean of the sample streams in here"));
+    h.frames(4);
+    let has = h.app.nodes().iter().any(|n| match n {
+        Node::Text { text, .. } | Node::Status { text, .. } | Node::Heading { text, .. } => text.contains("streams in here"),
+        Node::Para { parts, .. } => parts.iter().any(|p| matches!(p, Part::Text(t) if t.contains("streams in here"))),
+        _ => false,
+    });
+    assert!(has, "the text being read is in the twin");
+}
