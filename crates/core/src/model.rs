@@ -1,7 +1,7 @@
 //! Document model. The JSON document is the source of truth (S3 rule 2): every type here wraps a
 //! `serde_json` map in file order, so unknown fields, key order and number text round-trip untouched,
 //! and typed accessors cover only what the logic reads. Mirrors js/state.js and the page shape in js/ns.js.
-use crate::jsx;
+use crate::{jsx, lenient};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use std::collections::BTreeMap;
@@ -19,16 +19,39 @@ pub struct Project {
 }
 
 impl Project {
+    /// Lenient parse: lone-surrogate escapes are accepted (see [`crate::lenient`]).
     pub fn from_json(s: &str) -> Result<Self, serde_json::Error> {
-        serde_json::from_str(s)
+        lenient::parse(s)
     }
     /// Compact form (what pages use).
     pub fn to_json(&self) -> Result<String, serde_json::Error> {
-        serde_json::to_string(self)
+        lenient::to_string(self, false)
     }
     /// 2-space pretty form, no trailing newline: byte-identical to JS `JSON.stringify(meta, null, 2)`.
     pub fn to_json_pretty(&self) -> Result<String, serde_json::Error> {
-        serde_json::to_string_pretty(self)
+        lenient::to_string(self, true)
+    }
+    /// `normalize` of js/fs-projects.js: `Object.assign({defaults}, meta)`. Default keys come first in
+    /// default order, then the file's other keys in file order. `now` fills `created` / `updated`.
+    pub fn normalized(&self, now: i64) -> Project {
+        let mut doc = Map::new();
+        doc.insert("schemaVersion".into(), json!(1));
+        doc.insert("name".into(), json!("Untitled"));
+        doc.insert("topic".into(), json!("General"));
+        doc.insert("prompt".into(), json!(""));
+        doc.insert("order".into(), json!([]));
+        doc.insert("created".into(), json!(now));
+        doc.insert("updated".into(), json!(now));
+        doc.insert("ui".into(), json!({}));
+        doc.insert("stats".into(), Value::Null);
+        for (k, v) in &self.doc {
+            doc.insert(k.clone(), v.clone());
+        }
+        Project { doc }
+    }
+    /// New empty document (`{}`).
+    pub fn empty() -> Project {
+        Project { doc: Map::new() }
     }
     /// Display name; empty when absent or not a string.
     pub fn name(&self) -> &str {
@@ -76,8 +99,13 @@ impl Project {
 pub struct Page(pub Map<String, Value>);
 
 impl Page {
+    /// Lenient parse (lone-surrogate escapes accepted).
     pub fn from_json(s: &str) -> Result<Self, serde_json::Error> {
-        serde_json::from_str(s)
+        lenient::parse(s)
+    }
+    /// Compact form, byte-identical to JS `JSON.stringify(page)`.
+    pub fn to_json(&self) -> Result<String, serde_json::Error> {
+        lenient::to_string(self, false)
     }
     pub fn from_value(v: Value) -> Option<Self> {
         match v {
@@ -410,6 +438,26 @@ mod tests {
         let mut p = Project::from_json(r#"{"a":1,"name":"x","b":2}"#).unwrap();
         p.set_name("y");
         assert_eq!(p.to_json().unwrap(), r#"{"a":1,"name":"y","b":2}"#);
+    }
+
+    #[test]
+    fn lone_surrogate_documents_load_and_write_back_identically() {
+        let page = r#"{"id":"p","raw":"a\ud800b","n":1e+21}"#;
+        let mut p = Page::from_json(page).expect("lone surrogate page must load");
+        assert_eq!(p.to_json().unwrap(), page);
+        p.set("reviewed", json!(true));
+        assert_eq!(p.to_json().unwrap(), r#"{"id":"p","raw":"a\ud800b","n":1e+21,"reviewed":true}"#);
+        let meta = "{\n  \"name\": \"n\\udfff\"\n}";
+        assert_eq!(Project::from_json(meta).unwrap().to_json_pretty().unwrap(), meta);
+    }
+
+    #[test]
+    fn normalized_puts_defaults_first_like_js() {
+        let p = Project::from_json(r#"{"name":"h","order":["a"],"extra":1,"stats":{"pages":1}}"#).unwrap();
+        assert_eq!(
+            p.normalized(7).to_json().unwrap(),
+            r#"{"schemaVersion":1,"name":"h","topic":"General","prompt":"","order":["a"],"created":7,"updated":7,"ui":{},"stats":{"pages":1},"extra":1}"#
+        );
     }
 
     #[test]

@@ -14,7 +14,12 @@ const debug = process.argv.includes('--debug');
 const profile = debug ? 'debug' : 'release';
 const run = (cmd, args, opts = {}) => execFileSync(cmd, args, { cwd: repo, stdio: 'inherit', ...opts });
 
-run('cargo', ['build', '-p', 'vishion-app', '--lib', '--target', 'wasm32-unknown-unknown', ...(debug ? [] : ['--release'])]);
+// Web clipboard (copy) needs `--cfg=web_sys_unstable_apis`; .cargo/config.toml sets it for wasm32, but an
+// explicit RUSTFLAGS in the environment replaces that setting, so make sure it is present either way.
+const CFG = '--cfg=web_sys_unstable_apis';
+const rustflags = process.env.RUSTFLAGS && !process.env.RUSTFLAGS.includes(CFG) ? `${process.env.RUSTFLAGS} ${CFG}` : process.env.RUSTFLAGS;
+run('cargo', ['build', '-p', 'vishion-app', '--lib', '--target', 'wasm32-unknown-unknown', ...(debug ? [] : ['--release'])],
+  rustflags ? { env: { ...process.env, RUSTFLAGS: rustflags } } : {});
 
 fs.rmSync(dist, { recursive: true, force: true });
 fs.mkdirSync(dist, { recursive: true });

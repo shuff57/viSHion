@@ -895,8 +895,6 @@ dependencies = [
 [[package]]
 name = "eframe"
 version = "0.28.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6490ef800b2e41ee129b1f32f9ac15f713233fe3bc18e241a1afe1e4fb6811e0"
 dependencies = [
  "ahash",
  "bytemuck",
@@ -3348,6 +3346,27 @@ dependencies = [
 [[package]]
 name = "vishion-store"
 version = "0.1.0"
+dependencies = [
+ "js-sys",
+ "serde_json",
+ "vishion-core",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+]
+
+[[package]]
+name = "vishion-store-oracle"
+version = "0.1.0"
+dependencies = [
+ "js-sys",
+ "serde_json",
+ "vishion-core",
+ "vishion-store",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+]
 
 [[package]]
 name = "vishion-ui"

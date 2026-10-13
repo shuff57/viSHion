@@ -1,8 +1,8 @@
 [workspace]
 resolver = "2"
-members = ["crates/core", "crates/store", "crates/net", "crates/ui", "crates/app"]
+members = ["crates/core", "crates/store", "crates/store-oracle", "crates/net", "crates/ui", "crates/app"]
 # spikes/* are standalone throwaway crates with their own Cargo.lock; keep them out of the workspace.
-exclude = ["spikes"]
+exclude = ["spikes", "crates/vendor"]
 
 [workspace.package]
 version = "0.1.0"
@@ -21,6 +21,12 @@ serde_json = { version = "1", features = ["preserve_order", "arbitrary_precision
 # Pinned to 0.28 while latex-rust requires it (plan rule 6).
 eframe = { version = "0.28", default-features = false, features = ["glow", "default_fonts", "accesskit"] }
 egui = "0.28"
+
+# eframe 0.28.1 does not compile against web-sys >= 0.3.77 once `--cfg=web_sys_unstable_apis` is set
+# (see .cargo/config.toml): `Navigator::clipboard()` stopped returning an Option. One-line patch, see
+# crates/vendor/PATCHES.md. Drop this when eframe is upgraded (plan rule 6).
+[patch.crates-io]
+eframe = { path = "crates/vendor/eframe" }
 
 [profile.release]
 opt-level = "s"

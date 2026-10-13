@@ -30,6 +30,7 @@ jobs:
       - name: cargo test
         run: cargo test --workspace --locked
 
+      # .cargo/config.toml passes --cfg=web_sys_unstable_apis to every wasm32 build (web clipboard).
       - name: wasm32 build
         run: cargo build -p vishion-app --lib --target wasm32-unknown-unknown --release --locked
 
@@ -57,3 +58,12 @@ jobs:
         env:
           CHROME: /usr/bin/google-chrome
         run: node check.mjs
+
+      - name: Store oracle (JS writes -> Rust reads, rewrites -> JS reloads deep-equal; IDB + folder)
+        working-directory: tools/store-oracle
+        env:
+          CHROME: /usr/bin/google-chrome
+        run: |
+          npm ci
+          node build.mjs
+          node run.mjs

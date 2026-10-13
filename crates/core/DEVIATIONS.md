@@ -21,8 +21,11 @@ later phase. Quirks of the JS (for example `$&` in a glossary term being expande
 
 ## Unavoidable
 
-* **Lone surrogates.** JS strings can hold them; Rust `String` cannot. A project document containing a lone
-  `\udXXX` escape does not parse as a `Page`; the storage layer must leave such documents untouched (S3 rule).
+* **Lone surrogates.** JS strings can hold them; Rust `String` cannot. `Project::from_json`, `Page::from_json`
+  and the store layer go through `lenient` (S3 rule 3): each lone `\udXXX` escape is carried in memory as
+  U+10FFFE followed by its four hex digits and written back as the original escape, so such documents load,
+  can be edited, and stay byte-identical where untouched. `lenient::display` maps the markers to U+FFFD for
+  the UI. A lone surrogate typed in after load is not representable (the UI cannot produce one).
 * **Number text.** Numbers that come from stored JSON are kept verbatim (`arbitrary_precision`). Numbers the
   core computes (`conf`, `percent`, band geometry) print with the shortest round-trip digits, like JS, but
   exponent forms differ outside `1e-6 <= |x| < 1e21` (`1e21` vs JS `1e+21`); none of the computed values

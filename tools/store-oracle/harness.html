@@ -1,0 +1,10 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>store oracle harness</title>
+<body>store oracle</body>
+<script type="module">
+  import init, * as rs from './pkg/vishion_store_oracle.js';
+  await init();
+  window.rs = rs;
+  document.documentElement.dataset.ready = '1';
+</script>

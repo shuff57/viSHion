@@ -95,11 +95,28 @@ impl Store for FsStore {
     }
 
     async fn list(&self, prefix: &str) -> Result<Vec<String>> {
+        // Start the walk at the deepest whole directory of the prefix instead of the root.
+        let (dir_rel, _) = prefix.rsplit_once('/').unwrap_or(("", prefix));
+        let start = if dir_rel.is_empty() { self.root.clone() } else { self.path(dir_rel)? };
         let mut out = vec![];
-        walk(&self.root, "", &mut out)?;
+        walk(&start, dir_rel, &mut out)?;
         out.retain(|k| k.starts_with(prefix));
         out.sort();
         Ok(out)
+    }
+
+    async fn delete_tree(&self, path: &str) -> Result<()> {
+        let p = self.path(path.trim_end_matches('/'))?;
+        let r = match std::fs::symlink_metadata(&p) {
+            Ok(m) if m.is_dir() => std::fs::remove_dir_all(&p),
+            Ok(_) => std::fs::remove_file(&p),
+            Err(e) => Err(e),
+        };
+        match r {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(e.into()),
+        }
     }
 
     async fn delete(&self, key: &str) -> Result<()> {
