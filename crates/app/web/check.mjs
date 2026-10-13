@@ -357,7 +357,7 @@ try {
     await p7.evaluate(() => document.querySelector('#controls button[data-id^="word-p-maya-1-"]').click());
     const trayCount = () => p7.evaluate(() => { const e = document.querySelector('#controls [data-id="tray-count"]'); return e ? e.textContent : null; });
     expect(await wait7(async () => /^Word 1 of \d+$/.test((await trayCount()) || '')), 'tray position is exposed: ' + await trayCount());
-    const orderIds = await p7.evaluate(() => [...document.querySelectorAll('#controls > [data-id]')].map(e => e.dataset.id));
+    const orderIds = await p7.evaluate(() => [...document.querySelectorAll('#controls [data-id]')].map(e => e.dataset.id));
     const ic = orderIds.indexOf('tray-count');
     expect(ic > 0 && orderIds[ic - 1] === 'prev-word' && orderIds[ic + 1] === 'next-word', 'tray position reads between Previous and Next word');
     await p7.evaluate(() => document.querySelector('#controls [data-id="next-word"]').click());

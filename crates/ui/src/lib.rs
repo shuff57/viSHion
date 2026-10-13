@@ -16,6 +16,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+mod a11y;
 mod bands;
 mod dialog;
 pub mod emoji;
@@ -103,6 +104,11 @@ pub struct Ctl {
     pub(crate) kbd: bool,
     /// Rects of this frame's transcript lines (`--dump-controls` prints them, to compare with the DOM).
     pub(crate) lines: Vec<(String, egui::Rect)>,
+    /// Sentences for the live region this frame: (text, assertive). `web::announce` speaks them.
+    pub(crate) said: Vec<(String, bool)>,
+    /// Twin nodes whose text is announced once the next frame has drawn the state they describe.
+    pub(crate) say_nodes: Vec<&'static str>,
+    say_wait: Vec<&'static str>,
 }
 
 /// What a control is, for the twin.
@@ -112,6 +118,8 @@ pub struct C<'a> {
     pub pressed: Option<bool>,
     pub region: u8,
     pub disabled: bool,
+    /// Role in the twin (see `Reg::role`).
+    pub role: &'static str,
     /// Where the focus ring goes when it is not the hit target (a transcript word: its painted chip, not the
     /// 44pt target around it), and its corner radius.
     pub ring: Option<(egui::Rect, f32)>,
@@ -119,10 +127,15 @@ pub struct C<'a> {
 
 impl<'a> C<'a> {
     pub fn new(id: &'a str, label: &'a str, region: u8) -> Self {
-        C { id, label, pressed: None, region, disabled: false, ring: None }
+        C { id, label, pressed: None, region, disabled: false, role: "button", ring: None }
     }
     pub fn pressed(mut self, on: bool) -> Self {
         self.pressed = Some(on);
+        self
+    }
+    /// `"checkbox"`, `"switch"` or `"listitem"` instead of the plain button.
+    pub fn role(mut self, role: &'static str) -> Self {
+        self.role = role;
         self
     }
     pub fn disabled(mut self, d: bool) -> Self {
@@ -157,7 +170,7 @@ impl Ctl {
     pub fn reg(&mut self, ui: &Ui, r: &egui::Response, c: C) -> bool {
         self.push(Reg {
             id: c.id.into(),
-            role: "button",
+            role: c.role,
             label: c.label.into(),
             pressed: c.pressed,
             value: None,
@@ -203,7 +216,15 @@ impl Ctl {
     pub fn group(&mut self, ui: &Ui, r: &egui::Response, id: &str, label: &str, keys: &'static str, region: u8) {
         // one pixel left of its content, so it sorts just before the first paragraph it governs
         let pos = twin::pos_of(r.rect.min - egui::vec2(1.0, 0.0));
-        self.nodes.push(Node::Group { id: id.into(), label: label.into(), keys, region, pos });
+        self.nodes.push(Node::Group {
+            id: id.into(),
+            label: label.into(),
+            keys,
+            region,
+            pos,
+            at: (r.rect.min.x.round() as i32, r.rect.min.y.round() as i32),
+            size: (r.rect.width().round() as u16, r.rect.height().round() as u16),
+        });
         self.track_focus(ui, r, id, region, Some((r.rect.expand(3.0), 0.0)));
     }
 
@@ -239,6 +260,16 @@ impl Ctl {
                 size: (0, 0),
             }));
         }
+    }
+
+    /// Announce `text` politely (a decision was made, a student changed).
+    pub fn say(&mut self, text: impl Into<String>) {
+        self.said.push((text.into(), false));
+    }
+
+    /// Announce what the node `id` says once the next frame has drawn it (a page or student that just changed).
+    pub fn say_node(&mut self, id: &'static str) {
+        self.say_nodes.push(id);
     }
 
     pub fn heading(&mut self, id: &str, level: u8, text: &str, region: u8, min: egui::Pos2) {
@@ -362,6 +393,10 @@ pub struct App {
     typed: String,
     typed_for: Option<(String, String)>,
     status_msg: Option<String>,
+    /// What the live region was last given (the toast, the save state), so a change is spoken once.
+    last_toast: Option<String>,
+    last_save: Option<String>,
+    said_log: Vec<String>,
     status_err: bool,
     dialog: Option<dialog::Dialog>,
     /// Scroll position and size of the page stage, kept so zoom can hold the middle of the view.
@@ -388,6 +423,8 @@ pub struct App {
     /// Open with the word panel closed (`--no-tray`, `?tray=0`), as after its Close button.
     start_no_tray: bool,
     dark_applied: Option<bool>,
+    /// The system asks for more contrast (`prefers-contrast: more` or forced colours); read once at start.
+    high_contrast: bool,
     exit_after: Option<Duration>,
     #[cfg(not(target_arch = "wasm32"))]
     screenshot: Option<(std::path::PathBuf, f64)>,
@@ -404,7 +441,20 @@ impl App {
         #[cfg(target_arch = "wasm32")]
         web::install(queue.clone(), ctx.clone());
         theme::install(&ctx);
-        App {
+        // display preferences (web): no easing when the person asks for reduced motion; more contrast
+        #[cfg(target_arch = "wasm32")]
+        let high_contrast = {
+            let reduced = web::media("(prefers-reduced-motion: reduce)");
+            if reduced {
+                ctx.style_mut(|s| s.animation_time = 0.0);
+            }
+            let hc = web::media("(forced-colors: active)") || web::media("(prefers-contrast: more)");
+            web::mark_preferences(reduced, hc);
+            hc
+        };
+        #[cfg(not(target_arch = "wasm32"))]
+        let high_contrast = false;
+        let mut app = App {
             ctx,
             queue,
             ctl: Ctl::default(),
@@ -420,6 +470,9 @@ impl App {
             typed: String::new(),
             typed_for: None,
             status_msg: None,
+            last_toast: None,
+            last_save: None,
+            said_log: vec![],
             status_err: false,
             dialog: None,
             stage: review::Stage::default(),
@@ -444,6 +497,7 @@ impl App {
             start_page: None,
             start_no_tray: false,
             dark_applied: None,
+            high_contrast: false,
             exit_after: None,
             #[cfg(not(target_arch = "wasm32"))]
             screenshot: None,
@@ -451,7 +505,9 @@ impl App {
             dump_controls: false,
             #[cfg(not(target_arch = "wasm32"))]
             closing: false,
-        }
+        };
+        app.high_contrast = high_contrast;
+        app
     }
 
     /// Connect the storage host. `dispatch` carries `Cmd`s out; the host pushes `Event`s into `inbox`.
@@ -507,6 +563,11 @@ impl App {
     /// Controls of the last frame in reading order, including those inline in transcript paragraphs.
     pub fn controls(&self) -> Vec<&Reg> {
         twin::controls(&self.last_nodes)
+    }
+
+    /// What was sent to the live region so far (newest last; the web page speaks these).
+    pub fn announced(&self) -> &[String] {
+        &self.said_log
     }
 
     /// The whole twin of the last frame.
@@ -833,7 +894,7 @@ impl App {
             .or_else(|| self.session.as_ref().and_then(|s| s.settings.get("theme").and_then(|v| v.as_str().map(String::from))))
             .unwrap_or_else(|| self.theme_name.clone());
         self.theme_name = name;
-        let t = theme::pick(&self.theme_name, system_dark);
+        let t = theme::pick_hc(&self.theme_name, system_dark, self.high_contrast);
         if self.dark_applied != Some(t.dark) {
             theme::apply(ctx, t);
             // a new font atlas, with this theme's coverage gamma
@@ -914,9 +975,11 @@ impl App {
         self.ctl.typed.clear();
         self.ctl.keys.clear();
 
+        self.announce();
         // a modal dialog is the only thing the twin shows while it is open
+        // (the screen's h1 stays, so the page keeps its main landmark and its heading behind the dialog)
         if self.dialog.is_some() {
-            self.ctl.nodes.retain(|n| n.key().0 == twin::DIALOG);
+            self.ctl.nodes.retain(|n| n.key().0 == twin::DIALOG || matches!(n, Node::Heading { level: 1, .. }));
         }
         // reading order: region, then 16px row band, then x
         self.ctl.nodes.sort_by_key(|n| n.key());
@@ -960,6 +1023,52 @@ impl App {
 }
 
 impl App {
+    /// Speak this frame's news through the live region: decisions, a toast, the end of a save, and the text of
+    /// nodes whose state was drawn only this frame (the page or student a key press moved to).
+    fn announce(&mut self) {
+        fn text_of<'a>(nodes: &'a [Node], id: &str) -> Option<&'a str> {
+            nodes.iter().find_map(|n| match n {
+                Node::Heading { id: i, text, .. } | Node::Status { id: i, text, .. } | Node::Text { id: i, text, .. } if i == id => Some(text.as_str()),
+                _ => None,
+            })
+        }
+        for id in std::mem::take(&mut self.ctl.say_wait) {
+            if let Some(t) = text_of(&self.ctl.nodes, id) {
+                let t = t.to_string();
+                self.ctl.said.push((t, false));
+            }
+        }
+        self.ctl.say_wait = std::mem::take(&mut self.ctl.say_nodes);
+        if !self.ctl.say_wait.is_empty() {
+            self.ctx.request_repaint();
+        }
+        let toast = text_of(&self.ctl.nodes, "toast").map(String::from);
+        if toast != self.last_toast {
+            if let Some(t) = &toast {
+                self.ctl.said.push((t.clone(), self.status_err));
+            }
+            self.last_toast = toast;
+        }
+        let save = text_of(&self.ctl.nodes, "save-state").map(String::from);
+        if save != self.last_save {
+            match (&self.last_save, &save) {
+                (_, Some(now)) if now.starts_with("Couldn’t save") => self.ctl.said.push((now.clone(), true)),
+                (Some(was), Some(_)) if was.starts_with("Saving") => self.ctl.said.push(("Saved.".into(), false)),
+                _ => {}
+            }
+            self.last_save = save;
+        }
+        for (text, assertive) in std::mem::take(&mut self.ctl.said) {
+            #[cfg(target_arch = "wasm32")]
+            web::announce(&text, assertive);
+            let _ = assertive;
+            self.said_log.push(text);
+            if self.said_log.len() > 40 {
+                self.said_log.remove(0);
+            }
+        }
+    }
+
     /// Keys egui saw (native, or the canvas on the web) become the same `KeyEv`s the twin forwards. Not while
     /// a text field has the keyboard.
     fn collect_egui_keys(&mut self, ctx: &egui::Context) {

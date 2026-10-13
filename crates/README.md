@@ -57,6 +57,10 @@ node check.mjs
 # light, dark and phone width; screenshots go to crates/app/dist/parity-{native,web}-{light,dark,phone}.png
 cargo build -p vishion-app && node parity.mjs
 
+# accessibility: ariaSnapshot assertions (landmarks, headings, groups, lists, roles, math), axe-core in six
+# states, focus restore, announcements, 44px targets, reduced motion, forced colours, 200% / 400% reflow
+node a11y.mjs
+
 # deploy-leak check: serves the repo root through the root wrangler.jsonc + .assetsignore and requires
 # that Cargo.*, crates/, target/, spikes/, docs/ are NOT served while the legacy app still is
 node check-assetsignore.mjs

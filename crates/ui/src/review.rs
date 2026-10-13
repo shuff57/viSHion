@@ -331,11 +331,15 @@ fn apply(
         Act::Original(v) => s.original = v,
         Act::Student(d) => {
             s.step_student(d);
+            ctl.say_node("student-pos");
         }
         Act::DoneNext => {
             if !s.done_next() {
                 say("That was the last student.".into(), false);
                 s.view = View::Inbox;
+            } else {
+                ctl.say("Marked as checked.");
+                ctl.say_node("student-pos");
             }
         }
         Act::Copy => {
@@ -350,15 +354,18 @@ fn apply(
                 s.multi_click(&id, shift);
             } else {
                 s.select(&id);
+                ctl.say_node("scan-title");
             }
         }
         Act::StripStep(from, d) => {
             if let Some(t) = s.step_page(&from, d) {
+                ctl.say_node("scan-title");
                 ctl.want_focus = Some(format!("page-{t}"));
             }
         }
         Act::StripEdge(last) => {
             if let Some(t) = s.edge_page(last) {
+                ctl.say_node("scan-title");
                 ctl.want_focus = Some(format!("page-{t}"));
             }
         }
@@ -370,9 +377,18 @@ fn apply(
         Act::Choose(via, text) => {
             if s.choose_open(via, &text) {
                 typed.clear();
+                ctl.say(match via {
+                    "suggested" => "Used the suggested word.".to_string(),
+                    "written" => "Kept the word as read from the page.".to_string(),
+                    "typed" => format!("Used “{text}”."),
+                    _ => "Marked as checked.".to_string(),
+                });
             }
         }
-        Act::UseAll => s.use_all(),
+        Act::UseAll => {
+            s.use_all();
+            ctl.say("Used all the suggestions.");
+        }
         Act::StepWord(d) => s.step_word(d),
         Act::Tray(open) => {
             s.tray_open = open;
@@ -529,6 +545,7 @@ fn apply(
                 dialog::Out::Theme(v) => {
                     s.settings.set("theme", serde_json::json!(v));
                     s.dirty.settings = true;
+                    ctl.say(format!("Theme: {v}."));
                     // the dialog stays open so the change can be seen
                     return;
                 }
@@ -1060,7 +1077,7 @@ fn student_row(ui: &mut Ui, cx: &mut Cx, s: &Session, g: &vishion_core::groups::
         ui.painter().rect_stroke(bx.shrink(0.5), 3.0, Stroke::new(1.0, t.faint));
     }
     let sel_label = format!("Select {}", g.name);
-    if cx.ctl.reg(ui, &rc, C::new(&format!("sel-{}", g.key), &sel_label, TEXT).pressed(on)) {
+    if cx.ctl.reg(ui, &rc, C::new(&format!("sel-{}", g.key), &sel_label, TEXT).pressed(on).role("checkbox")) {
         cx.acts.push(Act::SelectGroup(g.key.clone(), !on));
     }
     // thumbnail: the first page, `object-fit: cover` on ruled paper; dimmed while the student is not read yet
@@ -1381,6 +1398,15 @@ fn scan(ui: &mut Ui, cx: &mut Cx, s: &Session, stacked: bool) {
                 ui.add_space(w.max(0.0));
                 tools(ui, cx);
             });
+        } else if tools_w - ui.available_width() > 24.0 {
+            // well under a phone (a 320 point screen, or a page zoomed to 400%): the tools wrap onto more rows
+            // instead of running off the left edge where nobody can see or reach them (WCAG 1.4.10 reflow)
+            title_ui(ui, cx);
+            ui.add_space(4.0);
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing.y = 0.0;
+                tools(ui, cx);
+            });
         } else {
             title_ui(ui, cx);
             ui.add_space(4.0);
@@ -1449,7 +1475,7 @@ fn scan(ui: &mut Ui, cx: &mut Cx, s: &Session, stacked: bool) {
                 let dc = rect.right_top() + vec2(-2.0, 2.0);
                 ui.painter().circle_filled(dc, 6.0, t.scanhead);
                 ui.painter().circle_filled(dc, 4.0, dot_color(t, p));
-                if cx.ctl.reg(ui, &r, C::new(&format!("page-{id}"), &label, SCAN).pressed(on)) {
+                if cx.ctl.reg(ui, &r, C::new(&format!("page-{id}"), &label, SCAN).pressed(on).role("listitem")) {
                     let m = ui.input(|i| i.modifiers);
                     cx.acts.push(Act::StripClick { id: id.clone(), multi: m.command || m.ctrl, shift: m.shift });
                 }
@@ -2550,7 +2576,7 @@ fn alternatives(ui: &mut Ui, cx: &mut Cx, s: &Session, cur: &Entry) {
         ui.painter().galley(pos2(x, (top + (main_h - main.size().y) / 2.0).round()), main, t.ink);
         ui.painter().galley(pos2(x, (top + main_h + (hint_h - hint.size().y) / 2.0).round()), hint, t.muted);
         let label = format!("{}. {}", a.label, a.hint);
-        if cx.ctl.reg(ui, &r, C::new(&a.id, &label, TRAY).pressed(a.on)) {
+        if cx.ctl.reg(ui, &r, C::new(&a.id, &label, TRAY).pressed(a.on).role("listitem")) {
             cx.acts.push(Act::Choose(a.via, a.text.clone()));
         }
     }

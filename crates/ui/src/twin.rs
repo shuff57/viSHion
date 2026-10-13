@@ -11,13 +11,14 @@ pub const HEADER: u8 = 0;
 pub const SCAN: u8 = 1;
 pub const TEXT: u8 = 2;
 pub const TRAY: u8 = 3;
-/// A modal dialog: while one is open it is the only thing in the twin.
+/// A modal dialog: while one is open it is the only thing in the twin besides the screen's h1.
 pub const DIALOG: u8 = 4;
 
 #[derive(Clone, PartialEq, Debug)]
 pub struct Reg {
     pub id: String,
-    /// "button" or "textbox".
+    /// "button", "textbox", "checkbox" or "switch" (state in `pressed`, exposed as aria-checked) or
+    /// "listitem" (a button inside a list item of its group, see `a11y::group_of`).
     pub role: &'static str,
     pub label: String,
     pub pressed: Option<bool>,
@@ -49,7 +50,8 @@ pub enum Node {
     /// line being read (web: `data-reading`, so the underline is observable without pixels).
     Para { id: String, parts: Vec<Part>, region: u8, pos: (i32, i32), keys: bool, reading: bool },
     /// A focusable region that takes keys of its own (`keys` names the set: stage, transcript, strip).
-    Group { id: String, label: String, keys: &'static str, region: u8, pos: (i32, i32) },
+    /// `at`/`size`: its rectangle in points; the web twin is laid over the canvas there.
+    Group { id: String, label: String, keys: &'static str, region: u8, pos: (i32, i32), at: (i32, i32), size: (u16, u16) },
     Control(Reg),
 }
 

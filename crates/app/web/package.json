@@ -5,9 +5,11 @@
   "scripts": {
     "build": "node build.mjs",
     "serve": "node serve.mjs",
-    "check": "node check.mjs"
+    "check": "node check.mjs",
+    "a11y": "node a11y.mjs"
   },
   "devDependencies": {
+    "axe-core": "4.10.2",
     "playwright-core": "1.57.0",
     "wasm-opt": "^1.4.0",
     "wrangler": "4.59.2"

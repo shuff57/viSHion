@@ -8,6 +8,7 @@
 //! - egui would swallow Tab on the canvas (eframe `preventDefault`s it), so a capture-phase listener keeps
 //!   Tab away from eframe and lets the browser move focus: no keyboard trap;
 //! - eframe's IME text agent `<input>` is named and removed from the Tab order.
+use crate::a11y;
 use crate::twin::{Node, Part, Reg};
 use crate::Queue;
 use wasm_bindgen::prelude::*;
@@ -217,11 +218,14 @@ struct Spec {
     text: Option<String>,
     value: Option<String>,
     children: Option<Vec<Spec>>,
+    /// Position and size in CSS pixels. The twin is laid over the canvas where its widget is drawn, so
+    /// touch exploration (VoiceOver, TalkBack) and magnifier focus tracking land on the right place.
+    rect: Option<(i32, i32, i32, i32)>,
 }
 
 impl Spec {
     fn new(key: &str, tag: &'static str) -> Spec {
-        Spec { key: key.into(), tag, attrs: vec![], text: None, value: None, children: None }
+        Spec { key: key.into(), tag, attrs: vec![], text: None, value: None, children: None, rect: None }
     }
     fn attr(mut self, k: &'static str, v: impl Into<String>) -> Spec {
         self.attrs.push((k, Some(v.into())));
@@ -229,6 +233,10 @@ impl Spec {
     }
     fn text(mut self, t: &str) -> Spec {
         self.text = Some(t.into());
+        self
+    }
+    fn kids(mut self, kids: Vec<Spec>) -> Spec {
+        self.children = Some(kids);
         self
     }
 }
@@ -243,28 +251,52 @@ fn control(r: &Reg) -> Spec {
         }
         s
     } else {
-        Spec::new(&r.id, "button").attr("type", "button").text(&r.label)
+        let mut s = Spec::new(&r.id, "button").attr("type", "button").text(&r.label);
+        if matches!(r.role, "checkbox" | "switch") {
+            s = s.attr("role", r.role);
+        }
+        s
     };
-    s.attrs.push(("aria-pressed", r.pressed.map(|p| if p { "true".to_string() } else { "false".to_string() })));
+    let state = r.pressed.map(|p| if p { "true".to_string() } else { "false".to_string() });
+    if matches!(r.role, "checkbox" | "switch") {
+        s.attrs.push(("aria-checked", state));
+    } else {
+        s.attrs.push(("aria-pressed", state));
+    }
     s.attrs.push(("disabled", if r.disabled { Some(String::new()) } else { None }));
+    if r.size.0 > 0 && r.size.1 > 0 {
+        s.rect = Some((r.at.0, r.at.1, r.size.0 as i32, r.size.1 as i32));
+    }
     s
 }
 
 fn spec_of(n: &Node) -> Spec {
     match n {
-        Node::Heading { id, level, text, .. } => Spec::new(id, match level {
-            1 => "h1",
-            2 => "h2",
-            _ => "h3",
-        })
-        .text(text),
-        // a problem the person has to act on is announced at once (role=alert), the rest politely
+        Node::Heading { id, level, text, .. } => {
+            let s = Spec::new(id, match level {
+                1 => "h1",
+                2 => "h2",
+                _ => "h3",
+            })
+            .text(text);
+            // the screen's h1 takes focus when a different screen replaces it (see `restore_focus`)
+            if *level == 1 {
+                s.attr("tabindex", "-1")
+            } else {
+                s
+            }
+        }
+        // a problem the person has to act on is announced at once (role=alert), the rest politely. The
+        // toast is spoken through `announce` (an element that arrives with its text is often not read).
+        Node::Status { id, text, .. } if id == "toast" => Spec::new(id, "p").text(text),
         Node::Status { id, text, .. } => Spec::new(id, "div").attr("role", if id.ends_with("-error") { "alert" } else { "status" }).text(text),
-        Node::Group { id, label, keys, .. } => Spec::new(id, "div")
-            .attr("role", "group")
-            .attr("tabindex", "0")
-            .attr("aria-label", label.clone())
-            .attr("data-keys", *keys),
+        Node::Group { id, label, keys, at, size, .. } => {
+            let mut s = Spec::new(id, "div").attr("role", "group").attr("tabindex", "0").attr("aria-label", label.clone()).attr("data-keys", *keys);
+            if size.0 > 0 && size.1 > 0 {
+                s.rect = Some((at.0, at.1, size.0 as i32, size.1 as i32));
+            }
+            s
+        }
         Node::Text { id, text, .. } => Spec::new(id, "p").text(text),
         Node::Para { id, parts, reading, .. } => {
             let mut p = Spec::new(id, "p");
@@ -274,7 +306,11 @@ fn spec_of(n: &Node) -> Spec {
             for (i, part) in parts.iter().enumerate() {
                 kids.push(match part {
                     Part::Text(t) => Spec::new(&format!("{id}#t{i}"), "span").text(t),
-                    Part::Math(t) => Spec::new(&format!("{id}#m{i}"), "span").attr("role", "math").text(t),
+                    // spoken as words (aria-label), still readable as TeX (the text)
+                    Part::Math(t) => Spec::new(&format!("{id}#m{i}"), "span")
+                        .attr("role", "math")
+                        .attr("aria-label", a11y::tex_speech(t))
+                        .text(t),
                     Part::Control(r) => control(r),
                 });
             }
@@ -285,9 +321,114 @@ fn spec_of(n: &Node) -> Spec {
     }
 }
 
+/// The nodes of one region as specs: consecutive related controls (`a11y::group_of`) share a group element,
+/// and list items sit in `<li>`s of their `<ul>`.
+fn region_specs(nodes: &[&Node]) -> Vec<Spec> {
+    let mut out: Vec<Spec> = vec![];
+    let mut open: Option<(&'static str, Spec)> = None;
+    let flush = |open: &mut Option<(&'static str, Spec)>, out: &mut Vec<Spec>| {
+        if let Some((_, g)) = open.take() {
+            out.push(g);
+        }
+    };
+    for n in nodes {
+        let grp = match n {
+            Node::Control(r) => a11y::group_of(&r.id),
+            _ => None,
+        };
+        let Some((key, role, label)) = grp else {
+            flush(&mut open, &mut out);
+            out.push(spec_of(n));
+            continue;
+        };
+        if open.as_ref().map(|(k, _)| *k) != Some(key) {
+            flush(&mut open, &mut out);
+            let g = if role == "list" {
+                Spec::new(&format!("grp-{key}"), "ul").attr("role", "list")
+            } else {
+                Spec::new(&format!("grp-{key}"), "div").attr("role", role)
+            };
+            open = Some((key, g.attr("aria-label", label).kids(vec![])));
+        }
+        let item = spec_of(n);
+        if let Some((_, g)) = open.as_mut() {
+            let kids = g.children.get_or_insert_with(Vec::new);
+            if role == "list" {
+                kids.push(Spec::new(&format!("li:{}", item.key), "li").kids(vec![item]));
+            } else {
+                kids.push(item);
+            }
+        }
+    }
+    flush(&mut open, &mut out);
+    out
+}
+
+/// The whole twin: banner, `<main>` (page image, transcript), the word panel and a dialog, each a landmark.
+fn structure(nodes: &[Node]) -> Vec<Spec> {
+    let mut regions: Vec<(u8, Vec<&Node>)> = vec![];
+    for n in nodes {
+        let r = n.key().0;
+        match regions.last_mut() {
+            Some((k, v)) if *k == r => v.push(n),
+            _ => regions.push((r, vec![n])),
+        }
+    }
+    let mut top: Vec<Spec> = vec![];
+    let mut main: Vec<Spec> = vec![];
+    for (region, list) in &regions {
+        let kids = region_specs(list);
+        let mut s = Spec::new(&format!("region-{region}"), "div").attr("data-region", region.to_string());
+        if let Some((role, label)) = a11y::landmark(*region, list) {
+            s = s.attr("role", role);
+            if !label.is_empty() {
+                s = s.attr("aria-label", label);
+            }
+            if role == "dialog" {
+                s = s.attr("aria-modal", "true");
+            }
+        }
+        let s = s.kids(kids);
+        if a11y::in_main(*region) {
+            main.push(s);
+        } else {
+            // `main` goes where its first region is, between the banner and the word panel
+            if !main.is_empty() {
+                top.push(Spec::new("main", "div").attr("role", "main").kids(std::mem::take(&mut main)));
+            }
+            top.push(s);
+        }
+    }
+    if !main.is_empty() {
+        top.push(Spec::new("main", "div").attr("role", "main").kids(main));
+    }
+    top
+}
+
 fn find_child(parent: &web_sys::Element, key: &str) -> Option<web_sys::Element> {
     let kids = parent.children();
     (0..kids.length()).filter_map(|i| kids.item(i)).find(|k| k.get_attribute("data-id").as_deref() == Some(key))
+}
+
+fn set_style(el: &web_sys::Element, rect: Option<(i32, i32, i32, i32)>) {
+    let Some(style) = el.dyn_ref::<web_sys::HtmlElement>().map(|h| h.style()) else { return };
+    match rect {
+        Some((x, y, w, h)) => {
+            let want = [("position", "absolute".to_string()), ("left", format!("{x}px")), ("top", format!("{y}px")), ("width", format!("{w}px")), ("height", format!("{h}px")), ("margin", "0".to_string())];
+            for (k, v) in want {
+                if style.get_property_value(k).ok().as_deref() != Some(v.as_str()) {
+                    let _ = style.set_property(k, &v);
+                }
+            }
+        }
+        None => {
+            if style.length() > 0 {
+                for k in ["position", "left", "top", "width", "height", "margin"] {
+                    let _ = style.remove_property(k);
+                }
+            }
+        }
+    }
 }
 
 /// Make `parent`'s children equal `specs`, reusing nodes by `data-id`. Stale nodes go first, then each
@@ -335,6 +476,8 @@ fn reconcile(doc: &web_sys::Document, parent: &web_sys::Element, specs: &[Spec])
                 }
             }
         }
+        // attributes a role change leaves behind (a button that was a checkbox) are not kept
+        set_style(&el, sp.rect);
         if let Some(t) = &sp.text {
             if el.text_content().as_deref() != Some(t.as_str()) {
                 el.set_text_content(Some(t));
@@ -364,8 +507,97 @@ fn reconcile(doc: &web_sys::Document, parent: &web_sys::Element, specs: &[Spec])
     }
 }
 
+const FOCUSABLE: &str = "button:not([disabled]), input:not([disabled]), [tabindex=\"0\"]";
+
+fn region_of(el: &web_sys::Element) -> Option<web_sys::Element> {
+    el.closest("[data-region]").ok().flatten()
+}
+
+fn focusables(root: &web_sys::Element) -> Vec<web_sys::HtmlElement> {
+    let Ok(list) = root.query_selector_all(FOCUSABLE) else { return vec![] };
+    (0..list.length()).filter_map(|i| list.item(i)).filter_map(|n| n.dyn_into::<web_sys::HtmlElement>().ok()).collect()
+}
+
+fn h1_ids(h: &web_sys::Element) -> Vec<String> {
+    let Ok(list) = h.query_selector_all("h1") else { return vec![] };
+    (0..list.length()).filter_map(|i| list.item(i)).filter_map(|n| n.dyn_into::<web_sys::Element>().ok()).filter_map(|e| e.get_attribute("data-id")).collect()
+}
+
+/// Reconcile the twin with this frame's nodes and keep keyboard focus somewhere sensible (WCAG 2.4.3):
+/// when the focused control is removed or disabled by the action it started, focus goes to the new screen's
+/// heading if a different screen came up, else to the neighbour that took its place in the same region.
+/// Without this it would fall to `<body>` and the next Tab would start from the top of the page.
 pub fn sync(nodes: &[Node]) {
     let (Some(h), Some(doc)) = (host(), document()) else { return };
-    let specs: Vec<Spec> = nodes.iter().map(spec_of).collect();
+    let was = doc.active_element().filter(|a| h.contains(Some(a)) && !a.is_same_node(Some(&h)));
+    // where the focused control was: its region and place among that region's focusable controls
+    let was_at = was.as_ref().and_then(|a| {
+        let reg = region_of(a)?;
+        let idx = focusables(&reg).iter().position(|f| f.is_same_node(Some(a)))?;
+        Some((reg.get_attribute("data-id")?, idx))
+    });
+    let was_id = was.as_ref().and_then(|a| a.get_attribute("data-id"));
+    let h1_before = h1_ids(&h);
+    let specs = structure(nodes);
     reconcile(&doc, &h, &specs);
+    let Some(was) = was else { return };
+    let now = doc.active_element();
+    let disabled_still_active = was.has_attribute("disabled") && now.as_ref().is_some_and(|n| n.is_same_node(Some(&was)));
+    if was.is_connected() && !disabled_still_active {
+        return; // focus is where the person put it
+    }
+    // a new screen heading wins
+    if let Some(new_h1) = h1_ids(&h).into_iter().find(|i| !h1_before.contains(i)) {
+        focus(&new_h1);
+        return;
+    }
+    // the same control, rebuilt (its element type changed)
+    if let Some(id) = was_id {
+        focus(&id);
+        if doc.active_element().is_some_and(|a| a.get_attribute("data-id").as_deref() == Some(id.as_str())) {
+            return;
+        }
+    }
+    if let Some((region, idx)) = was_at {
+        if let Some(reg) = find_child_deep(&h, &region) {
+            let list = focusables(&reg);
+            if !list.is_empty() {
+                let _ = list[idx.min(list.len() - 1)].focus();
+                return;
+            }
+        }
+    }
+    if let Some(first) = focusables(&h).first() {
+        let _ = first.focus();
+    }
+}
+
+fn find_child_deep(h: &web_sys::Element, id: &str) -> Option<web_sys::Element> {
+    let list = h.query_selector_all("[data-region]").ok()?;
+    (0..list.length()).filter_map(|i| list.item(i)).filter_map(|n| n.dyn_into::<web_sys::Element>().ok()).find(|e| e.get_attribute("data-id").as_deref() == Some(id))
+}
+
+/// Speak `text` through the page's live regions (`#announce` polite, `#announce-alert` assertive). The same
+/// sentence twice in a row gets a trailing no-break space so the second one is still a change.
+pub fn announce(text: &str, assertive: bool) {
+    let Some(doc) = document() else { return };
+    let Some(el) = doc.get_element_by_id(if assertive { "announce-alert" } else { "announce" }) else { return };
+    let mut t = text.to_string();
+    if el.text_content().as_deref() == Some(t.as_str()) {
+        t.push('\u{a0}');
+    }
+    el.set_text_content(Some(&t));
+}
+
+/// A media query, e.g. `(prefers-reduced-motion: reduce)`.
+pub fn media(query: &str) -> bool {
+    web_sys::window().and_then(|w| w.match_media(query).ok().flatten()).is_some_and(|m| m.matches())
+}
+
+/// Record the user's display preferences on the twin, where tests (and curious people) can see them.
+pub fn mark_preferences(reduced_motion: bool, high_contrast: bool) {
+    if let Some(h) = host() {
+        let _ = h.set_attribute("data-reduced-motion", if reduced_motion { "1" } else { "0" });
+        let _ = h.set_attribute("data-high-contrast", if high_contrast { "1" } else { "0" });
+    }
 }

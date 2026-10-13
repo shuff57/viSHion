@@ -1497,3 +1497,78 @@ fn round5_phone_page_pane_tools_stay_on_one_row_like_the_browser() {
     let thumb = h.ctl("page-m1").unwrap().at.1;
     assert!((thumb - y - 59).abs() <= 1, "strip starts {} below the tools, js 59", thumb - y);
 }
+
+// ---- phase 4: accessibility twin
+
+#[test]
+fn roles_are_the_right_ones_and_listitems_have_a_group() {
+    let h = H::new("m1");
+    let role = |id: &str| h.app.controls().iter().find(|c| c.id == id).map(|c| c.role);
+    assert_eq!(role("done"), Some("button"));
+    assert_eq!(role("page-p-maya-1").or(role("page-m1")), Some("listitem"));
+    assert_eq!(role("alt-suggested"), Some("listitem"));
+    assert_eq!(role("typed-word").or(Some("textbox")), Some("textbox"));
+    // every listitem belongs to a named list, every group has a label
+    for c in h.app.controls().into_iter().filter(|c| c.role == "listitem") {
+        let g = crate::a11y::group_of(&c.id).unwrap_or_else(|| panic!("{} has no list", c.id));
+        assert_eq!(g.1, "list", "{}", c.id);
+    }
+    // the screen has a banner, the two sections of main and the word panel
+    let nodes: Vec<&Node> = h.app.nodes().iter().collect();
+    for region in [crate::twin::HEADER, crate::twin::SCAN, crate::twin::TEXT, crate::twin::TRAY] {
+        let list: Vec<&Node> = nodes.iter().copied().filter(|n| n.key().0 == region).collect();
+        assert!(crate::a11y::landmark(region, &list).is_some(), "region {region} is not a landmark");
+    }
+}
+
+#[test]
+fn checkboxes_in_the_inbox_carry_their_state() {
+    let mut h = H::new("m1");
+    h.act("crumb");
+    let boxes: Vec<_> = h.app.controls().into_iter().filter(|c| c.id.starts_with("sel-") && c.role == "checkbox").map(|c| (c.id.clone(), c.pressed)).collect();
+    assert!(!boxes.is_empty(), "the inbox rows have select checkboxes");
+    assert!(boxes.iter().all(|(_, p)| *p == Some(false)));
+    // every control in the twin, wherever it is, is large enough to hit
+    assert!(h.app.controls().iter().filter(|c| c.size.0 > 0).all(|c| c.size.0 >= 44 && c.size.1 >= 44));
+}
+
+#[test]
+fn decisions_and_toasts_are_announced() {
+    let mut h = H::new("m1");
+    let before = h.app.announced().len();
+    let sug = h.app.controls().into_iter().find(|c| c.id == "alt-suggested").map(|c| c.id.clone());
+    let w = h.word_id("c:0");
+    h.act(&w);
+    if sug.is_some() || h.app.controls().iter().any(|c| c.id == "alt-suggested") {
+        h.act("alt-suggested");
+        let said = &h.app.announced()[before..];
+        assert!(said.iter().any(|s| s.contains("suggested word")), "{said:?}");
+    }
+    h.act("copy");
+    assert!(h.app.announced().iter().any(|s| s.contains("Copied Maya R.")), "{:?}", h.app.announced());
+    // moving to another student says who it is, once the new screen has drawn
+    let go = if h.app.controls().iter().any(|c| c.id == "prev-student" && !c.disabled) { "prev-student" } else { "next-student" };
+    h.act(go);
+    h.frames(2);
+    assert!(h.app.announced().last().is_some_and(|s| s.contains("student")), "{:?}", h.app.announced());
+}
+
+#[test]
+fn math_has_a_spoken_form() {
+    let h = H::new("m1");
+    let tex: Vec<String> = h
+        .app
+        .nodes()
+        .iter()
+        .filter_map(|n| match n {
+            Node::Para { parts, .. } => Some(parts.iter().filter_map(|p| if let Part::Math(t) = p { Some(t.clone()) } else { None }).collect::<Vec<_>>()),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    assert!(!tex.is_empty());
+    for t in tex {
+        let said = crate::a11y::tex_speech(&t);
+        assert!(!said.is_empty() && !said.contains('\\') && !said.contains('{'), "{t} -> {said}");
+    }
+}

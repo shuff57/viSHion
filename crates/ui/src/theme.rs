@@ -121,6 +121,20 @@ pub const DARK: Tokens = Tokens {
     warn_line: rgb(0x7A6516),
 };
 
+/// The same themes with the quiet greys pulled up to the ink colour and hairlines made visible, for people who
+/// ask the system for more contrast (`prefers-contrast: more`, Windows contrast themes: `forced-colors`).
+pub const LIGHT_HC: Tokens = Tokens { muted: LIGHT.ink, faint: rgb(0x3A4256), line: rgb(0x5A6477), line2: LIGHT.ink, ..LIGHT };
+pub const DARK_HC: Tokens = Tokens { muted: DARK.ink, faint: rgb(0xC9D1E0), line: rgb(0x9AA5B8), line2: DARK.ink, ..DARK };
+
+/// `pick`, with the high contrast variant when the person asked for more contrast.
+pub fn pick_hc(setting: &str, system_dark: bool, high_contrast: bool) -> &'static Tokens {
+    match (pick(setting, system_dark).dark, high_contrast) {
+        (false, true) => &LIGHT_HC,
+        (true, true) => &DARK_HC,
+        _ => pick(setting, system_dark),
+    }
+}
+
 /// `settings.theme`: "light", "dark" or anything else (auto: follow the system).
 pub fn pick(setting: &str, system_dark: bool) -> &'static Tokens {
     match setting {

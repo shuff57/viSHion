@@ -169,14 +169,14 @@ fn change_student(
             for (i, n) in names.iter().enumerate() {
                 let on = pick.as_deref() == Some(n.as_str()) && !*new_student;
                 let look = if on { Look::Primary } else { Look::Outline };
-                if widgets::button(ctl, ui, t, C::new(&format!("cs-student-{i}"), n, DIALOG).pressed(on), n, look, 0.0) {
+                if widgets::button(ctl, ui, t, C::new(&format!("cs-student-{i}"), n, DIALOG).pressed(on).role("listitem"), n, look, 0.0) {
                     *pick = Some(n.clone());
                     *new_student = false;
                     *error = false;
                 }
             }
             let look = if *new_student { Look::Primary } else { Look::Outline };
-            if widgets::button(ctl, ui, t, C::new("cs-new", "A new student\u{2026}", DIALOG).pressed(*new_student), "A new student\u{2026}", look, 0.0) {
+            if widgets::button(ctl, ui, t, C::new("cs-new", "A new student\u{2026}", DIALOG).pressed(*new_student).role("listitem"),"A new student\u{2026}", look, 0.0) {
                 *new_student = true;
                 *error = false;
             }

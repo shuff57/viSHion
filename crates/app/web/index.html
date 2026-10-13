@@ -11,14 +11,23 @@
   html, body { margin: 0; height: 100%; background: #EEF1F5; }
   @media (prefers-color-scheme: dark) { html, body { background: #0F131C; } }
   canvas { width: 100%; height: 100%; display: block; }
-  /* hidden-DOM control layer (a11y twin): visually hidden until a twin has keyboard focus */
-  .sr { position: absolute; left: 0; top: 0; width: 1px; height: 1px; overflow: hidden; opacity: 0; }
-  .sr:focus-within { opacity: 1; }
+  /* hidden-DOM twin (a11y): laid over the canvas with every control at the rectangle it is drawn in, so touch
+     exploration and magnifier tracking land in the right place; invisible (the canvas draws the focus ring) and
+     never hit by the pointer (clicks go to the canvas; assistive technology activates through the DOM).
+     overflow: clip, unlike hidden, can never be scrolled, so focus() on an off-screen control cannot shift it. */
+  #controls { position: fixed; inset: 0; overflow: clip; opacity: 0; pointer-events: none; }
+  #controls p, #controls h1, #controls h2, #controls h3, #controls ul { margin: 0; padding: 0; list-style: none; }
+  /* live regions: always in the document (one that appears together with its text is often not spoken) */
+  .live { position: absolute; left: 0; top: 0; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  /* Windows contrast themes: the page behind the canvas takes the system colours */
+  @media (forced-colors: active) { html, body { background: Canvas; } }
 </style>
 </head>
 <body>
 <canvas id="c" tabindex="-1" aria-hidden="true"></canvas>
-<div id="controls" class="sr" role="region" aria-label="Controls"></div>
+<div id="controls"></div>
+<div id="announce" class="live" role="status" aria-live="polite" aria-atomic="true"></div>
+<div id="announce-alert" class="live" role="alert" aria-live="assertive" aria-atomic="true"></div>
 <noscript>viSHion needs JavaScript and WebAssembly.</noscript>
 <script type="module">
 import init, { start } from './vishion_app.js';
