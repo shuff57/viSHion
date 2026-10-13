@@ -179,6 +179,9 @@ pub struct Session {
     pub multi: BTreeSet<String>,
     /// The inbox filter tab.
     pub filter: Filter,
+    /// Where the transcript pane should scroll to now (`meta.ui.scroll` when it belongs to the selected
+    /// page, else the top). The counter changes with every request so the screen applies each once.
+    pub scroll_req: Option<(u32, f32)>,
 }
 
 fn ui_str<'a>(a: &'a Assignment, k: &str) -> Option<&'a str> {
@@ -231,7 +234,9 @@ impl Session {
             zoom: 1.0,
             multi: BTreeSet::new(),
             filter: Filter::All,
+            scroll_req: None,
         };
+        s.request_scroll();
         s.sync_tray();
         s
     }
@@ -644,11 +649,36 @@ impl Session {
             .unwrap_or(0)
     }
 
+    /// `change:selectedId`: `pane.scrollTop = ui.scrollId === selectedId ? ui.scroll || 0 : 0`.
+    fn request_scroll(&mut self) {
+        let ui = self.a.meta.get("ui");
+        let saved = ui.and_then(|u| u.get("scrollId")).and_then(Value::as_str);
+        let off = if saved.is_some() && saved == self.selected.as_deref() {
+            ui.and_then(|u| u.get("scroll")).map(jsx::number).filter(|v| v.is_finite()).unwrap_or(0.0)
+        } else {
+            0.0
+        };
+        let n = self.scroll_req.map_or(0, |(n, _)| n) + 1;
+        self.scroll_req = Some((n, off.max(0.0) as f32));
+    }
+
+    /// The transcript pane stopped scrolling at `y` (js: debounced `scroll` handler of `#tx-pane`):
+    /// `meta.ui.scroll` and `meta.ui.scrollId` follow, and the project is saved.
+    pub fn set_scroll(&mut self, y: f32) {
+        let Some(id) = self.selected.clone() else { return };
+        let mut ui = self.a.meta.get("ui").and_then(Value::as_object).cloned().unwrap_or_default();
+        ui.insert("scroll".into(), jsx::num_value(y as f64));
+        ui.insert("scrollId".into(), json!(id));
+        self.a.meta.set_carried("ui", Value::Object(ui));
+        self.dirty.meta = true;
+    }
+
     pub fn select(&mut self, id: &str) {
         if !self.a.pages.contains_key(id) || self.selected.as_deref() == Some(id) {
             return;
         }
         self.selected = Some(id.to_string());
+        self.request_scroll();
         let mut ui = self.a.meta.get("ui").and_then(Value::as_object).cloned().unwrap_or_default();
         ui.insert("selectedId".into(), json!(id));
         self.a.meta.set_carried("ui", Value::Object(ui));
@@ -780,11 +810,9 @@ impl Session {
         }
         let (Some(a), Some(b)) = (self.a.index_of(id), self.a.index_of(&g.pages[j as usize])) else { return false };
         self.a.move_page(a as i64, b as i64);
+        // `S.movePage` reindexes in memory and saves only the project: untouched pages keep the `order`
+        // they were stored with until something else saves them
         self.dirty.meta = true;
-        // every page's `order` follows the new order
-        for p in self.a.pages.keys() {
-            self.dirty.pages.insert(p.clone());
-        }
         true
     }
 
@@ -931,12 +959,9 @@ impl Session {
     pub fn pages_added(&mut self, list: Vec<Page>) {
         let ids: Vec<String> = list.iter().map(|p| p.id().to_string()).collect();
         self.a.add_pages(list);
+        // `S.addPages` saves the new pages only; the others are renumbered in memory
         for id in ids {
             self.dirty.pages.insert(id);
-        }
-        // add_pages renumbers `order` on every page
-        for id in self.a.pages.keys() {
-            self.dirty.pages.insert(id.clone());
         }
         self.dirty.meta = true;
     }

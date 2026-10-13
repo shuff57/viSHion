@@ -43,6 +43,11 @@ pub(crate) struct Stage {
     /// Height of the transcript's scroll area last frame: when the tray grows (its crop arrives, the options
     /// wrap) the selected word is brought back into view.
     text_h: f32,
+    /// Last `Session::scroll_req` applied, the offset the transcript pane was last seen at, and a change
+    /// waiting out the 600 ms debounce of review.js (offset, egui time it was seen).
+    scroll_epoch: u32,
+    scroll_seen: f32,
+    scroll_pending: Option<(f32, f64)>,
 }
 
 pub(crate) enum Act {
@@ -84,6 +89,7 @@ pub(crate) enum Act {
     ClearMulti,
     Filter(state::Filter),
     SelectGroup(String, bool),
+    Scrolled(f32),
     RetryIds(Vec<String>),
     Dialog(dialog::Out),
 }
@@ -229,7 +235,7 @@ pub(crate) fn show(app: &mut App, ctx: &egui::Context, t: &Tokens) {
     if let Some(s) = session.as_mut() {
         s.now = crate::now_ms();
         for a in acts {
-            if !matches!(a, Act::ReadLine(_) | Act::ReadMove(_) | Act::ReadClear | Act::Zoom(_) | Act::ZoomSet(_) | Act::Dialog(_) | Act::CloseDialog) {
+            if !matches!(a, Act::ReadLine(_) | Act::ReadMove(_) | Act::ReadClear | Act::Zoom(_) | Act::ZoomSet(_) | Act::Dialog(_) | Act::CloseDialog | Act::Scrolled(_)) {
                 *status_msg = None;
             }
             apply(a, s, ctx, ctl, typed, status_msg, status_err, dialog, &send);
@@ -496,6 +502,7 @@ fn apply(
         }
         Act::ClearMulti => s.multi.clear(),
         Act::Filter(f) => s.filter = f,
+        Act::Scrolled(y) => s.set_scroll(y),
         Act::SelectGroup(key, on) => {
             if let Some(g) = s.groups().into_iter().find(|g| g.key == key) {
                 for id in g.pages {
@@ -1157,10 +1164,33 @@ fn review_panes(ctx: &egui::Context, cx: &mut Cx, s: &Session, narrow: bool) {
                             cx.stage.tray_h = out.content_size.y;
                         });
                 }
-                let out = egui::ScrollArea::vertical().auto_shrink([false, false]).id_source("text-scroll").show(ui, |ui| {
+                let mut area = egui::ScrollArea::vertical().auto_shrink([false, false]).id_source("text-scroll");
+                if let Some((n, off)) = s.scroll_req {
+                    if cx.stage.scroll_epoch != n {
+                        cx.stage.scroll_epoch = n;
+                        cx.stage.scroll_seen = off;
+                        area = area.vertical_scroll_offset(off);
+                    }
+                }
+                let out = area.show(ui, |ui| {
                     text_column(ui, cx, s, g.as_ref(), &entries);
                 });
                 note_view_height(cx, out.inner_rect.height());
+                // review.js: `pane.addEventListener('scroll', debounce(save, 600))`
+                let y = out.state.offset.y;
+                let now = ui.input(|i| i.time);
+                if (y - cx.stage.scroll_seen).abs() > 0.5 {
+                    cx.stage.scroll_seen = y;
+                    cx.stage.scroll_pending = Some((y, now));
+                }
+                if let Some((py, at)) = cx.stage.scroll_pending {
+                    if now - at >= 0.6 {
+                        cx.stage.scroll_pending = None;
+                        cx.acts.push(Act::Scrolled(py));
+                    } else {
+                        ui.ctx().request_repaint_after(std::time::Duration::from_millis(650));
+                    }
+                }
             });
         if s.split {
             // `.text { border-left: 1px solid var(--line) }`

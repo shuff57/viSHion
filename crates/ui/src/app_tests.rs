@@ -15,6 +15,8 @@ struct H {
     copied: String,
     /// Screen size in points (1280 x 800 unless a test asks for a phone).
     size: (f32, f32),
+    /// Raw events for the next frame (mouse wheel).
+    events: Vec<egui::Event>,
 }
 
 impl H {
@@ -27,7 +29,7 @@ impl H {
         s.select(select);
         s.take_dirty();
         app.open_session(s, "Saved to your folder");
-        let mut h = H { app, ctx, sent, t: 0.0, out: Default::default(), copied: String::new(), size: (1280.0, 800.0) };
+        let mut h = H { app, ctx, sent, t: 0.0, out: Default::default(), copied: String::new(), size: (1280.0, 800.0), events: vec![] };
         h.frames(3);
         h
     }
@@ -35,11 +37,12 @@ impl H {
     fn frames(&mut self, n: usize) {
         for _ in 0..n {
             self.t += 0.1;
-            let input = egui::RawInput {
+            let mut input = egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(self.size.0, self.size.1))),
                 time: Some(self.t),
                 ..Default::default()
             };
+            input.events.append(&mut self.events);
             let app = &mut self.app;
             self.out = self.ctx.run(input, |c| app.step(c, false));
             if !self.out.platform_output.copied_text.is_empty() {
@@ -52,6 +55,14 @@ impl H {
         assert!(self.app.controls().iter().any(|c| c.id == id), "no control {id}");
         self.app.queue.lock().unwrap().push(format!("act:{id}"));
         self.frames(3);
+    }
+
+    /// Wheel over the transcript pane by `dy` points (positive scrolls down), then settle.
+    fn wheel(&mut self, dy: f32) {
+        self.events.push(egui::Event::PointerMoved(egui::pos2(900.0, 300.0)));
+        self.frames(1);
+        self.events.push(egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: egui::vec2(0.0, -dy), modifiers: Default::default() });
+        self.frames(30);
     }
 
     fn s(&self) -> &state::Session {
@@ -719,7 +730,10 @@ fn strip_keys_step_jump_delete_and_reorder() {
     let order = h.s().a.meta.order();
     let pos = |id: &str| order.iter().position(|x| x == id).unwrap();
     assert!(pos("m2") < pos("m1"), "{order:?}");
-    assert!(h.take_cmds().iter().any(|c| matches!(c, Cmd::SaveMeta { .. })));
+    let cmds = h.take_cmds();
+    assert!(cmds.iter().any(|c| matches!(c, Cmd::SaveMeta { .. })));
+    // js writes the project only: no page file is rewritten for a reorder (blind critic round 3)
+    assert!(!cmds.iter().any(|c| matches!(c, Cmd::SavePage { .. })), "{cmds:?}");
     assert_eq!(h.s().group().unwrap().pages, vec!["m2".to_string(), "m1".to_string()]);
     // Delete asks first
     h.focus("page-m1");
@@ -1113,4 +1127,30 @@ fn blind3_desktop_open_keeps_student_name_and_pill_on_screen() {
     let w = h.ctl(&h.word_id("c:0")).unwrap().at.1;
     let tray = blind_node_y(&h, "tray-title").unwrap();
     assert!(w + 44 <= tray + 24, "word target at {w}, tray title at {tray}");
+}
+
+/// Blind critic round 3: js writes `meta.ui.scroll` and `meta.ui.scrollId` when the transcript pane scrolls
+/// (debounced 600 ms) and restores them when that page is selected again.
+#[test]
+fn blind3_transcript_scroll_position_is_persisted_and_restored() {
+    let mut h = H::new("m1");
+    h.with_picture();
+    h.frames(10);
+    h.take_cmds();
+    h.size = (1280.0, 520.0);
+    h.frames(5);
+    h.wheel(160.0);
+    h.frames(15);
+    let ui = h.s().a.meta.get("ui").cloned().unwrap();
+    let y = ui.get("scroll").and_then(|v| v.as_f64()).unwrap_or(-1.0);
+    assert!(y > 20.0, "scroll was not written: {ui}");
+    assert_eq!(ui.get("scrollId").and_then(|v| v.as_str()), Some("m1"));
+    assert!(h.take_cmds().iter().any(|c| matches!(c, Cmd::SaveMeta { .. })), "the project is saved");
+    // other fields of meta.ui stay (selectedId, layout)
+    // leave the page and come back: the saved offset is asked for again
+    h.act("page-m2");
+    assert_eq!(h.s().scroll_req.map(|(_, o)| o), Some(0.0), "another page starts at the top");
+    h.act("page-m1");
+    let back = h.s().scroll_req.map(|(_, o)| o).unwrap();
+    assert!((back as f64 - y).abs() < 1.0, "restored {back}, saved {y}");
 }
