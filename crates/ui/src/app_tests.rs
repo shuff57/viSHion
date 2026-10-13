@@ -925,9 +925,10 @@ fn critic_tray_body_wraps_like_the_design() {
     h.with_picture();
     let w = h.word_id("i:0");
     h.act(&w);
-    // 1280 split: the text pane is 640 wide, so the tray content is 560: stacked, options full width
+    // 1280 split: the text pane is 640 wide with a 1px border, so the tray content is 559: stacked, options
+    // full width (js: `button.alt` 559 wide)
     let alt = h.ctl("alt-marked").unwrap().size.0;
-    assert_eq!(alt, 560, "options use the whole row when the crop wraps above them");
+    assert_eq!(alt, 559, "options use the whole row when the crop wraps above them");
     let typed = h.ctl("typed-word").unwrap().size.0;
     assert!(typed >= 400, "typed input keeps its width ({typed})");
     // text only: 680 inside the tray, 280 + 20 for the crop leaves 380 for the options
@@ -1106,6 +1107,15 @@ fn blind3_desktop_open_keeps_student_name_and_pill_on_screen() {
     let mut h = H::new("m1");
     h.with_picture();
     h.frames(15);
+    // the top bar ends 8 + 1 below its lowest control (padding and the 1px border)
+    let bar = h.app.controls().iter().filter(|c| c.region == crate::twin::HEADER).map(|c| c.at.1 + c.size.1 as i32).max().unwrap() + 9;
     let name_y = blind_node_y(&h, "student-name").expect("student name heading");
-    assert!(name_y >= 111, "student name sits at {name_y}: scrolled under the 111px top bar");
+    assert!(name_y >= bar, "student name sits at {name_y}: scrolled under the {bar}px top bar");
+    // exactly one 32px of padding under the bar, as in js (unscrolled)
+    let c = h.ctl("change-student").unwrap();
+    assert!(c.at.1 >= bar + 32 + 36 + 6 + 19 + 4 - 2, "text pane was scrolled: Change student at {}", c.at.1);
+    // and the word being decided is above the tray without moving the pane
+    let w = h.ctl(&h.word_id("c:0")).unwrap().at.1;
+    let tray = blind_node_y(&h, "tray-title").unwrap();
+    assert!(w + 44 <= tray + 24, "word target at {w}, tray title at {tray}");
 }

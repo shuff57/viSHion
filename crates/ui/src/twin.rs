@@ -26,6 +26,8 @@ pub struct Reg {
     pub disabled: bool,
     pub region: u8,
     pub pos: (i32, i32),
+    /// Top-left corner in points, rounded (tests and layout dumps; `pos` is the coarse sort key).
+    pub at: (i32, i32),
     /// Hit-target size in points. Everything interactive must be at least 44 x 44.
     pub size: (u16, u16),
 }

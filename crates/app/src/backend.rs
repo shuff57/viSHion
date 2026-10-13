@@ -156,11 +156,19 @@ pub struct Backend {
     pub projects: Projects<AnyStore>,
     /// Shown in the save indicator.
     pub storage: String,
+    /// The sample assignment: reading a page answers with sample text (js/ocr.js demo mode) instead of
+    /// needing a server.
+    pub demo: bool,
 }
 
 impl Backend {
     pub fn new(store: AnyStore, storage: &str) -> Self {
-        Backend { projects: Projects::new(store), storage: storage.into() }
+        Backend { projects: Projects::new(store), storage: storage.into(), demo: false }
+    }
+
+    /// A backend over the in-memory sample assignment (`--demo`, `?demo=1`).
+    pub fn new_demo(store: AnyStore, storage: &str) -> Self {
+        Backend { demo: true, ..Self::new(store, storage) }
     }
 
     /// Open `want`, or the most recently updated assignment. Answers `Empty` / `Failed` / `Opened`.

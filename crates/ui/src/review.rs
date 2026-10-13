@@ -103,14 +103,32 @@ struct Cx<'a> {
 const TEXT_PX: f32 = 22.0;
 /// `line-height: 1.7` at 22px: the pitch of a transcript line.
 const PITCH: f32 = TEXT_PX * 1.7;
-/// Height of a flagged word's painted chip (`line-height: 1.35`).
-const CHIP_H: f32 = TEXT_PX * 1.35;
 /// `.tx-text { max-width: 31em }`
 const TEXT_MAX_W: f32 = 31.0 * TEXT_PX;
 /// `.katex { font-size: 1.21em }`: math is set 21% larger than the text around it.
 const KATEX_EM: f32 = 1.21;
 /// css/layout.css: below this width the panes stack and the header wraps.
 const NARROW: f32 = 900.0;
+
+/// Text in a CSS line box: `line_h` per line, wrapped at `wrap_w`. Returns the rect it took.
+fn css_text(ui: &mut Ui, text: &str, font: egui::FontId, color: Color32, line_h: f32, wrap_w: f32, anywhere: bool) -> Rect {
+    let mut job = egui::text::LayoutJob::single_section(
+        text.to_string(),
+        egui::TextFormat { font_id: font, color, line_height: Some(line_h), ..Default::default() },
+    );
+    job.wrap.max_width = wrap_w.max(1.0);
+    job.wrap.break_anywhere = anywhere;
+    let nat = ui.painter().layout_no_wrap("Hg".to_string(), font_id_of(&job), color).size().y;
+    let g = ui.painter().layout_job(job);
+    let (rect, _) = ui.allocate_exact_size(vec2(g.size().x.max(1.0), g.size().y.max(line_h)), Sense::hover());
+    // egui keeps the glyphs at the top of a taller or shorter row; a browser centres them (half-leading)
+    ui.painter().galley(rect.min + vec2(0.0, ((line_h - nat) / 2.0 + 0.2).round()), g, color);
+    rect
+}
+
+fn font_id_of(job: &egui::text::LayoutJob) -> egui::FontId {
+    job.sections.first().map(|s| s.format.font_id.clone()).unwrap_or_else(|| theme::sans(14.0))
+}
 
 fn tw(ui: &Ui, text: &str, font: egui::FontId) -> f32 {
     ui.painter().layout_no_wrap(text.to_string(), font, Color32::WHITE).size().x
@@ -143,10 +161,17 @@ pub(crate) fn show(app: &mut App, ctx: &egui::Context, t: &Tokens) {
                 scroll_sel: false,
                 scroll_read: false,
             };
-            egui::TopBottomPanel::top("hdr")
+            // `.topbar`: padding 8 and a 1px border at the bottom only, `gap: 4px 24px`, min-height 64
+            let hdr = egui::TopBottomPanel::top("hdr")
                 .min_height(64.0)
-                .frame(egui::Frame::none().fill(t.surface).inner_margin(Margin::symmetric(if narrow { 16.0 } else { 24.0 }, 8.0)).stroke(Stroke::new(1.0, t.line)))
-                .show(ctx, |ui| header(ui, &mut cx, s));
+                .show_separator_line(false)
+                .frame(egui::Frame::none().fill(t.surface).inner_margin(Margin { left: if narrow { 16.0 } else { 24.0 }, right: if narrow { 16.0 } else { 24.0 }, top: 8.0, bottom: 9.0 }))
+                .show(ctx, |ui| {
+                    ui.spacing_mut().item_spacing.y = 4.0;
+                    header(ui, &mut cx, s)
+                });
+            let hr = hdr.response.rect;
+            ctx.layer_painter(egui::LayerId::new(egui::Order::Middle, egui::Id::new("hdr-line"))).hline(hr.x_range(), hr.bottom() - 0.5, Stroke::new(1.0, t.line));
             match s.view {
                 View::Inbox => inbox(ctx, &mut cx, s),
                 View::Review => review(ctx, &mut cx, s, narrow),
@@ -742,7 +767,7 @@ fn review_panes(ctx: &egui::Context, cx: &mut Cx, s: &Session, narrow: bool) {
         if tray_on {
             egui::TopBottomPanel::bottom("tray")
                 .resizable(false)
-                .frame(egui::Frame::none().fill(t.sunken).stroke(Stroke::new(1.0, t.line)))
+                .frame(egui::Frame::none().fill(t.sunken))
                 .show(ctx, |ui| {
                     let cap = cx.screen_h * 0.4;
                     let out = egui::ScrollArea::vertical()
@@ -771,13 +796,13 @@ fn review_panes(ctx: &egui::Context, cx: &mut Cx, s: &Session, narrow: bool) {
             let w = (ctx.screen_rect().width() * 0.5).round();
             egui::SidePanel::left("scan").exact_width(w).resizable(false).frame(egui::Frame::none().fill(t.scanbg)).show(ctx, |ui| scan(ui, cx, s, false));
         }
-        egui::CentralPanel::default()
-            .frame(egui::Frame::none().fill(t.surface).stroke(Stroke::new(if s.split { 1.0 } else { 0.0 }, t.line)))
+        let panel = egui::CentralPanel::default()
+            .frame(egui::Frame::none().fill(t.surface).inner_margin(Margin { left: if s.split { 1.0 } else { 0.0 }, ..Margin::ZERO }))
             .show(ctx, |ui| {
                 if tray_on {
                     egui::TopBottomPanel::bottom("tray")
                         .resizable(false)
-                        .frame(egui::Frame::none().fill(t.sunken).stroke(Stroke::new(1.0, t.line)))
+                        .frame(egui::Frame::none().fill(t.sunken))
                         .show_inside(ui, |ui| tray(ui, cx, s, &entries));
                 }
                 let out = egui::ScrollArea::vertical().auto_shrink([false, false]).id_source("text-scroll").show(ui, |ui| {
@@ -785,6 +810,12 @@ fn review_panes(ctx: &egui::Context, cx: &mut Cx, s: &Session, narrow: bool) {
                 });
                 note_view_height(cx, out.inner_rect.height());
             });
+        if s.split {
+            // `.text { border-left: 1px solid var(--line) }`
+            let pr = panel.response.rect;
+            ctx.layer_painter(egui::LayerId::new(egui::Order::Middle, egui::Id::new("tx-border")))
+                .vline(pr.left() + 0.5, pr.y_range(), Stroke::new(1.0, t.line));
+        }
     }
 }
 
@@ -831,26 +862,32 @@ fn scan(ui: &mut Ui, cx: &mut Cx, s: &Session, stacked: bool) {
     let page_i = g.as_ref().and_then(|g| g.pages.iter().position(|id| Some(id) == s.selected.as_ref()));
     let busy = cur.is_some_and(|p| p.status() == "transcribing");
 
-    // title + tools
-    egui::Frame::none().fill(t.scanhead).stroke(Stroke::new(1.0, t.scanline)).inner_margin(Margin { left: 20.0, right: 12.0, top: 4.0, bottom: 4.0 }).show(ui, |ui| {
+    ui.spacing_mut().item_spacing.y = 0.0;
+    // title + tools: `.scan-head` is `padding: 4px 12px 4px 20px; justify-content: space-between; gap: 4px 8px`
+    // with a 1px border below. The tools sit at the right edge when they fit beside the title.
+    let head = egui::Frame::none().fill(t.scanhead).inner_margin(Margin { left: 20.0, right: 12.0, top: 4.0, bottom: 4.0 }).show(ui, |ui| {
         ui.set_width(ui.available_width());
-        ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
-            let title = match (page_i, &g) {
-                (Some(i), Some(g)) => format!("Page {} of {}", i + 1, g.pages.len()),
-                _ => String::new(),
-            };
-            let r = ui.allocate_response(vec2(tw(ui, &title, theme::sans_semi(14.0)).max(1.0) + 12.0, TARGET), Sense::hover());
+        let title = match (page_i, &g) {
+            (Some(i), Some(g)) => format!("Page {} of {}", i + 1, g.pages.len()),
+            _ => String::new(),
+        };
+        let tg = ui.painter().layout_no_wrap(title.clone(), theme::sans_semi(14.0), t.ink);
+        let tools_w = 44.0 * 7.0 + 56.0 + 7.0 * 2.0;
+        let one_row = tg.size().x + 8.0 + tools_w <= ui.available_width();
+        let title_ui = |ui: &mut Ui, cx: &mut Cx| {
+            let r = ui.allocate_response(vec2(tg.size().x.max(1.0), TARGET), Sense::hover());
             ui.painter().text(pos2(r.rect.left(), r.rect.center().y), egui::Align2::LEFT_CENTER, &title, theme::sans_semi(14.0), t.ink);
             cx.ctl.heading("scan-title", 2, &title, SCAN, r.rect.min);
-            ui.add_space(8.0);
-            let has = cur.is_some();
-            let z = s.zoom;
+        };
+        let has = cur.is_some();
+        let z = s.zoom;
+        let tools = |ui: &mut Ui, cx: &mut Cx| {
+            ui.spacing_mut().item_spacing.x = 2.0;
             if widgets::icon_button(cx.ctl, ui, t, C::new("zoom-out", "Zoom out", SCAN).disabled(!has || z <= state::ZOOMS[0]), Icon::ZoomOut, false) {
                 cx.acts.push(Act::Zoom(-1));
             }
             let zl = format!("{}%", (z * 100.0).round() as i32);
-            if widgets::button(cx.ctl, ui, t, C::new("zoom-fit", "Fit the page to the pane", SCAN).disabled(!has), &zl, Look::Ghost, 56.0) {
+            if widgets::button_pad(cx.ctl, ui, t, C::new("zoom-fit", "Fit the page to the pane", SCAN).disabled(!has), &zl, Look::Ghost, 56.0, 12.0) {
                 cx.acts.push(Act::ZoomSet(1.0));
             }
             if widgets::icon_button(cx.ctl, ui, t, C::new("zoom-in", "Zoom in", SCAN).disabled(!has || z >= state::ZOOMS[state::ZOOMS.len() - 1]), Icon::ZoomIn, false) {
@@ -861,17 +898,12 @@ fn scan(ui: &mut Ui, cx: &mut Cx, s: &Session, stacked: bool) {
                 BoxMode::Flagged => "Marks on the page: underlines. Click to change.",
                 BoxMode::All => "Marks on the page: underlines and a box on every line. Click to change.",
             };
-            if widgets::icon_button(cx.ctl, ui, t, C::new("boxes", label, SCAN).pressed(s.boxes != BoxMode::Off).disabled(!has), Icon::Boxes, s.boxes != BoxMode::Off) {
+            // aria-pressed is true for both "underlines" and "all lines", but the button is not drawn
+            // pressed: review.js only sets the attribute
+            if widgets::icon_button(cx.ctl, ui, t, C::new("boxes", label, SCAN).pressed(s.boxes != BoxMode::Off).disabled(!has), Icon::Boxes, false) {
                 cx.acts.push(Act::Boxes);
             }
-            if widgets::icon_button(
-                cx.ctl,
-                ui,
-                t,
-                C::new("level", "Straighten this page and redo the line boxes", SCAN).disabled(!has || busy),
-                Icon::Level,
-                false,
-            ) {
+            if widgets::icon_button(cx.ctl, ui, t, C::new("level", "Straighten this page and redo the line boxes", SCAN).disabled(!has || busy), Icon::Level, false) {
                 cx.acts.push(Act::Level);
             }
             if widgets::icon_button(cx.ctl, ui, t, C::new("rotate", "Rotate page 90 degrees", SCAN).disabled(!has || busy), Icon::Rotate, false) {
@@ -885,16 +917,31 @@ fn scan(ui: &mut Ui, cx: &mut Cx, s: &Session, stacked: bool) {
                     cx.acts.push(Act::RemovePage(id.clone()));
                 }
             }
-        });
+        };
+        if one_row {
+            ui.horizontal(|ui| {
+                title_ui(ui, cx);
+                let w = ui.available_width() - tools_w;
+                ui.add_space(w.max(0.0));
+                tools(ui, cx);
+            });
+        } else {
+            ui.horizontal(|ui| title_ui(ui, cx));
+            ui.add_space(4.0);
+            // the pane is narrower than the tools: they wrap inside it instead of leaving the screen
+            ui.horizontal_wrapped(|ui| tools(ui, cx));
+        }
     });
+    ui.painter().hline(head.response.rect.x_range(), head.response.rect.bottom() + 0.5, Stroke::new(1.0, t.scanline));
+    ui.add_space(1.0);
 
-    // strip of this student's pages
+    // strip of this student's pages: `.scan-pages` padding 10 20, gap 8, 1px border below
     let mut rects: Vec<(String, Rect)> = vec![];
     let mut dragged: Option<String> = None;
-    egui::Frame::none().fill(t.scanhead).stroke(Stroke::new(1.0, t.scanline)).inner_margin(Margin::symmetric(20.0, 10.0)).show(ui, |ui| {
+    let strip = egui::Frame::none().fill(t.scanhead).inner_margin(Margin::symmetric(20.0, 10.0)).show(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing = vec2(10.0, 10.0);
+            ui.spacing_mut().item_spacing = vec2(8.0, 8.0);
             let Some(g) = &g else { return };
             for (i, id) in g.pages.iter().enumerate() {
                 let Some(p) = s.page(id) else { continue };
@@ -919,6 +966,8 @@ fn scan(ui: &mut Ui, cx: &mut Cx, s: &Session, stacked: bool) {
                     dragged = Some(id.clone());
                 }
                 let rect = r.rect;
+                // `box-shadow: 0 1px 2px rgba(20, 27, 45, .3)` under the paper
+                ui.painter().rect_filled(rect.translate(vec2(0.0, 1.0)).expand(0.5), 2.0, Color32::from_black_alpha(if t.dark { 90 } else { 40 }));
                 ui.painter().rect_filled(rect, 2.0, t.paper);
                 if let Some(Slot::Ready(im)) = cx.images.get(id) {
                     ui.painter().image(im.thumb.id(), rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
@@ -959,6 +1008,8 @@ fn scan(ui: &mut Ui, cx: &mut Cx, s: &Session, stacked: bool) {
             }
         });
     });
+    ui.painter().hline(strip.response.rect.x_range(), strip.response.rect.bottom() + 0.5, Stroke::new(1.0, t.scanline));
+    ui.add_space(1.0);
     if let (Some(from), Some(pos)) = (dragged, ui.input(|i| i.pointer.interact_pos())) {
         if let (Some(g), Some((to, _))) = (&g, rects.iter().find(|(_, r)| r.contains(pos))) {
             let a = g.pages.iter().position(|x| *x == from);
@@ -1126,44 +1177,45 @@ fn transcript_pane(ui: &mut Ui, cx: &mut Cx, s: &Session, g: Option<&vishion_cor
             base
         }
     };
-    // `.who-head`: name block left, status pill right (below it when the row is too narrow)
+    // `.who-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px }`: the name block
+    // (h1 32/1.15, p 14/1.4 with 6 above, "Change student" with 4 above and -16 to the left) and the pill
+    // (6 14 padding, 31.6 high) share a row when both fit, else the pill goes below.
+    ui.spacing_mut().item_spacing.y = 0.0;
     let pill_w = tw(ui, &label, theme::sans_semi(14.0)) + 28.0;
     let avail = ui.available_width();
-    let who_block = |ui: &mut Ui, cx: &mut Cx| {
-        ui.spacing_mut().item_spacing.y = 6.0;
-        let r = ui.add(egui::Label::new(RichText::new(&g.name).font(theme::serif_semi(32.0)).color(t.ink)).wrap());
-        cx.ctl.heading("student-name", 1, &g.name, TEXT, r.rect.min);
-        ui.add(egui::Label::new(RichText::new(&meta).font(theme::sans(14.0)).color(t.muted)).wrap());
-        // `margin: 4px 0 0 -16px`: the button's text lines up with the name
-        let at = ui.cursor().min + vec2(-16.0, 4.0);
-        let clicked = widgets::button_at(cx.ctl, ui, t, C::new("change-student", "Change student", TEXT), "Change student", Look::Ghost, at);
-        ui.allocate_space(vec2(1.0, 4.0 + TARGET));
-        if clicked {
-            cx.acts.push(Act::ChangeStudent);
-        }
-    };
-    if avail >= 220.0 + pill_w + 12.0 {
-        ui.horizontal_top(|ui| {
-            ui.spacing_mut().item_spacing.x = 12.0;
-            let w = avail - pill_w - 12.0;
-            ui.allocate_ui_with_layout(vec2(w, 0.0), Layout::top_down(Align::Min), |ui| {
-                ui.set_width(w);
-                who_block(ui, cx);
-            });
-            let r = widgets::pill(ui, t, kind, &label);
-            cx.ctl.status("student-status", &label, TEXT, r.min);
-        });
-    } else {
-        who_block(ui, cx);
-        ui.add_space(6.0);
-        let r = widgets::pill(ui, t, kind, &label);
-        cx.ctl.status("student-status", &label, TEXT, r.min);
-    }
-
-    // legend + version
+    let change_w = tw(ui, "Change student", theme::sans_semi(14.0)) + 34.0 - 16.0;
+    let block_w = tw(ui, &g.name, theme::serif_semi(32.0)).max(tw(ui, &meta, theme::sans(14.0))).max(change_w).ceil();
+    let same_row = block_w + 12.0 + pill_w <= avail;
+    let wrap_w = if same_row { block_w } else { avail };
+    let top = ui.cursor().min;
+    let name_r = css_text(ui, &g.name, theme::serif_semi(32.0), t.ink, 32.0 * 1.15, wrap_w, true);
+    cx.ctl.heading("student-name", 1, &g.name, TEXT, name_r.min);
+    ui.add_space(6.0);
+    css_text(ui, &meta, theme::sans(14.0), t.muted, 14.0 * 1.4, wrap_w, false);
     ui.add_space(4.0);
+    let at = ui.cursor().min + vec2(-16.0, 0.0);
+    let clicked = widgets::button_at(cx.ctl, ui, t, C::new("change-student", "Change student", TEXT), "Change student", Look::Ghost, at);
+    ui.allocate_space(vec2(1.0, TARGET));
+    if clicked {
+        cx.acts.push(Act::ChangeStudent);
+    }
+    let pill_min = if same_row {
+        pos2(top.x + avail - pill_w, top.y)
+    } else {
+        ui.add_space(12.0);
+        let p = ui.cursor().min;
+        ui.allocate_space(vec2(1.0, widgets::PILL_H));
+        p
+    };
+    let r = widgets::pill_at(ui, t, kind, &label, pill_min);
+    cx.ctl.status("student-status", &label, TEXT, r.min);
+
+    // legend + version: `.legend-row { margin-top: 18px; gap: 10px 20px }`
+    ui.add_space(18.0);
+    // rows are as tall as their content (the legend is one 13px line; the toggle is 44)
+    let row_min = std::mem::replace(&mut ui.spacing_mut().interact_size.y, 13.0 * 1.4);
     ui.horizontal_wrapped(|ui| {
-        ui.spacing_mut().item_spacing = vec2(20.0, 8.0);
+        ui.spacing_mut().item_spacing = vec2(20.0, 10.0);
         legend(ui, t);
         let same = s.versions_same();
         let orig = s.original && !same;
@@ -1174,7 +1226,7 @@ fn transcript_pane(ui: &mut Ui, cx: &mut Cx, s: &Session, g: Option<&vishion_cor
             None => {}
         }
     });
-    ui.add_space(6.0);
+    ui.spacing_mut().interact_size.y = row_min;
 
     // body by page state
     match p.status() {
@@ -1253,7 +1305,8 @@ fn legend(ui: &mut Ui, t: &Tokens) {
         let g = ui.painter().layout_no_wrap("word".into(), theme::sans(13.0), if kind == Kind::Bad { t.bad } else { t.ink });
         let l = ui.painter().layout_no_wrap(label.to_string(), theme::sans(13.0), t.muted);
         let sw_w = g.size().x + 12.0;
-        let (rect, _) = ui.allocate_exact_size(vec2(sw_w + 8.0 + l.size().x, g.size().y + 4.0), Sense::hover());
+        // `.legend span` is a flex row: the swatch is blockified, one 13px line at 1.4 high
+        let (rect, _) = ui.allocate_exact_size(vec2(sw_w + 8.0 + l.size().x, 13.0 * 1.4), Sense::hover());
         let r = Rect::from_min_size(rect.min, vec2(sw_w, rect.height()));
         match kind {
             Kind::Warn => {
@@ -1280,21 +1333,10 @@ fn plain_text(ui: &mut Ui, cx: &mut Cx, s: &Session, p: &Page) {
     let t = cx.t;
     let text = s.plain_text(p);
     // `.tx-text.plain { white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/1.65 mono }`
-    let r = ui
-        .with_layout(Layout::top_down(Align::Min), |ui| {
-            ui.add(
-                egui::Label::new(
-                    RichText::new(&text)
-                        .font(egui::FontId::new(13.0, egui::FontFamily::Monospace))
-                        .line_height(Some(13.0 * 1.65))
-                        .color(t.ink),
-                )
-                .wrap(),
-            )
-        })
-        .inner;
-    cx.ctl.text(&format!("plain-{}", p.id()), &text, TEXT, r.rect.min);
-    transcript_group(ui, cx, r.rect);
+    let w = ui.available_width();
+    let r = css_text(ui, &text, egui::FontId::new(13.0, egui::FontFamily::Monospace), t.ink, 13.0 * 1.65, w, true);
+    cx.ctl.text(&format!("plain-{}", p.id()), &text, TEXT, r.min);
+    transcript_group(ui, cx, r);
 }
 
 /// The transcript as one focusable region: arrow keys inside it move the reading underline.
@@ -1506,7 +1548,7 @@ fn unit(ui: &mut Ui, cx: &mut Cx, s: &Session, p: &Page, line: &Line, items: &[w
                 let color = if kind == Kind::Bad && !checked { t.bad } else { t.ink };
                 let g = ui.painter().layout_no_wrap(shown, font, color);
                 // `.w { padding: 0 4px }`; no gap after it: the following text carries its own space
-                it.push(flow::Item { w: g.size().x + 8.0, h: CHIP_H, trail: 0.0, brk: false });
+                it.push(flow::Item { w: g.size().x + 8.0, h: px * 1.35, trail: 0.0, brk: false });
                 atoms.push(Atom::Chip {
                     id: format!("word-{}-{}", p.id(), key),
                     label,
@@ -1545,16 +1587,18 @@ fn unit(ui: &mut Ui, cx: &mut Cx, s: &Session, p: &Page, line: &Line, items: &[w
                 paint_math(ui, cx, tex, *display, px * KATEX_EM, pos2(x, top));
             }
             Atom::Chip { id, label, g, kind, checked, selected, key } => {
-                let chip = Rect::from_min_size(pos2(x, origin.y + pl.line_top + (lh - CHIP_H) / 2.0), vec2(item.w, CHIP_H));
+                let chip = Rect::from_min_size(pos2(x, origin.y + pl.line_top + (lh - item.h) / 2.0), vec2(item.w, item.h));
                 // hit target: at least 44 x 44, centred on the chip (it overlaps the neighbouring line a little)
                 let hit = Rect::from_center_size(chip.center(), vec2(chip.width().max(TARGET), TARGET));
                 let r = ui.interact(hit, ui.id().with(id.as_str()), Sense::click());
                 paint_chip(ui, t, chip, g, *kind, *checked, *selected, r.hovered());
                 if *selected && cx.scroll_sel {
-                    // `scrollIntoView({ block: 'nearest' })`: the whole 44pt target, a little air above and below
-                    ui.scroll_to_rect(hit.expand2(vec2(0.0, 6.0)), None);
+                    // `scrollIntoView({ block: 'nearest' })` on the word itself: only as far as the painted
+                    // word needs (the 44pt hit target is not what the reader sees)
+                    ui.scroll_to_rect(chip, None);
                 }
-                if cx.ctl.reg(ui, &r, C::new(id, label, TEXT)) {
+                // `.w.sel { outline: 2px solid ink; outline-offset: 2px }` and the focus ring are the same ring
+                if cx.ctl.reg(ui, &r, C::new(id, label, TEXT).ring(chip.expand(3.0), 7.0)) {
                     cx.acts.push(Act::Pick(p.id().to_string(), key.clone()));
                 }
             }
@@ -1622,7 +1666,7 @@ fn paint_chip(ui: &mut Ui, t: &Tokens, chip: Rect, g: &std::sync::Arc<egui::Gall
         ui.painter().rect_stroke(chip.expand(1.0), 4.0, Stroke::new(1.0, t.line2));
     }
     if selected {
-        ui.painter().rect_stroke(chip.expand(2.0), 5.0, Stroke::new(2.0, t.ink));
+        ui.painter().rect_stroke(chip.expand(3.0), 7.0, Stroke::new(2.0, t.ink));
     }
     ui.painter().galley(chip.center() - g.size() / 2.0, g.clone(), color);
 }
@@ -1724,7 +1768,7 @@ fn tray(ui: &mut Ui, cx: &mut Cx, s: &Session, entries: &[Entry]) {
     let inner = avail.min(760.0);
     let pad = if cx.narrow { 20.0 } else { 40.0 };
     let side = (avail - inner) / 2.0 + pad;
-    egui::Frame::none().inner_margin(Margin { left: side, right: side, top: 12.0, bottom: 20.0 }).show(ui, |ui| {
+    egui::Frame::none().inner_margin(Margin { left: side, right: side, top: 12.0, bottom: 24.0 }).show(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.spacing_mut().item_spacing = vec2(8.0, 6.0);
         // head: title on the left, controls on the right (wrapping on a phone)

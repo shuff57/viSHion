@@ -101,11 +101,14 @@ pub struct C<'a> {
     pub pressed: Option<bool>,
     pub region: u8,
     pub disabled: bool,
+    /// Where the focus ring goes when it is not the hit target (a transcript word: its painted chip, not the
+    /// 44pt target around it), and its corner radius.
+    pub ring: Option<(egui::Rect, f32)>,
 }
 
 impl<'a> C<'a> {
     pub fn new(id: &'a str, label: &'a str, region: u8) -> Self {
-        C { id, label, pressed: None, region, disabled: false }
+        C { id, label, pressed: None, region, disabled: false, ring: None }
     }
     pub fn pressed(mut self, on: bool) -> Self {
         self.pressed = Some(on);
@@ -115,10 +118,14 @@ impl<'a> C<'a> {
         self.disabled = d;
         self
     }
+    pub fn ring(mut self, rect: egui::Rect, radius: f32) -> Self {
+        self.ring = Some((rect, radius));
+        self
+    }
 }
 
 impl Ctl {
-    fn track_focus(&mut self, ui: &Ui, r: &egui::Response, id: &str, region: u8) {
+    fn track_focus(&mut self, ui: &Ui, r: &egui::Response, id: &str, region: u8, ring: Option<(egui::Rect, f32)>) {
         if self.want_focus.as_deref() == Some(id) {
             self.want_focus = None;
             r.request_focus();
@@ -126,7 +133,10 @@ impl Ctl {
             self.dom_focus = Some(id.to_string());
         }
         if self.focus.as_deref() == Some(id) || r.has_focus() {
-            ui.painter().rect_stroke(r.rect.expand(2.0), 6.0, Stroke::new(2.0, self.ring));
+            match ring {
+                Some((rect, radius)) => ui.painter().rect_stroke(rect, radius, Stroke::new(2.0, self.ring)),
+                None => ui.painter().rect_stroke(r.rect.expand(2.0), 6.0, Stroke::new(2.0, self.ring)),
+            };
             self.focused = Some((id.to_string(), region));
         }
     }
@@ -142,9 +152,10 @@ impl Ctl {
             disabled: c.disabled,
             region: c.region,
             pos: twin::pos_of(r.rect.min),
+            at: (r.rect.min.x.round() as i32, r.rect.min.y.round() as i32),
             size: (r.rect.width().round() as u16, r.rect.height().round() as u16),
         });
-        self.track_focus(ui, r, c.id, c.region);
+        self.track_focus(ui, r, c.id, c.region, c.ring);
         let from_dom = match self.act.iter().position(|a| a == c.id) {
             Some(i) => {
                 self.act.remove(i);
@@ -168,9 +179,10 @@ impl Ctl {
             disabled: c.disabled,
             region: c.region,
             pos: twin::pos_of(r.rect.min),
+            at: (r.rect.min.x.round() as i32, r.rect.min.y.round() as i32),
             size: (r.rect.width().round() as u16, r.rect.height().round() as u16),
         });
-        self.track_focus(ui, r, c.id, c.region);
+        self.track_focus(ui, r, c.id, c.region, c.ring);
         self.typed.remove(c.id)
     }
 
@@ -180,7 +192,7 @@ impl Ctl {
         // one pixel left of its content, so it sorts just before the first paragraph it governs
         let pos = twin::pos_of(r.rect.min - egui::vec2(1.0, 0.0));
         self.nodes.push(Node::Group { id: id.into(), label: label.into(), keys, region, pos });
-        self.track_focus(ui, r, id, region);
+        self.track_focus(ui, r, id, region, None);
     }
 
     fn push(&mut self, reg: Reg) {
@@ -422,6 +434,18 @@ impl App {
         self.session.as_ref()
     }
 
+    /// One frame without eframe, and a twin activation: how the host wiring in `crates/app` is tested end to
+    /// end (commands go out through the dispatcher, events come back through the inbox).
+    #[doc(hidden)]
+    pub fn run_frame(&mut self, ctx: &egui::Context) {
+        self.step(ctx, false);
+    }
+
+    #[doc(hidden)]
+    pub fn twin_act(&self, id: &str) {
+        self.queue.lock().unwrap().push(format!("act:{id}"));
+    }
+
     /// Hand a session to the app directly (tests; the host path is `Event::Opened`).
     pub fn open_session(&mut self, s: state::Session, storage: &str) {
         self.session = Some(s);
@@ -647,7 +671,19 @@ fn decode_image(ctx: &egui::Context, id: &str, bytes: &[u8]) -> Option<Img> {
     let rgba = im.to_rgba8();
     let ci = egui::ColorImage::from_rgba_unmultiplied([size.0 as usize, size.1 as usize], rgba.as_raw());
     let full = ctx.load_texture(format!("page-{id}"), ci, egui::TextureOptions::LINEAR);
-    let th = im.thumbnail(132, 168).to_rgba8();
+    // js/image.js `thumb(blob, 112)`: a canvas draws the page at 112 high with plain bilinear sampling, so thin
+    // ink keeps its darkness; the strip then shows that small picture at 44 x 56. Averaging (Lanczos,
+    // Triangle) would wash the handwriting out to a grey that the browser's thumbnail does not have.
+    let th_h = 112u32;
+    let th_w = ((im.width() as f64 * th_h as f64 / im.height().max(1) as f64).round() as u32).max(1);
+    let src = im.to_rgba8();
+    let mut th = image::RgbaImage::new(th_w, th_h);
+    for (x, y, px) in th.enumerate_pixels_mut() {
+        let (u, v) = ((x as f32 + 0.5) / th_w as f32, (y as f32 + 0.5) / th_h as f32);
+        if let Some(p) = image::imageops::sample_bilinear(&src, u, v) {
+            *px = p;
+        }
+    }
     let ti = egui::ColorImage::from_rgba_unmultiplied([th.width() as usize, th.height() as usize], th.as_raw());
     let thumb = ctx.load_texture(format!("thumb-{id}"), ti, egui::TextureOptions::LINEAR);
     Some(Img { full, thumb, size, bands })

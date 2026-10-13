@@ -92,7 +92,7 @@ fn main() -> eframe::Result<()> {
                     }
                 } else if demo {
                     match block_on(vishion_app::demo::seed(now())) {
-                        Ok((store, _)) => Backend::new(store, "Demo assignment (not saved)"),
+                        Ok((store, _)) => Backend::new_demo(store, "Demo assignment (not saved)"),
                         Err(e) => {
                             worker_inbox.push(vishion_ui::Event::Failed(e.to_string()));
                             return;

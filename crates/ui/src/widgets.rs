@@ -38,12 +38,18 @@ fn paint_look(ui: &Ui, r: &Response, t: &Tokens, look: Look, on: bool, disabled:
 
 /// A text button. `min_w` keeps related buttons aligned; the height is always 44.
 pub fn button(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, c: C, text: &str, look: Look, min_w: f32) -> bool {
+    button_pad(ctl, ui, t, c, text, look, min_w, 36.0)
+}
+
+/// `button` with its own horizontal padding in total (the zoom label has 6 on each side, buttons 16 + border).
+#[allow(clippy::too_many_arguments)]
+pub fn button_pad(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, c: C, text: &str, look: Look, min_w: f32, pad: f32) -> bool {
     let fg = match look {
         Look::Primary => t.on_ink,
         _ => if c.disabled { t.faint } else { t.ink },
     };
     let g = ui.painter().layout_no_wrap(text.to_string(), theme::sans_semi(14.0), fg);
-    let w = (g.size().x + 36.0).max(min_w);
+    let w = (g.size().x + pad).max(min_w);
     let sense = if c.disabled { Sense::hover() } else { Sense::click() };
     let r = ui.allocate_response(vec2(w, TARGET), sense);
     paint_button(ui, &r, t, &c, g, look);
@@ -253,8 +259,11 @@ pub fn seg(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, region: u8, group: &str, item
     clicked
 }
 
-/// A rounded status pill (not interactive): `.pill` in css/base.css.
-pub fn pill(ui: &mut Ui, t: &Tokens, kind: crate::state::PillKind, text: &str) -> Rect {
+/// Height of `.pill`: 6 + 6 padding around one 14px line at 1.4.
+pub const PILL_H: f32 = 14.0 * 1.4 + 12.0;
+
+/// A rounded status pill (not interactive): `.pill` in css/base.css, drawn with its top left at `min`.
+pub fn pill_at(ui: &Ui, t: &Tokens, kind: crate::state::PillKind, text: &str, min: egui::Pos2) -> Rect {
     use crate::state::PillKind::*;
     let (bg, fg, outline) = match kind {
         Warn => (t.warn, t.ink, false),
@@ -264,11 +273,18 @@ pub fn pill(ui: &mut Ui, t: &Tokens, kind: crate::state::PillKind, text: &str) -
         Queued => (Color32::TRANSPARENT, t.muted, true),
     };
     let g = ui.painter().layout_no_wrap(text.to_string(), theme::sans_semi(14.0), fg);
-    let (rect, _) = ui.allocate_exact_size(g.size() + vec2(28.0, 12.0), Sense::hover());
+    let rect = Rect::from_min_size(min, vec2(g.size().x + 28.0, PILL_H));
     ui.painter().rect_filled(rect, 999.0, bg);
     if outline {
-        ui.painter().rect_stroke(rect, 999.0, Stroke::new(1.0, t.line2));
+        ui.painter().rect_stroke(rect.shrink(0.5), 999.0, Stroke::new(1.0, t.line2));
     }
     ui.painter().galley(rect.center() - g.size() / 2.0, g, fg);
     rect
+}
+
+/// `pill_at` in the layout flow.
+pub fn pill(ui: &mut Ui, t: &Tokens, kind: crate::state::PillKind, text: &str) -> Rect {
+    let w = ui.painter().layout_no_wrap(text.to_string(), theme::sans_semi(14.0), t.ink).size().x + 28.0;
+    let (rect, _) = ui.allocate_exact_size(vec2(w, PILL_H), Sense::hover());
+    pill_at(ui, t, kind, text, rect.min)
 }

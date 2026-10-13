@@ -6,6 +6,8 @@
 pub mod backend;
 pub mod demo;
 pub mod pictures;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod rig;
 
 /// Query-string options of the web build, as `key=value` pairs. Pure so it is testable natively.
 pub fn parse_query(search: &str) -> Vec<(String, String)> {
@@ -56,7 +58,7 @@ mod web {
         let now = || js_sys::Date::now() as i64;
         let backend: Rc<Backend> = Rc::new(if demo {
             let (store, _) = crate::demo::seed(now()).await.map_err(|e| JsValue::from_str(&e.to_string()))?;
-            Backend::new(store, "Demo assignment (not saved)")
+            Backend::new_demo(store, "Demo assignment (not saved)")
         } else {
             let idb = IdbStore::open().await.map_err(|e| JsValue::from_str(&e.to_string()))?;
             Backend::new(AnyStore::Idb(idb), "Saved in this browser")

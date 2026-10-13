@@ -70,9 +70,41 @@ pub fn lines(marked: &str) -> Vec<Line> {
             let margin = render::is_margin(&unit);
             let src = if margin { strip_margin(&unit) } else { unit };
             let (pieces, math) = render::unit_pieces(&src);
-            Line { index, runs: runs(&pieces), math, margin }
+            Line { index, runs: collapse(runs(&pieces)), math, margin }
         })
         .collect()
+}
+
+/// HTML white-space: runs of spaces (across run boundaries too) draw as one, and a line starts with none.
+fn collapse(runs: Vec<Run>) -> Vec<Run> {
+    let mut prev_space = true;
+    let mut out = Vec::with_capacity(runs.len());
+    for r in runs {
+        match r {
+            Run::Text { s, st } => {
+                let mut t = String::with_capacity(s.len());
+                for c in s.chars() {
+                    if matches!(c, ' ' | '\t' | '\n' | '\r' | '\u{c}') {
+                        if !prev_space {
+                            t.push(' ');
+                        }
+                        prev_space = true;
+                    } else {
+                        t.push(c);
+                        prev_space = false;
+                    }
+                }
+                if !t.is_empty() {
+                    out.push(Run::Text { s: t, st });
+                }
+            }
+            other => {
+                prev_space = false;
+                out.push(other);
+            }
+        }
+    }
+    out
 }
 
 #[derive(PartialEq)]
