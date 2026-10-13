@@ -125,6 +125,81 @@ try {
     expect(bad < 0.1, '320 css px wide: the Settings button is visible, not covered by the page pane (' + Math.round(bad * 100) + '% of its rectangle is pane colour)');
     await ctx.close();
   }
+  // 7. Blind critic round 5 (each FAIL is a gap)
+  {
+    const { ctx, page, pump } = await open({ width: 1280, height: 800 });
+    const focus = async (id) => { await page.evaluate((i) => document.querySelector('#controls [data-id="' + i + '"]')?.focus(), id); await pump(3); };
+    const press = async (id) => { await focus(id); await page.keyboard.press('Enter'); await pump(6); await page.waitForTimeout(500); await pump(2); };
+    const said = () => page.evaluate(() => document.getElementById('announce').textContent + ' ' + document.getElementById('announce-alert').textContent);
+    const stat = () => page.evaluate(() => document.querySelector('#controls [data-id="save-state"]')?.textContent ?? '');
+
+    // a. one decision is one utterance: the announcement, the count of words and the panel's position are three live regions
+    await page.evaluate(() => {
+      window.__regions = new Set();
+      new MutationObserver((ms) => { for (const m of ms) { const el = m.target.nodeType === 1 ? m.target : m.target.parentElement; const r = el && el.closest('[role=status],[role=alert],[aria-live]'); if (r && r.textContent.trim()) window.__regions.add(r.id || r.dataset.id); } }).observe(document.body, { childList: true, characterData: true, subtree: true });
+    });
+    await press('alt-suggested');
+    const regions = await page.evaluate(() => [...window.__regions]);
+    expect(regions.length <= 1, 'one decision writes one live region (A11Y.md: one utterance per action), not ' + regions.length + ': ' + regions);
+
+    // c. Rotate: the header must not say "Saving…" for the rest of the session (RotateImage never answers Event::Saved)
+    await press('rotate');
+    let s = '';
+    for (let i = 0; i < 12; i++) { await pump(2); await page.waitForTimeout(250); s = await stat(); if (!/^Saving/.test(s)) break; }
+    expect(!/^Saving/.test(s), 'after Rotate the save indicator settles (it says ' + JSON.stringify(s) + ' for good)');
+    await ctx.close();
+  }
+  {
+    // b. Next word says which word it landed on, and the page when it crosses one (a decision does both)
+    const { ctx, page, pump } = await open({ width: 1280, height: 800 });
+    const press = async (id) => { await page.evaluate((i) => document.querySelector('#controls [data-id="' + i + '"]')?.focus(), id); await pump(3); await page.keyboard.press('Enter'); await pump(6); await page.waitForTimeout(500); await pump(2); };
+    const said = () => page.evaluate(() => document.getElementById('announce').textContent.trim());
+    await press('next-word');
+    expect(/populaton|illegible|could not be read|spelling/i.test(await said()), 'Next word to check names the word it moved to, not only "Word 2 of 4": ' + JSON.stringify(await said()));
+    await press('next-word'); await press('next-word');
+    expect(/page 2/i.test(await said()), 'Next word to check across a page boundary says the page changed: ' + JSON.stringify(await said()));
+    await ctx.close();
+  }
+  {
+    // d. a zoomed page can be panned from the keyboard (JS: .scan-stage is overflow:auto with tabindex=0, arrows scroll it)
+    const { ctx, page, pump } = await open({ width: 1280, height: 800 });
+    await page.evaluate(() => document.querySelector('#controls [data-id="stage"]').focus());
+    for (let i = 0; i < 4; i++) { await page.keyboard.press('+'); await pump(3); }
+    await pump(4);
+    const base = await shot(page);
+    for (const k of ['ArrowDown', 'ArrowDown', 'ArrowRight', 'PageDown']) { await page.keyboard.press(k); await pump(3); }
+    await pump(4);
+    const n = await changed(page, base, await shot(page));
+    expect(n > 5000, 'arrow keys and PageDown pan the zoomed page image (' + n + ' px changed)');
+    await ctx.close();
+  }
+  {
+    // e. Change student: a refused Save is not silent, and "A new student…" leads to its text box (JS focuses it)
+    const { ctx, page, pump } = await open({ width: 1280, height: 800 });
+    const focus = async (id) => { await page.evaluate((i) => document.querySelector('#controls [data-id="' + i + '"]')?.focus(), id); await pump(3); };
+    const press = async (id) => { await focus(id); await page.keyboard.press('Enter'); await pump(6); await page.waitForTimeout(500); await pump(2); };
+    await press('change-student');
+    await press('dialog-ok');
+    const r = await page.evaluate(() => ({ id: document.activeElement?.dataset?.id, said: document.getElementById('announce').textContent + document.getElementById('announce-alert').textContent }));
+    expect(r.id !== 'dialog-ok' || r.said.trim() !== '', 'Save with no student chosen says why or moves focus to the field (JS focuses the select): focus ' + r.id + ', said ' + JSON.stringify(r.said));
+    await press('cs-new');
+    const f = await page.evaluate(() => document.activeElement?.dataset?.id);
+    expect(f === 'cs-name', '"A new student…" moves focus to its text box (JS: input.focus()): focus is on ' + f);
+    await ctx.close();
+  }
+  {
+    // f. forced colours: the canvas follows the user's system colours (JS is DOM, so the browser does it)
+    const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 }, forcedColors: 'active', colorScheme: 'dark', bypassCSP: true });
+    const page = await ctx.newPage();
+    await page.goto(`http://127.0.0.1:${port}/?demo=1`, { waitUntil: 'load' });
+    for (let i = 0; i < 300 && !(await page.evaluate(() => window.__ready === true || !!window.__error)); i++) await page.waitForTimeout(100);
+    for (let i = 0; i < 8; i++) { await page.mouse.move(1200 + i, 700 + i); await page.waitForTimeout(70); }
+    const canvas = await page.evaluate(() => { const d = document.createElement('div'); d.style.color = 'Canvas'; document.body.append(d); const c = getComputedStyle(d).color; d.remove(); return c; });
+    const url = 'data:image/png;base64,' + (await page.screenshot()).toString('base64');
+    const px = await page.evaluate(async (u) => { const i = new Image(); i.src = u; await i.decode(); const c = document.createElement('canvas'); c.width = i.width; c.height = i.height; const x = c.getContext('2d'); x.drawImage(i, 0, 0); const d = x.getImageData(900, 200, 1, 1).data; return `rgb(${d[0]}, ${d[1]}, ${d[2]})`; }, url);
+    expect(px === canvas, 'forced-colors: the text pane is drawn in the system Canvas colour ' + canvas + ', not ' + px);
+    await ctx.close();
+  }
 } catch (e) {
   console.error(e);
   failures.push('exception: ' + (e && e.message));

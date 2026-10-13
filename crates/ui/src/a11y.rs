@@ -569,6 +569,48 @@ mod tests {
         assert!(s.contains("choose"), "{s}");
     }
 
+    /// Blind critic round 5: a bar between two things is not an absolute value. A statistics teacher writes
+    /// `P(A|B)` and `\{x \mid x > 0\}`; the listener must not hear "absolute value". Failing by design.
+    #[test]
+    fn a_bar_between_things_is_not_an_absolute_value() {
+        let s = tex_speech(r"P(A|B)");
+        assert!(!s.contains("absolute value"), "conditional probability: {s}");
+        assert!(s.contains("given"), "conditional probability reads as 'given': {s}");
+        let s = tex_speech(r"\{x | x > 0\}");
+        assert!(!s.contains("absolute value"), "set builder: {s}");
+        // a real one still is
+        assert_eq!(tex_speech(r"\lvert x \rvert"), "absolute value of x end absolute value");
+    }
+
+    /// Blind critic round 5: a command with no spoken form is read as its TeX name ("Rightarrow", "lfloor",
+    /// "emptyset"), which is noise to someone who cannot see the symbol. Failing by design.
+    #[test]
+    fn symbols_are_not_read_as_their_tex_names() {
+        let names = [
+            "emptyset", "forall", "exists", "Rightarrow", "Leftrightarrow", "lfloor", "rfloor", "lceil", "rceil", "cong",
+            "perp", "mid", "notin", "subseteq", "supseteq", "mapsto", "equiv", "propto", "lvert", "rvert",
+            "iint", "wedge", "vee", "neg", "overrightarrow", "xrightarrow", "bmod",
+        ];
+        let bad: Vec<String> = names
+            .iter()
+            .filter(|n| {
+                let s = tex_speech(&format!("a \\{n} b"));
+                s.split_whitespace().any(|w| w.eq_ignore_ascii_case(n))
+            })
+            .map(|n| n.to_string())
+            .collect();
+        assert!(bad.is_empty(), "spoken as the TeX name: {bad:?}");
+    }
+
+    /// Blind critic round 5: `\to` in a function arrow is "to", not "approaches" (only a limit approaches).
+    #[test]
+    fn a_function_arrow_is_not_a_limit() {
+        let s = tex_speech(r"f: A \to B");
+        assert!(!s.contains("approaches"), "{s}");
+        // inside a limit it still approaches
+        assert!(tex_speech(r"\lim_{x \to 0} f(x)").contains("approaches"));
+    }
+
     #[test]
     fn groups_and_landmarks() {
         assert_eq!(group_of("page-p1").map(|g| g.0), Some("pages"));
