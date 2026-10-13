@@ -165,7 +165,8 @@ impl<S: Store> Projects<S> {
         let base = if base.is_empty() { "project" } else { base };
         let mut s = base.to_string();
         let mut i = 2;
-        while taken.contains(&s.to_lowercase()) {
+        // a device name (`con`, `nul`, `com1`) is unusable as a folder on Windows: treat it as taken
+        while taken.contains(&s.to_lowercase()) || crate::is_device_name(&s) {
             s = format!("{base}-{i}");
             i += 1;
         }
@@ -382,6 +383,13 @@ impl<S: Store> Projects<S> {
     /// `importFiles` after the zip / folder was unpacked into `(path, bytes)` entries. Writes the project
     /// under a fresh slug; skips `exports/`.
     pub async fn import_files(&self, entries: &[(String, Vec<u8>)]) -> Result<String> {
+        Ok(self.import_files_report(entries).await?.0)
+    }
+
+    /// Like [`import_files`] and also returns the entries the store could never hold (reported, not lost
+    /// silently).
+    pub async fn import_files_report(&self, entries: &[(String, Vec<u8>)]) -> Result<(String, Vec<String>)> {
+        let mut skipped = vec![];
         let mut pj: Vec<&(String, Vec<u8>)> = entries.iter().filter(|(p, _)| is_project_json(p)).collect();
         pj.sort_by_key(|(p, _)| p.len());
         let Some((pj_path, pj_bytes)) = pj.first().map(|e| (&e.0, &e.1)) else {
@@ -401,11 +409,11 @@ impl<S: Store> Projects<S> {
             }
             match self.store.put(&format!("{slug}/{rel}"), bytes).await {
                 // a name the store can never hold (device names, trailing dot): skip it, keep importing
-                Err(StoreError::InvalidKey(_)) => {}
+                Err(StoreError::InvalidKey(_)) => skipped.push(path.clone()),
                 r => r?,
             }
         }
-        Ok(slug)
+        Ok((slug, skipped))
     }
 
     /// Write a legacy import plan (`vishion_core::import::plan`) as `importLegacy` does: create the

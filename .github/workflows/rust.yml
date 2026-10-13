@@ -34,6 +34,9 @@ jobs:
       - name: wasm32 build
         run: cargo build -p vishion-app --lib --target wasm32-unknown-unknown --release --locked
 
+      - name: wasm32 workspace build (all crates, bin included)
+        run: cargo build --workspace --target wasm32-unknown-unknown --locked
+
       - name: Install wasm-bindgen-cli (must match Cargo.lock)
         run: cargo install wasm-bindgen-cli --version "$WASM_BINDGEN_VERSION" --locked
 

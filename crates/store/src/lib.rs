@@ -105,6 +105,13 @@ pub fn check_key(key: &str) -> Result<()> {
     Ok(())
 }
 
+/// Windows device names (with or without an extension) that alias a device instead of a file.
+pub fn is_device_name(seg: &str) -> bool {
+    let stem = seg.split('.').next().unwrap_or("").trim_end().to_ascii_uppercase();
+    matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$")
+        || (stem.len() == 4 && (stem.starts_with("COM") || stem.starts_with("LPT")) && stem.as_bytes()[3].is_ascii_digit() && stem.as_bytes()[3] != b'0')
+}
+
 /// `stored_text`: bytes as the JS `TextDecoder` / `Blob.text()` would decode them (BOM stripped, invalid
 /// UTF-8 replaced).
 pub fn decode_text(bytes: &[u8]) -> String {

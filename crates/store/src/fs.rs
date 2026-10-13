@@ -15,12 +15,7 @@ pub struct FsStore {
     swept: std::sync::Mutex<std::collections::HashSet<PathBuf>>,
 }
 
-/// Windows device names (with or without an extension) that alias a device instead of a file.
-fn is_device_name(seg: &str) -> bool {
-    let stem = seg.split('.').next().unwrap_or("").trim_end().to_ascii_uppercase();
-    matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$")
-        || (stem.len() == 4 && (stem.starts_with("COM") || stem.starts_with("LPT")) && stem.as_bytes()[3].is_ascii_digit() && stem.as_bytes()[3] != b'0')
-}
+use crate::is_device_name;
 
 impl FsStore {
     pub fn new(root: impl Into<PathBuf>) -> Self {
@@ -64,6 +59,17 @@ impl FsStore {
         }
         Ok(p)
     }
+}
+
+/// fsync the directory so a rename survives power loss (Unix; Windows cannot open directories this way,
+/// and NTFS journals the rename). Best effort: a failure here never fails the write.
+fn sync_dir(dir: &Path) {
+    #[cfg(unix)]
+    if let Ok(d) = std::fs::File::open(dir) {
+        let _ = d.sync_all();
+    }
+    #[cfg(not(unix))]
+    let _ = dir;
 }
 
 /// A path that is not there: absent, or beneath a regular file (JS folder backend: TypeMismatchError is
@@ -123,7 +129,9 @@ impl Store for FsStore {
             std::io::Write::write_all(&mut f, value)?;
             f.sync_all()?;
             drop(f);
-            std::fs::rename(&tmp, &p)
+            std::fs::rename(&tmp, &p)?;
+            sync_dir(dir);
+            Ok::<(), std::io::Error>(())
         })();
         if res.is_err() {
             let _ = std::fs::remove_file(&tmp);

@@ -143,15 +143,27 @@ impl Project {
     pub fn prompt(&self) -> &str {
         s_of(&self.doc, "prompt")
     }
-    /// Page ids in display order (`meta.order`), non-strings skipped.
+    /// Page ids in display order (`meta.order`). Non-string entries (hand edited files) are used the way JS
+    /// uses them, via string concatenation (`1` is page `1`).
     pub fn order(&self) -> Vec<String> {
         match self.doc.get("order") {
-            Some(Value::Array(a)) => a.iter().filter_map(|v| v.as_str().map(String::from)).collect(),
+            Some(Value::Array(a)) => a.iter().map(crate::jsx::to_string).collect(),
             _ => vec![],
         }
     }
+    /// Replace `meta.order`. An id that was already present keeps its original JSON value (a numeric
+    /// entry stays a number), so untouched entries are never rewritten.
     pub fn set_order(&mut self, ids: &[String]) {
-        let arr = ids.iter().cloned().map(Value::String).collect();
+        let mut orig: std::collections::HashMap<String, std::collections::VecDeque<Value>> = Default::default();
+        if let Some(Value::Array(a)) = self.doc.get("order") {
+            for v in a {
+                orig.entry(crate::jsx::to_string(v)).or_default().push_back(v.clone());
+            }
+        }
+        let arr = ids
+            .iter()
+            .map(|id| orig.get_mut(id).and_then(|q| q.pop_front()).unwrap_or_else(|| Value::String(id.clone())))
+            .collect();
         self.doc.insert("order".into(), Value::Array(arr));
     }
     pub fn set(&mut self, key: &str, v: Value) {
