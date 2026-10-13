@@ -59,12 +59,27 @@ pub struct Dirty {
     pub pages: BTreeSet<String>,
     pub meta: bool,
     pub settings: bool,
+    /// Pages taken out of the assignment: the host deletes their file and image.
+    pub removed: Vec<String>,
+    /// Pages whose image must be turned a quarter turn (the page JSON is already updated).
+    pub rotated: Vec<String>,
 }
 
 impl Dirty {
     pub fn any(&self) -> bool {
-        !self.pages.is_empty() || self.meta || self.settings
+        !self.pages.is_empty() || self.meta || self.settings || !self.removed.is_empty() || !self.rotated.is_empty()
     }
+}
+
+/// Zoom steps of the page pane (js/ui/review.js `ZOOMS`).
+pub const ZOOMS: [f32; 5] = [1.0, 1.5, 2.0, 3.0, 4.0];
+
+/// Which screen is showing. The inbox is the assignment overview the header crumb returns to; the full
+/// inbox arrives with phase 5.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum View {
+    Review,
+    Inbox,
 }
 
 pub struct Session {
@@ -83,6 +98,13 @@ pub struct Session {
     pub read_line: HashMap<String, usize>,
     pub dirty: Dirty,
     pub now: i64,
+    pub view: View,
+    /// `S.d.textView === 'raw'`: the transcript as plain monospace text.
+    pub text_raw: bool,
+    /// Zoom of the page pane, one of `ZOOMS`.
+    pub zoom: f32,
+    /// Pages ticked in the strip (ctrl/shift click).
+    pub multi: BTreeSet<String>,
 }
 
 fn ui_str<'a>(a: &'a Assignment, k: &str) -> Option<&'a str> {
@@ -130,6 +152,10 @@ impl Session {
             read_line: HashMap::new(),
             dirty: Dirty::default(),
             now,
+            view: View::Review,
+            text_raw: false,
+            zoom: 1.0,
+            multi: BTreeSet::new(),
         };
         s.sync_tray();
         s
@@ -400,11 +426,27 @@ impl Session {
         Some((list[i].clone(), i, list.len()))
     }
 
+    /// A click on a flagged word: opens it in the tray and, as review.js does, moves the reading underline
+    /// to the line it sits on.
     pub fn pick_word(&mut self, page: &str, key: &str) {
         self.sel_word = Some((page.to_string(), key.to_string()));
         self.tray_open = true;
         if self.selected.as_deref() != Some(page) {
             self.select(page);
+        }
+        let unit = self
+            .a
+            .page(page)
+            .and_then(|p| words::items(p).into_iter().find(|i| i.key == key).and_then(|it| unit_of(p, &it)));
+        if let Some(u) = unit {
+            self.read_line.insert(page.to_string(), u);
+        }
+    }
+
+    /// `renderWho`: Original is not available where nothing was corrected, so the flag cannot stay set.
+    pub fn normalize(&mut self) {
+        if self.original && self.versions_same() {
+            self.original = false;
         }
     }
 
@@ -548,6 +590,236 @@ impl Session {
                 None => self.read_line.remove(&id),
             };
         }
+    }
+
+    // ------------------------------------------------------------------ page tools
+
+    pub fn set_zoom(&mut self, z: f32) {
+        self.zoom = z.clamp(ZOOMS[0], ZOOMS[ZOOMS.len() - 1]);
+    }
+
+    /// `stepZoom`: the next preset above or below the current zoom.
+    pub fn step_zoom(&mut self, d: i32) {
+        let i = ZOOMS.iter().position(|z| *z >= self.zoom - 0.001).unwrap_or(0) as i32;
+        let j = (i + d).clamp(0, ZOOMS.len() as i32 - 1) as usize;
+        self.set_zoom(ZOOMS[j]);
+    }
+
+    /// Turn the current page a quarter turn. The host turns the image; boxes are dropped (they no longer
+    /// match). Not while the page is being read.
+    pub fn rotate_current(&mut self) -> bool {
+        let Some(id) = self.selected.clone() else { return false };
+        let Some(p) = self.a.pages.get_mut(&id) else { return false };
+        if p.status() == "transcribing" {
+            return false;
+        }
+        let rot = p.get("rotation").map(jsx::number).unwrap_or(0.0) as i64;
+        p.set("rotation", json!((rot + 90).rem_euclid(360)));
+        p.set("boxes", json!([]));
+        self.dirty.pages.insert(id.clone());
+        self.dirty.rotated.push(id);
+        true
+    }
+
+    /// `S.removePage`: a neighbour of the same student becomes the selection; with none left the inbox shows.
+    pub fn remove_page(&mut self, id: &str) {
+        if !self.a.pages.contains_key(id) {
+            return;
+        }
+        let sibling = self.group().and_then(|g| g.pages.iter().find(|x| x.as_str() != id).cloned());
+        let i = self.a.index_of(id).unwrap_or(0);
+        let was_selected = self.selected.as_deref() == Some(id);
+        self.a.remove_page(id);
+        self.multi.remove(id);
+        self.read_line.remove(id);
+        if self.sel_word.as_ref().is_some_and(|(p, _)| p == id) {
+            self.sel_word = None;
+        }
+        self.dirty.pages.remove(id);
+        self.dirty.rotated.retain(|x| x != id);
+        self.dirty.removed.push(id.to_string());
+        self.dirty.meta = true;
+        if was_selected {
+            self.selected = None;
+            let order = self.a.meta.order();
+            match sibling {
+                Some(n) if self.a.pages.contains_key(&n) => self.select(&n),
+                _ => {
+                    // review.js: no page left for this student, so the inbox shows; the selection stays valid
+                    self.view = View::Inbox;
+                    if let Some(n) = order.get(i.min(order.len().saturating_sub(1))).cloned() {
+                        self.select(&n);
+                    }
+                }
+            }
+        }
+        self.sync_tray();
+    }
+
+    /// Alt+Arrow in the strip: move a page one place within the student's pages (`S.movePage`).
+    pub fn move_page(&mut self, id: &str, d: i32) -> bool {
+        let Some(g) = self.group() else { return false };
+        let Some(i) = g.pages.iter().position(|p| p == id) else { return false };
+        let j = i as i32 + d;
+        if j < 0 || j as usize >= g.pages.len() {
+            return false;
+        }
+        let (Some(a), Some(b)) = (self.a.index_of(id), self.a.index_of(&g.pages[j as usize])) else { return false };
+        self.a.move_page(a as i64, b as i64);
+        self.dirty.meta = true;
+        // every page's `order` follows the new order
+        for p in self.a.pages.keys() {
+            self.dirty.pages.insert(p.clone());
+        }
+        true
+    }
+
+    /// Select the page `d` places away within the student, clamped. Returns the page now selected.
+    pub fn step_page(&mut self, from: &str, d: i32) -> Option<String> {
+        let g = self.group()?;
+        let i = g.pages.iter().position(|p| p == from)? as i32;
+        let t = g.pages[(i + d).clamp(0, g.pages.len() as i32 - 1) as usize].clone();
+        self.select(&t);
+        Some(t)
+    }
+
+    pub fn edge_page(&mut self, last: bool) -> Option<String> {
+        let g = self.group()?;
+        let t = if last { g.pages.last()? } else { g.pages.first()? }.clone();
+        self.select(&t);
+        Some(t)
+    }
+
+    /// Ctrl/Cmd click toggles a page in the selection, Shift click ranges from the current page.
+    pub fn multi_click(&mut self, id: &str, shift: bool) {
+        let Some(g) = self.group() else { return };
+        if shift && self.selected.is_some() {
+            let a = g.pages.iter().position(|x| Some(x) == self.selected.as_ref()).unwrap_or(0);
+            let b = g.pages.iter().position(|x| x == id).unwrap_or(0);
+            for x in &g.pages[a.min(b)..=a.max(b)] {
+                self.multi.insert(x.clone());
+            }
+        } else {
+            if self.multi.is_empty() {
+                if let Some(c) = self.selected.clone() {
+                    self.multi.insert(c);
+                }
+            }
+            if !self.multi.remove(id) {
+                self.multi.insert(id.to_string());
+            }
+        }
+    }
+
+    /// Names a page can be moved to with "Change student": every other student.
+    pub fn other_students(&self) -> Vec<String> {
+        let cur = self.group().map(|g| g.name).unwrap_or_default();
+        let mut v: Vec<String> = self.groups().into_iter().map(|g| g.name).filter(|n| *n != cur).collect();
+        v.dedup();
+        v
+    }
+
+    /// "Change student": `student = {name, source: 'chosen', confirmed: true}` on this page or on all of the
+    /// student's pages. Returns the number of pages changed.
+    pub fn set_student(&mut self, name: &str, all: bool) -> usize {
+        let name = name.trim();
+        if name.is_empty() {
+            return 0;
+        }
+        let ids: Vec<String> = if all {
+            self.group().map(|g| g.pages).unwrap_or_default()
+        } else {
+            self.selected.clone().into_iter().collect()
+        };
+        for id in &ids {
+            if let Some(p) = self.a.pages.get_mut(id) {
+                p.set("student", json!({"name": name, "source": "chosen", "confirmed": true}));
+                self.dirty.pages.insert(id.clone());
+            }
+        }
+        self.sync_tray();
+        ids.len()
+    }
+
+    /// `U.reReview`: decisions cleared and suggestions un-applied; the transcripts stay. Returns pages touched.
+    pub fn review_again(&mut self, ids: &[String]) -> usize {
+        let mut n = 0;
+        for id in ids {
+            let Some(p) = self.a.pages.get_mut(id) else { continue };
+            if p.status() != "done" {
+                continue;
+            }
+            let applied: Vec<usize> = p
+                .corrections()
+                .iter()
+                .enumerate()
+                .filter(|(_, c)| c.get("applied").and_then(Value::as_bool) == Some(true))
+                .map(|(i, _)| i)
+                .collect();
+            for i in applied {
+                vishion_core::judge::toggle(p, i as f64, false);
+            }
+            p.set("resolved", json!({}));
+            p.set("edits", json!([]));
+            p.set("reviewed", Value::Bool(false));
+            self.dirty.pages.insert(id.clone());
+            n += 1;
+        }
+        self.multi.clear();
+        self.sel_word = None;
+        self.sync_tray();
+        n
+    }
+
+    /// The page got a new picture (js/ui/upload.js `doReplace`): everything read from the old one is reset.
+    pub fn page_replaced(&mut self, id: &str, name: &str) {
+        let Some(p) = self.a.pages.get_mut(id) else { return };
+        p.set("name", json!(name));
+        p.set("status", json!("pending"));
+        for (k, v) in [
+            ("raw", json!("")),
+            ("corrected", json!("")),
+            ("corrections", json!([])),
+            ("boxes", json!([])),
+            ("timings", json!({"ms": 0, "tokens": 0})),
+            ("error", json!("")),
+            ("rotation", json!(0)),
+            ("reviewed", json!(false)),
+            ("resolved", json!({})),
+            ("edits", json!([])),
+        ] {
+            p.set(k, v);
+        }
+        self.a.sync_stats();
+        self.read_line.remove(id);
+        self.dirty.pages.insert(id.to_string());
+        self.dirty.meta = true;
+        self.sync_tray();
+    }
+
+    /// Pages the host created for a student (picture already stored). They are saved like any edit.
+    pub fn pages_added(&mut self, list: Vec<Page>) {
+        let ids: Vec<String> = list.iter().map(|p| p.id().to_string()).collect();
+        self.a.add_pages(list);
+        for id in ids {
+            self.dirty.pages.insert(id);
+        }
+        // add_pages renumbers `order` on every page
+        for id in self.a.pages.keys() {
+            self.dirty.pages.insert(id.clone());
+        }
+        self.dirty.meta = true;
+    }
+
+    /// True when the page carries decisions that "Transcribe again" would replace.
+    pub fn has_decisions(&self, p: &Page) -> bool {
+        !p.edits().is_empty() || !p.resolved().is_empty()
+    }
+
+    /// The text of the transcript as plain text (`textView === 'raw'`): no word markers.
+    pub fn plain_text(&self, p: &Page) -> String {
+        let t = if self.original { p.raw().to_string() } else { words::effective(p) };
+        t.chars().filter(|c| !('\u{E000}'..='\u{E002}').contains(c)).collect()
     }
 
     pub fn take_dirty(&mut self) -> Dirty {

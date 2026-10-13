@@ -5,6 +5,7 @@ import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import zlib from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -27,6 +28,21 @@ run('wasm-bindgen', [
   '--target', 'web', '--no-typescript', '--out-dir', dist,
   path.join(repo, 'target/wasm32-unknown-unknown', profile, 'vishion_app.wasm'),
 ]);
+// Size: wasm-opt -Oz (binaryen via the `wasm-opt` npm package) over wasm-bindgen's output. Skipped with
+// --no-opt (a quick debug loop) or when the binary is not installed (`npm ci` in this folder).
+const wasmFile = path.join(dist, 'vishion_app_bg.wasm');
+const optBin = path.join(here, 'node_modules', 'wasm-opt', 'bin', process.platform === 'win32' ? 'wasm-opt.exe' : 'wasm-opt');
+const before = fs.statSync(wasmFile).size;
+if (!debug && !process.argv.includes('--no-opt') && fs.existsSync(optBin)) {
+  const tmp = wasmFile + '.opt';
+  run(optBin, ['-Oz', '--enable-bulk-memory', '--enable-sign-ext', '--enable-nontrapping-float-to-int', '--enable-mutable-globals',
+    '--enable-multivalue', '--enable-reference-types', '--strip-debug', '--strip-producers', wasmFile, '-o', tmp]);
+  fs.renameSync(tmp, wasmFile);
+  console.log(`wasm-opt: ${before} -> ${fs.statSync(wasmFile).size} bytes`);
+}
+// The math font is not linked into the wasm (it would be 840 KB of the download): ui::math asks the host for
+// it the first time a page has a formula, and the host fetches this file.
+fs.copyFileSync(path.join(repo, 'crates/vendor/latex-rust/fonts/stix-two-math/STIXTwoMath-Regular.otf'), path.join(dist, 'stix-two-math.otf'));
 fs.copyFileSync(path.join(here, 'index.html'), path.join(dist, 'index.html'));
 fs.copyFileSync(path.join(repo, 'favicon.svg'), path.join(dist, 'favicon.svg'));
 
@@ -48,7 +64,18 @@ const headers = `/*
 
 /index.html
   Cache-Control: public, max-age=0, must-revalidate
+
+/stix-two-math.otf
+  Cache-Control: public, max-age=31536000, immutable
 `;
 fs.writeFileSync(path.join(dist, '_headers'), headers);
 const wasm = fs.statSync(path.join(dist, 'vishion_app_bg.wasm')).size;
-console.log(`dist: ${dist}\nwasm: ${wasm} bytes\ninline script hashes: ${hashes.join(' ')}`);
+const gz = zlib.gzipSync(fs.readFileSync(path.join(dist, 'vishion_app_bg.wasm')), { level: 9 }).length;
+const font = fs.statSync(path.join(dist, 'stix-two-math.otf')).size;
+console.log(`dist: ${dist}\nwasm: ${wasm} bytes (${gz} gzip), math font ${font} bytes fetched on first formula\ninline script hashes: ${hashes.join(' ')}`);
+// Plan risk "wasm size": about 4 MB and 2 MB gzipped. A release build over budget fails (not --debug / --no-opt).
+const BUDGET = { raw: 4_500_000, gz: 2_000_000 };
+if (!debug && !process.argv.includes('--no-opt') && (wasm > BUDGET.raw || gz > BUDGET.gz)) {
+  console.error(`wasm over budget: ${wasm} bytes (max ${BUDGET.raw}), ${gz} gzip (max ${BUDGET.gz})`);
+  process.exit(1);
+}

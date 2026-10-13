@@ -2,12 +2,12 @@
 //!
 //! ```text
 //! vishion [--root DIR] [--project SLUG] [--demo | --seed-demo-to DIR] [--theme light|dark]
-//!         [--exit-after-ms N] [--screenshot FILE.png] [--dump-controls]
+//!         [--size WxH] [--exit-after-ms N] [--screenshot FILE.png] [--dump-controls]
 //! ```
 //! `--root` is the folder that holds the assignments (default: `$VISHION_DIR`, else `~/Documents/viSHion`).
 //! `--demo` runs the sample assignment from memory; `--seed-demo-to DIR` writes it into DIR first and opens
 //! that folder (edits persist there). `--exit-after-ms` closes the window cleanly after N ms
-//! (smoke tests / CI); `--screenshot` writes the first settled frame and closes; `--dump-controls` prints
+//! (smoke tests / CI); `--size 390x844` opens a phone-sized window; `--screenshot` writes the first settled frame and closes; `--dump-controls` prints
 //! the control list (id, role, label, size) as JSON lines, to compare with the web twin.
 #[cfg(not(target_arch = "wasm32"))]
 fn main() -> eframe::Result<()> {
@@ -21,8 +21,9 @@ fn main() -> eframe::Result<()> {
     let (mut project, mut demo, mut theme) = (None::<String>, false, None::<String>);
     let mut seed_to: Option<PathBuf> = None;
     let (mut exit_after, mut shot, mut dump) = (None, None::<PathBuf>, false);
+    let mut size = (1280.0f32, 800.0f32);
     let mut args = std::env::args().skip(1);
-    let usage = "usage: vishion [--root DIR] [--project SLUG] [--demo] [--seed-demo-to DIR] [--theme light|dark] [--exit-after-ms N] [--screenshot FILE.png] [--dump-controls]";
+    let usage = "usage: vishion [--root DIR] [--project SLUG] [--demo] [--seed-demo-to DIR] [--theme light|dark] [--size WxH] [--exit-after-ms N] [--screenshot FILE.png] [--dump-controls]";
     let need = |a: Option<String>, flag: &str| -> String {
         a.unwrap_or_else(|| {
             eprintln!("{flag} needs a value\n{usage}");
@@ -38,6 +39,17 @@ fn main() -> eframe::Result<()> {
                     std::process::exit(2);
                 }
             },
+            "--size" => {
+                let v = need(args.next(), &a);
+                let parsed = v.split_once('x').and_then(|(w, h)| Some((w.parse::<f32>().ok()?, h.parse::<f32>().ok()?)));
+                match parsed {
+                    Some(wh) => size = wh,
+                    None => {
+                        eprintln!("--size needs WIDTHxHEIGHT, e.g. 390x844");
+                        std::process::exit(2);
+                    }
+                }
+            }
             "--root" => root = Some(PathBuf::from(need(args.next(), &a))),
             "--project" => project = Some(need(args.next(), &a)),
             "--theme" => theme = Some(need(args.next(), &a)),
@@ -58,7 +70,7 @@ fn main() -> eframe::Result<()> {
 
     // Window size: the screenshot/dump runs use the design's reference size.
     let mut native = eframe::NativeOptions::default();
-    native.viewport = egui_viewport(1280.0, 800.0);
+    native.viewport = egui_viewport(size.0, size.1);
 
     eframe::run_native(
         "viSHion",

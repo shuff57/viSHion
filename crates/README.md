@@ -7,7 +7,7 @@ Rust rewrite workspace (plan: `docs/RUST-REWRITE-PLAN.md`). The legacy JS app at
 | `core/` | `vishion-core` | Pure model and logic. No UI, no I/O. Must never depend on egui, web-sys or tokio (CI checks). |
 | `store/` | `vishion-store` | `Store` trait (async get/put/list/delete). Native `FsStore` now; `idb` and `fsa` for web later. |
 | `net/` | `vishion-net` | OCR client edge. Phase 0: endpoint type only; reqwest streaming client lands in Phase 1. |
-| `ui/` | `vishion-ui` | The review screen (Phase 4): `state` flows over core, `transcript`, `math` (latex-rust isolation), `theme` (tokens + bundled fonts), `ctl()` control layer, `twin` + web a11y twin (`web.rs`), `host` command/event seam. |
+| `ui/` | `vishion-ui` | The review screen (Phase 4): `state` flows over core, `transcript`, `flow` (inline line layout), `dialog`, `math` (latex-rust isolation), `theme` (tokens + bundled fonts), `ctl()` control layer, `twin` + web a11y twin (`web.rs`), `host` command/event seam. |
 | `app/` | `vishion-app` | Thin entry points and the storage wiring: native `vishion` bin (folder via `FsStore` on a worker thread), wasm `start()` (`IdbStore`), the `Backend` that answers the UI's commands, a `demo` assignment, and `web/` (index.html, build, serve, CSP check, native/web parity check). |
 
 egui/eframe are pinned to 0.28 (plan rule 6).
@@ -29,13 +29,16 @@ cargo run -p vishion-app --bin vishion --release
 #   --theme light|dark     override settings.theme
 #   --exit-after-ms N      close the window cleanly after N ms (smoke tests; exit code 0)
 #   --screenshot FILE.png  write the first settled frame and close
+#   --size WxH             window size, e.g. 390x844 for the phone layout
 #   --dump-controls        print the control list (id, role, label, size) as JSON lines on close
 
 # web build into crates/app/dist (index.html, wasm, JS glue, _headers with CSP + 'wasm-unsafe-eval' + hash).
 # Web URL options: ?demo=1 (sample assignment, nothing stored), ?project=<slug>, ?theme=light|dark
 cd crates/app/web
 npm ci
-node build.mjs            # add --debug for a debug wasm
+node build.mjs            # add --debug for a debug wasm, --no-opt to skip wasm-opt
+#   wasm-opt -Oz runs from the `wasm-opt` npm package; the STIX math font is copied next to the wasm and
+#   fetched the first time a page has a formula (the wasm is about 4.0 MB, 1.7 MB gzipped, without it)
 
 # serve it under the production CSP with wrangler dev (http://127.0.0.1:8788/)
 node serve.mjs
@@ -45,7 +48,7 @@ node serve.mjs
 node check.mjs
 
 # native vs web parity: same demo assignment, same control list in the same order, every target >= 44pt,
-# light and dark; screenshots go to crates/app/dist/parity-{native,web}-{light,dark}.png
+# light, dark and phone width; screenshots go to crates/app/dist/parity-{native,web}-{light,dark,phone}.png
 cargo build -p vishion-app && node parity.mjs
 
 # deploy-leak check: serves the repo root through the root wrangler.jsonc + .assetsignore and requires
@@ -63,20 +66,41 @@ whenever the inline bootstrap script in `crates/app/web/index.html` changes, so 
 
 ## Review screen (Phase 4)
 
-`ui::review` draws design/Main.dc.html: header (student nav, layout, Copy, Done), page pane (image, line marks,
-strip), transcript (units, typeset math, flagged words inline as controls), and the "Check this word" tray.
-Flows are `ui::state::Session` over `core::words` (`choose`, `use_all`, which call `core::judge::toggle`),
-`core::groups`, `core::export` (Copy). The screen never touches storage: it sends `host::Cmd`s
-(`LoadImage`, `SavePage`, `SaveMeta`, `SaveSettings`) and receives `host::Event`s; `app::backend::Backend`
-answers them over `Projects<AnyStore>` (`FsStore` native, `IdbStore` web, `MemStore` demo).
+`ui::review` draws design/Main.dc.html and the behaviour of js/ui/review.js + header.js:
 
-- Targets: every control is at least 44 x 44 pt (flagged words keep the design's line rhythm and extend
-  their hit area); checked by `ui` frame tests and `parity.mjs`.
+- header: wordmark, back-to-assignment crumb, student navigation, save state, layout, Copy text, Done, Settings.
+  It wraps like the design's flex-wrap (the right group drops to its own row; on a phone every item flows).
+- page pane: `Page i of n`, zoom out / fit / in (buttons, +, -, 0 while the stage has focus, Ctrl+wheel, double
+  click), marks, Straighten, Rotate, Replace, Remove, strip with keyboard (arrows, Home, End, Delete,
+  Alt+arrows to reorder, drag to reorder, Ctrl/Shift-click to select, Export N / Review again / Clear) and Add page.
+  Below 900 pt the panes stack, as css/layout.css does.
+- transcript: `flow.rs` lays inline text out at the design's 31em column and 1.7 line pitch with chips that add
+  no gap and no height; Change student, Show plain/formatted text, Transcribe this page again, pending
+  and error states (Transcribe / Retry), underline that follows the reader (click, arrows inside the transcript,
+  activating a flagged word).
+- tray: choices, typed fix, step, close (Escape inside it closes it and returns focus to a word).
+- dialogs: Change student, confirmations, Settings (theme). Modal: only its controls are in the twin.
+- inbox: a minimal assignment overview the crumb and the last student's Done return to (full inbox is phase 5).
+
+Flows are `ui::state::Session` over `core::words` (`choose`, `use_all`, which call `core::judge::toggle`),
+`core::groups`, `core::export`. The screen never touches storage: it sends `host::Cmd`s (`LoadImage`,
+`SavePage`, `SaveMeta`, `SaveSettings`, `RemovePage`, `RotateImage`, `ReplaceImage`, `AddPages`, `Export`,
+`Straighten`, `Transcribe`, `LoadMathFont`) and receives `host::Event`s; `app::backend::Backend` answers them over
+`Projects<AnyStore>` (`FsStore` native, `IdbStore` web, `MemStore` demo). Pictures are prepared in pure Rust
+(`app::pictures`: longest side 1600, JPEG 90). Native uses `rfd` for the file dialog, the browser an
+`<input type=file>`.
+
+- Targets: every control is at least 44 x 44 pt (flagged words are painted at the design's 30pt chip height and
+  get a 44pt hit area centred on it); checked by `ui` frame tests and `parity.mjs`.
 - Theme: `theme::LIGHT` / `DARK` mirror css/tokens.css; `settings.theme` auto follows the system.
-  Fonts: Instrument Sans 400/500/600 and Source Serif 4 400/600/italic as TrueType in `ui/assets/fonts`.
-- Math: `ui::math` is the only user of latex-rust; a layout error shows the TeX in red monospace.
-- Not in this phase: rotate/replace/straighten, drag-reorder, "Suggest likely words" (needs `net`),
-  Settings/Export dialogs, the inbox (back link is a label until Phase 5).
+  Fonts: Instrument Sans 400/500/600, Source Serif 4 400/600/italic and a Latin+Greek subset of Hack as
+  TrueType in `ui/assets/fonts`; egui's own faces are not linked (`latex-rust` is vendored to keep them out).
+- Math: `ui::math` is the only user of latex-rust; a layout error shows the TeX in red monospace. On the web the
+  font is fetched on first use and the TeX shows muted until it arrives.
+- Honest gaps: Straighten (needs the imaging port, phase 5) and Transcribe / Retry (need `net`, phase 3) reach the
+  host and answer with a notice saying so; "Suggest likely words" is still absent.
+- wasm: about 4.0 MB (1.7 MB gzip) from 7.3 MB (3.2 MB gzip): no egui default fonts (-1.4 MB), math font
+  out of the wasm (-0.84 MB), `opt-level=z`, `strip`, `panic=abort`, wasm-opt -Oz.
 
 ## Keyboard model (web)
 
@@ -87,6 +111,12 @@ mirrored as headings, a `role=status` live region and paragraphs with the flagge
 math as `role=math`. eframe would swallow Tab on the canvas, so `ui/src/web.rs` keeps Tab away from it (capture
 listener) and the browser moves focus: no keyboard trap. `check.mjs` drives real Tab, Shift+Tab, Enter and
 Space, never `focus()`. A future egui text field must keep this property (Tab leaves it).
+
+Keys that belong to a region are forwarded from the twin as `key:<name>` and routed by where focus is: arrows in
+the transcript region (`transcript`, a focusable `role=group`, or any flagged word) move the reading underline,
+the strip takes arrows/Home/End/Delete/Alt+arrows, the page stage (`stage`) takes + - = 0, and Escape closes the
+dialog, else the tray when focus is in it, else clears the underline. Opening a dialog moves focus into it and
+closing it returns focus to what opened it. The line being read is `data-reading` on its paragraph.
 
 ## Rules to keep
 

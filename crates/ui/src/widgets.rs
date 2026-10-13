@@ -2,7 +2,7 @@
 //! is at least 44 x 44 points and goes through `Ctl::reg`.
 use crate::theme::{self, Tokens};
 use crate::{Ctl, C};
-use egui::{pos2, vec2, Color32, Rect, Response, Sense, Shape, Stroke, Ui};
+use egui::{pos2, vec2, Color32, FontFamily, FontId, Rect, Response, Sense, Shape, Stroke, Ui};
 
 pub const TARGET: f32 = 44.0;
 
@@ -60,30 +60,157 @@ pub enum Icon {
     Right,
     Close,
     Boxes,
+    Gear,
+    ZoomIn,
+    ZoomOut,
+    Rotate,
+    Level,
+    Swap,
+    Trash,
+    Plus,
+    Page,
+    Warn,
+    Check,
 }
 
+/// Line icons in the style of js/ui/icons.js (2px strokes, round caps). `size` is the glyph box, 20 to 40.
 pub fn paint_icon(ui: &Ui, rect: Rect, icon: Icon, color: Color32) {
     let c = rect.center();
-    let s = Stroke::new(2.0, color);
+    let k = rect.width().min(rect.height()) / 24.0; // 24-unit design grid
+    let s = Stroke::new((1.8 * k).max(1.5), color);
     let p = ui.painter();
+    let at = |x: f32, y: f32| pos2(c.x + x * k, c.y + y * k);
+    let line = |pts: &[(f32, f32)]| {
+        p.add(Shape::line(pts.iter().map(|(x, y)| at(*x, *y)).collect(), s));
+    };
     match icon {
-        Icon::Left => p.add(Shape::line(vec![pos2(c.x + 3.0, c.y - 7.0), pos2(c.x - 3.5, c.y), pos2(c.x + 3.0, c.y + 7.0)], s)),
-        Icon::Right => p.add(Shape::line(vec![pos2(c.x - 3.0, c.y - 7.0), pos2(c.x + 3.5, c.y), pos2(c.x - 3.0, c.y + 7.0)], s)),
+        Icon::Left => line(&[(3.0, -7.0), (-3.5, 0.0), (3.0, 7.0)]),
+        Icon::Right => line(&[(-3.0, -7.0), (3.5, 0.0), (-3.0, 7.0)]),
         Icon::Close => {
-            p.line_segment([pos2(c.x - 6.0, c.y - 6.0), pos2(c.x + 6.0, c.y + 6.0)], s);
-            p.line_segment([pos2(c.x + 6.0, c.y - 6.0), pos2(c.x - 6.0, c.y + 6.0)], s);
-            return;
+            line(&[(-6.0, -6.0), (6.0, 6.0)]);
+            line(&[(6.0, -6.0), (-6.0, 6.0)]);
         }
         Icon::Boxes => {
             for dy in [-6.0, 0.0, 6.0] {
-                p.line_segment([pos2(c.x - 8.0, c.y + dy), pos2(c.x + 8.0, c.y + dy)], s);
+                line(&[(-8.0, dy), (8.0, dy)]);
             }
-            for x in [-10.0, 10.0] {
-                p.add(Shape::dashed_line(&[pos2(c.x + x, c.y - 10.0), pos2(c.x + x, c.y + 10.0)], Stroke::new(1.5, color), 3.0, 3.0));
+            for x in [-10.0f32, 10.0] {
+                p.add(Shape::dashed_line(&[at(x, -10.0), at(x, 10.0)], Stroke::new(1.5 * k, color), 3.0 * k, 3.0 * k));
             }
-            return;
         }
-    };
+        Icon::Gear => {
+            p.circle_stroke(c, 3.0 * k, s);
+            p.circle_stroke(c, 7.5 * k, s);
+            for i in 0..8 {
+                let a = i as f32 * std::f32::consts::FRAC_PI_4;
+                let (sn, cs) = a.sin_cos();
+                p.line_segment([at(cs * 7.5, sn * 7.5), at(cs * 10.0, sn * 10.0)], Stroke::new(2.6 * k, color));
+            }
+        }
+        Icon::ZoomIn | Icon::ZoomOut => {
+            p.circle_stroke(at(-2.0, -2.0), 7.0 * k, s);
+            line(&[(3.0, 3.0), (9.0, 9.0)]);
+            line(&[(-5.5, -2.0), (1.5, -2.0)]);
+            if icon == Icon::ZoomIn {
+                line(&[(-2.0, -5.5), (-2.0, 1.5)]);
+            }
+        }
+        Icon::Rotate => {
+            // three quarters of a circle with an arrow head
+            let pts: Vec<(f32, f32)> = (0..=18)
+                .map(|i| {
+                    let a = -0.3 + i as f32 * (std::f32::consts::PI * 1.5) / 18.0;
+                    (a.cos() * 7.5, a.sin() * 7.5)
+                })
+                .collect();
+            line(&pts);
+            let (ex, ey) = pts[pts.len() - 1];
+            line(&[(ex - 1.0, ey - 4.5), (ex, ey), (ex + 4.5, ey - 1.5)]);
+        }
+        Icon::Level => {
+            line(&[(-9.0, 4.0), (9.0, -4.0)]);
+            p.circle_stroke(at(0.0, 5.5), 2.2 * k, s);
+            line(&[(-9.0, 9.0), (9.0, 9.0)]);
+        }
+        Icon::Swap => {
+            line(&[(-8.0, -4.0), (8.0, -4.0)]);
+            line(&[(4.0, -8.0), (8.0, -4.0), (4.0, 0.0)]);
+            line(&[(8.0, 5.0), (-8.0, 5.0)]);
+            line(&[(-4.0, 1.0), (-8.0, 5.0), (-4.0, 9.0)]);
+        }
+        Icon::Trash => {
+            line(&[(-8.0, -5.0), (8.0, -5.0)]);
+            line(&[(-3.0, -5.0), (-3.0, -8.0), (3.0, -8.0), (3.0, -5.0)]);
+            line(&[(-6.0, -5.0), (-5.0, 9.0), (5.0, 9.0), (6.0, -5.0)]);
+            line(&[(-2.0, -1.0), (-2.0, 5.0)]);
+            line(&[(2.0, -1.0), (2.0, 5.0)]);
+        }
+        Icon::Plus => {
+            line(&[(-7.0, 0.0), (7.0, 0.0)]);
+            line(&[(0.0, -7.0), (0.0, 7.0)]);
+        }
+        Icon::Page => {
+            line(&[(-7.0, -10.0), (2.0, -10.0), (7.0, -5.0), (7.0, 10.0), (-7.0, 10.0), (-7.0, -10.0)]);
+            line(&[(2.0, -10.0), (2.0, -5.0), (7.0, -5.0)]);
+            line(&[(-3.0, 1.0), (3.0, 1.0)]);
+            line(&[(-3.0, 5.0), (3.0, 5.0)]);
+        }
+        Icon::Warn => {
+            line(&[(0.0, -9.0), (9.0, 7.0), (-9.0, 7.0), (0.0, -9.0)]);
+            line(&[(0.0, -3.0), (0.0, 2.0)]);
+            line(&[(0.0, 5.0), (0.0, 5.2)]);
+        }
+        Icon::Check => line(&[(-6.0, 0.5), (-2.0, 5.0), (7.0, -5.0)]),
+    }
+}
+
+/// A text button with a leading icon ("Add page").
+pub fn icon_text_button(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, c: C, icon: Icon, text: &str, look: Look) -> bool {
+    let fg = if c.disabled { t.faint } else { t.ink };
+    let g = ui.painter().layout_no_wrap(text.to_string(), theme::sans_semi(14.0), fg);
+    let w = g.size().x + 20.0 + 8.0 + 28.0;
+    let sense = if c.disabled { Sense::hover() } else { Sense::click() };
+    let r = ui.allocate_response(vec2(w, TARGET), sense);
+    paint_look(ui, &r, t, look, false, c.disabled);
+    paint_icon(ui, Rect::from_center_size(pos2(r.rect.left() + 14.0 + 10.0, r.rect.center().y), vec2(20.0, 20.0)), icon, fg);
+    ui.painter().galley(pos2(r.rect.left() + 14.0 + 28.0, r.rect.center().y - g.size().y / 2.0), g, fg);
+    let disabled = c.disabled;
+    ctl.reg(ui, &r, c) && !disabled
+}
+
+/// The crumb: back arrow and the assignment name (long names are cut with an ellipsis at `max_w`).
+pub fn crumb(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, c: C, name: &str, max_w: f32) -> bool {
+    let font = theme::sans_medium(14.0);
+    let mut chars: Vec<char> = name.chars().collect();
+    let mut shown = name.to_string();
+    let mut g = ui.painter().layout_no_wrap(shown.clone(), font.clone(), t.ink);
+    while g.size().x > max_w && !chars.is_empty() {
+        chars.pop();
+        shown = chars.iter().collect::<String>() + "\u{2026}";
+        g = ui.painter().layout_no_wrap(shown.clone(), font.clone(), t.ink);
+    }
+    let w = (g.size().x + 20.0 + 6.0 + 24.0).max(TARGET);
+    let r = ui.allocate_response(vec2(w, TARGET), Sense::click());
+    let col = if r.hovered() { t.accent } else { t.ink };
+    paint_icon(ui, Rect::from_center_size(pos2(r.rect.left() + 12.0 + 10.0, r.rect.center().y), vec2(20.0, 20.0)), Icon::Left, col);
+    ui.painter().galley(pos2(r.rect.left() + 12.0 + 26.0, r.rect.center().y - g.size().y / 2.0), g, col);
+    ctl.reg(ui, &r, c)
+}
+
+/// The wordmark: "vi" "SH" "ion", a button that returns to the assignment.
+pub fn brand(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, c: C) -> bool {
+    let font = FontId::new(17.0, FontFamily::Monospace);
+    let parts = [("vi", t.ink), ("SH", t.accent), ("ion", t.ink)];
+    let gs: Vec<_> = parts.iter().map(|(s, col)| ui.painter().layout_no_wrap((*s).to_string(), font.clone(), *col)).collect();
+    let w: f32 = gs.iter().map(|g| g.size().x).sum::<f32>() + 16.0;
+    let r = ui.allocate_response(vec2(w, TARGET), Sense::click());
+    let mut x = r.rect.left() + 8.0;
+    for (g, (_, col)) in gs.into_iter().zip(parts) {
+        let sz = g.size();
+        ui.painter().galley(pos2(x, r.rect.center().y - sz.y / 2.0), g, col);
+        x += sz.x;
+    }
+    ctl.reg(ui, &r, c)
 }
 
 /// A 44 x 44 icon-only button; `label` is its accessible name.
@@ -92,7 +219,7 @@ pub fn icon_button(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, c: C, icon: Icon, on:
     let sense = if disabled { Sense::hover() } else { Sense::click() };
     let r = ui.allocate_response(vec2(TARGET, TARGET), sense);
     paint_look(ui, &r, t, Look::Ghost, on, disabled);
-    paint_icon(ui, r.rect, icon, if disabled { t.faint } else { t.ink });
+    paint_icon(ui, Rect::from_center_size(r.rect.center(), vec2(22.0, 22.0)), icon, if disabled { t.faint } else { t.ink });
     ctl.reg(ui, &r, c) && !disabled
 }
 

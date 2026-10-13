@@ -24,7 +24,8 @@ fn host() -> Option<web_sys::Element> {
 /// `data-id` of the event target when it is a control (a paragraph or heading never activates anything).
 fn data_id(e: &web_sys::Event) -> Option<String> {
     let el = e.target()?.dyn_into::<web_sys::Element>().ok()?;
-    if !matches!(el.tag_name().as_str(), "BUTTON" | "INPUT") {
+    // buttons, text boxes and the focusable key regions (`role=group`, which carry `data-keys`)
+    if !matches!(el.tag_name().as_str(), "BUTTON" | "INPUT") && !el.has_attribute("data-keys") {
         return None;
     }
     el.get_attribute("data-id")
@@ -65,7 +66,7 @@ pub fn install(q: Queue, ctx: egui::Context) {
     });
     let _ = h.add_event_listener_with_callback("input", on_input.as_ref().unchecked_ref());
     on_input.forget();
-    let (q3, c3) = (q, ctx);
+    let (q3, c3) = (q.clone(), ctx.clone());
     let on_key = Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(move |e: web_sys::KeyboardEvent| {
         if e.key() != "Enter" {
             return;
@@ -79,6 +80,94 @@ pub fn install(q: Queue, ctx: egui::Context) {
     });
     let _ = h.add_event_listener_with_callback("keydown", on_key.as_ref().unchecked_ref());
     on_key.forget();
+
+    // Keys the screen handles by where focus is (js: handlers on #tx-text, .scan-pages, the stage, .tray).
+    // Escape always goes through (the tray and dialogs close on it); the others only inside their region.
+    let (q4, c4) = (q.clone(), ctx.clone());
+    let on_region_key = Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(move |e: web_sys::KeyboardEvent| {
+        let key = e.key();
+        let Some(el) = e.target().and_then(|t| t.dyn_into::<web_sys::Element>().ok()) else { return };
+        if matches!(el.tag_name().as_str(), "INPUT" | "TEXTAREA" | "SELECT") && key != "Escape" {
+            return;
+        }
+        let allowed = match key.as_str() {
+            "Escape" => true,
+            k => match scope_of(&el) {
+                Some("stage") => matches!(k, "+" | "=" | "-" | "0"),
+                Some("transcript") => matches!(k, "ArrowUp" | "ArrowDown"),
+                Some("strip") => matches!(k, "ArrowLeft" | "ArrowRight" | "Home" | "End" | "Delete"),
+                _ => false,
+            },
+        };
+        if !allowed {
+            return;
+        }
+        if key != "Escape" {
+            e.prevent_default();
+        }
+        let m = if e.alt_key() { format!("key:{key}\u{1}alt") } else { format!("key:{key}") };
+        q4.lock().unwrap().push(m);
+        c4.request_repaint();
+    });
+    let _ = h.add_event_listener_with_callback("keydown", on_region_key.as_ref().unchecked_ref());
+    on_region_key.forget();
+
+    // Escape when nothing in the twin has focus (a dialog just replaced the control that did): the page
+    // body gets the key. The canvas and eframe's text agent deliver Escape to egui themselves.
+    if let Some(doc) = document() {
+        let (q5, c5) = (q, ctx);
+        let on_doc_escape = Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(move |e: web_sys::KeyboardEvent| {
+            if e.key() != "Escape" {
+                return;
+            }
+            let Some(el) = e.target().and_then(|t| t.dyn_into::<web_sys::Element>().ok()) else { return };
+            let inside_twin = el.closest("#controls").ok().flatten().is_some();
+            if inside_twin || matches!(el.tag_name().as_str(), "CANVAS" | "INPUT") {
+                return;
+            }
+            q5.lock().unwrap().push("key:Escape".to_string());
+            c5.request_repaint();
+        });
+        let _ = doc.add_event_listener_with_callback("keydown", on_doc_escape.as_ref().unchecked_ref());
+        on_doc_escape.forget();
+    }
+}
+
+/// Which keyboard region an element belongs to, by its own `data-id` or an ancestor's.
+fn scope_of(el: &web_sys::Element) -> Option<&'static str> {
+    let mut cur = Some(el.clone());
+    while let Some(e) = cur {
+        if let Some(id) = e.get_attribute("data-id") {
+            if id == "stage" {
+                return Some("stage");
+            }
+            if id == "transcript" || id.starts_with("word-") || id.starts_with("line-") {
+                return Some("transcript");
+            }
+            if id.starts_with("page-") {
+                return Some("strip");
+            }
+        }
+        if e.id() == "controls" {
+            break;
+        }
+        cur = e.parent_element();
+    }
+    None
+}
+
+/// Move DOM focus to the twin with this `data-id` (strip arrows, tray close).
+pub fn focus(id: &str) {
+    let Some(doc) = document() else { return };
+    let Ok(list) = doc.query_selector_all("#controls [data-id]") else { return };
+    for i in 0..list.length() {
+        if let Some(el) = list.item(i).and_then(|n| n.dyn_into::<web_sys::HtmlElement>().ok()) {
+            if el.get_attribute("data-id").as_deref() == Some(id) {
+                let _ = el.focus();
+                return;
+            }
+        }
+    }
 }
 
 /// Call once after eframe has started (it sets `tabindex=0` on the canvas itself).
@@ -169,10 +258,18 @@ fn spec_of(n: &Node) -> Spec {
             _ => "h3",
         })
         .text(text),
-        Node::Status { id, text, .. } => Spec::new(id, "div").attr("role", "status").text(text),
+        // a problem the person has to act on is announced at once (role=alert), the rest politely
+        Node::Status { id, text, .. } => Spec::new(id, "div").attr("role", if id.ends_with("-error") { "alert" } else { "status" }).text(text),
+        Node::Group { id, label, keys, .. } => Spec::new(id, "div")
+            .attr("role", "group")
+            .attr("tabindex", "0")
+            .attr("aria-label", label.clone())
+            .attr("data-keys", *keys),
         Node::Text { id, text, .. } => Spec::new(id, "p").text(text),
-        Node::Para { id, parts, .. } => {
+        Node::Para { id, parts, reading, .. } => {
             let mut p = Spec::new(id, "p");
+            // always listed, so the attribute is removed again when the underline moves on
+            p.attrs.push(("data-reading", if *reading { Some("1".to_string()) } else { None }));
             let mut kids = vec![];
             for (i, part) in parts.iter().enumerate() {
                 kids.push(match part {

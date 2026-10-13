@@ -141,31 +141,36 @@ pub fn serif_italic(size: f32) -> FontId {
     FontId::new(size, named(SERIF_ITALIC))
 }
 
+pub const MONO: &str = "mono-400";
+
+/// Our faces only. egui's own fonts are not linked (see crates/vendor/PATCHES.md); Hack (Latin, Greek,
+/// operators) is the monospace face and the last fallback for glyphs the two main families lack.
 pub fn fonts() -> FontDefinitions {
-    let mut f = FontDefinitions::default();
-    let files: [(&str, &'static [u8]); 6] = [
+    let mut f = FontDefinitions::empty();
+    let files: [(&str, &'static [u8]); 7] = [
         ("Instrument Sans", include_bytes!("../assets/fonts/instrument-sans-latin-400-normal.ttf")),
         (SANS_MEDIUM, include_bytes!("../assets/fonts/instrument-sans-latin-500-normal.ttf")),
         (SANS_SEMI, include_bytes!("../assets/fonts/instrument-sans-latin-600-normal.ttf")),
         (SERIF, include_bytes!("../assets/fonts/source-serif-4-latin-400-normal.ttf")),
         (SERIF_SEMI, include_bytes!("../assets/fonts/source-serif-4-latin-600-normal.ttf")),
         (SERIF_ITALIC, include_bytes!("../assets/fonts/source-serif-4-latin-400-italic.ttf")),
+        (MONO, include_bytes!("../assets/fonts/hack-latin-400-normal.ttf")),
     ];
     for (name, bytes) in files {
         f.font_data.insert(name.to_string(), FontData::from_static(bytes));
     }
-    let fallback: Vec<String> = f.families.get(&FontFamily::Proportional).cloned().unwrap_or_default();
-    let mono: Vec<String> = f.families.get(&FontFamily::Monospace).cloned().unwrap_or_default();
     let with = |first: &str| -> Vec<String> {
-        let mut v = vec![first.to_string()];
-        v.extend(fallback.iter().cloned());
-        v
+        if first == MONO {
+            vec![MONO.to_string()]
+        } else {
+            vec![first.to_string(), MONO.to_string()]
+        }
     };
     f.families.insert(FontFamily::Proportional, with("Instrument Sans"));
     for n in [SANS_MEDIUM, SANS_SEMI, SERIF, SERIF_SEMI, SERIF_ITALIC] {
         f.families.insert(named(n), with(n));
     }
-    f.families.insert(FontFamily::Monospace, mono);
+    f.families.insert(FontFamily::Monospace, with(MONO));
     f
 }
 

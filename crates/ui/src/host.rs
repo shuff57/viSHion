@@ -15,6 +15,22 @@ pub enum Cmd {
     SaveMeta { slug: String, meta: Project },
     /// `settings.json` (secrets stripped by the project layer).
     SaveSettings { settings: Settings },
+    /// `deletePage`: the page file, its image and its originals. The UI already dropped it from the order.
+    RemovePage { slug: String, id: String },
+    /// Turn the stored image a quarter turn clockwise; answered by `Event::Image`.
+    RotateImage { slug: String, id: String },
+    /// Ask for a picture, store it as the page's image and answer `Event::PageReplaced`.
+    ReplaceImage { slug: String, id: String },
+    /// Ask for pictures and add one page each for `student`; answered by `Event::PagesAdded`.
+    AddPages { slug: String, student: String },
+    /// Straighten the stored image and redo its line boxes (needs the imaging port).
+    Straighten { slug: String, id: String },
+    /// Read these pages (again). The OCR client lands with phase 3.
+    Transcribe { slug: String, ids: Vec<String> },
+    /// Write `exports/<name>` (the strip's "Export N selected").
+    Export { slug: String, name: String, bytes: Vec<u8> },
+    /// Web: fetch the STIX Two Math font once (it is not part of the wasm, plan risk "wasm size").
+    LoadMathFont,
 }
 
 /// Host to UI.
@@ -38,6 +54,14 @@ pub enum Event {
     Image { id: String, bytes: Option<Vec<u8>> },
     Saved,
     SaveFailed(String),
+    /// A line for the toast (`OCR.toast`); `error` tints it as a problem.
+    Notice { text: String, error: bool },
+    /// A page's picture was replaced: the page is reset to "pending" and shows `bytes`.
+    PageReplaced { id: String, name: String, bytes: Vec<u8> },
+    /// New pages with their pictures, in order.
+    PagesAdded { pages: Vec<(Page, Vec<u8>)> },
+    /// The math font bytes (web).
+    MathFont(Vec<u8>),
 }
 
 /// Thread-safe mailbox the host pushes into. Pushing wakes egui.

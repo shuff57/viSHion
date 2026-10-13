@@ -11,6 +11,8 @@ pub const HEADER: u8 = 0;
 pub const SCAN: u8 = 1;
 pub const TEXT: u8 = 2;
 pub const TRAY: u8 = 3;
+/// A modal dialog: while one is open it is the only thing in the twin.
+pub const DIALOG: u8 = 4;
 
 #[derive(Clone, PartialEq, Debug)]
 pub struct Reg {
@@ -41,7 +43,11 @@ pub enum Node {
     /// `role=status`, announced politely when its text changes.
     Status { id: String, text: String, region: u8, pos: (i32, i32) },
     Text { id: String, text: String, region: u8, pos: (i32, i32) },
-    Para { id: String, parts: Vec<Part>, region: u8, pos: (i32, i32) },
+    /// A transcript line. `keys`: arrow keys inside it move the reading underline; `reading`: it is the
+    /// line being read (web: `data-reading`, so the underline is observable without pixels).
+    Para { id: String, parts: Vec<Part>, region: u8, pos: (i32, i32), keys: bool, reading: bool },
+    /// A focusable region that takes keys of its own (`keys` names the set: stage, transcript, strip).
+    Group { id: String, label: String, keys: &'static str, region: u8, pos: (i32, i32) },
     Control(Reg),
 }
 
@@ -51,7 +57,8 @@ impl Node {
             Node::Heading { region, pos, .. }
             | Node::Status { region, pos, .. }
             | Node::Text { region, pos, .. }
-            | Node::Para { region, pos, .. } => (*region, *pos),
+            | Node::Para { region, pos, .. }
+            | Node::Group { region, pos, .. } => (*region, *pos),
             Node::Control(c) => (c.region, c.pos),
         };
         (r, p.0, p.1)
@@ -59,7 +66,7 @@ impl Node {
 
     pub fn id(&self) -> &str {
         match self {
-            Node::Heading { id, .. } | Node::Status { id, .. } | Node::Text { id, .. } | Node::Para { id, .. } => id,
+            Node::Heading { id, .. } | Node::Status { id, .. } | Node::Text { id, .. } | Node::Para { id, .. } | Node::Group { id, .. } => id,
             Node::Control(c) => &c.id,
         }
     }

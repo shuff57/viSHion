@@ -16,6 +16,8 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+mod dialog;
+mod flow;
 pub mod host;
 pub mod math;
 mod review;
@@ -55,6 +57,14 @@ pub fn now_ms() -> i64 {
     }
 }
 
+/// A key press routed to the screen: from egui (native, or the canvas on the web) or forwarded by the DOM
+/// twin as `key:<name>` / `key:<name>\u{1}alt`. Names follow `KeyboardEvent.key`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct KeyEv {
+    pub key: String,
+    pub alt: bool,
+}
+
 /// The control layer: activation, twin focus and the node list of this frame.
 #[derive(Default)]
 pub struct Ctl {
@@ -65,6 +75,17 @@ pub struct Ctl {
     nodes: Vec<Node>,
     para: Option<Vec<Part>>,
     ring: egui::Color32,
+    /// Keys of this frame (twin and egui).
+    pub(crate) keys: Vec<KeyEv>,
+    /// The control or group that has focus this frame, with its region (egui focus or twin focus).
+    pub(crate) focused: Option<(String, u8)>,
+    /// Move focus to this id when it is next registered (strip arrow keys).
+    pub(crate) want_focus: Option<String>,
+    /// Ask the platform to move DOM focus (web) once the twin has been synced.
+    pub(crate) dom_focus: Option<String>,
+    /// A dialog was open at the end of the last frame, and where focus goes back to when it closes.
+    pub(crate) dialog_was: bool,
+    pub(crate) restore_focus: Option<String>,
 }
 
 /// What a control is, for the twin.
@@ -91,6 +112,19 @@ impl<'a> C<'a> {
 }
 
 impl Ctl {
+    fn track_focus(&mut self, ui: &Ui, r: &egui::Response, id: &str, region: u8) {
+        if self.want_focus.as_deref() == Some(id) {
+            self.want_focus = None;
+            r.request_focus();
+            self.focus = Some(id.to_string());
+            self.dom_focus = Some(id.to_string());
+        }
+        if self.focus.as_deref() == Some(id) || r.has_focus() {
+            ui.painter().rect_stroke(r.rect.expand(2.0), 6.0, Stroke::new(2.0, self.ring));
+            self.focused = Some((id.to_string(), region));
+        }
+    }
+
     /// The single funnel for interactive widgets. Returns true when activated from the canvas or the twin.
     pub fn reg(&mut self, ui: &Ui, r: &egui::Response, c: C) -> bool {
         self.push(Reg {
@@ -104,9 +138,7 @@ impl Ctl {
             pos: twin::pos_of(r.rect.min),
             size: (r.rect.width().round() as u16, r.rect.height().round() as u16),
         });
-        if self.focus.as_deref() == Some(c.id) || r.has_focus() {
-            ui.painter().rect_stroke(r.rect.expand(2.0), 6.0, Stroke::new(2.0, self.ring));
-        }
+        self.track_focus(ui, r, c.id, c.region);
         let from_dom = self.act.remove(c.id);
         !c.disabled && (r.clicked() || from_dom)
     }
@@ -125,10 +157,17 @@ impl Ctl {
             pos: twin::pos_of(r.rect.min),
             size: (r.rect.width().round() as u16, r.rect.height().round() as u16),
         });
-        if self.focus.as_deref() == Some(c.id) || r.has_focus() {
-            ui.painter().rect_stroke(r.rect.expand(2.0), 6.0, Stroke::new(2.0, self.ring));
-        }
+        self.track_focus(ui, r, c.id, c.region);
         self.typed.remove(c.id)
+    }
+
+    /// A focusable, named region that takes keys (`keys` is the set the web twin forwards). Not a control:
+    /// it is absent from `controls()` and from the parity list.
+    pub fn group(&mut self, ui: &Ui, r: &egui::Response, id: &str, label: &str, keys: &'static str, region: u8) {
+        // one pixel left of its content, so it sorts just before the first paragraph it governs
+        let pos = twin::pos_of(r.rect.min - egui::vec2(1.0, 0.0));
+        self.nodes.push(Node::Group { id: id.into(), label: label.into(), keys, region, pos });
+        self.track_focus(ui, r, id, region);
     }
 
     fn push(&mut self, reg: Reg) {
@@ -170,10 +209,19 @@ impl Ctl {
         }
     }
 
-    pub fn end_para(&mut self, id: &str, region: u8, min: egui::Pos2) {
+    pub fn end_para(&mut self, id: &str, region: u8, min: egui::Pos2, keys: bool, reading: bool) {
         if let Some(parts) = self.para.take() {
-            self.nodes.push(Node::Para { id: id.into(), parts, region, pos: twin::pos_of(min) });
+            self.nodes.push(Node::Para { id: id.into(), parts, region, pos: twin::pos_of(min), keys, reading });
         }
+    }
+
+    /// Is the focus on a control or group whose id starts with `prefix`?
+    pub(crate) fn focus_in(&self, prefix: &str) -> bool {
+        self.focused.as_ref().is_some_and(|(id, _)| id.starts_with(prefix))
+    }
+
+    pub(crate) fn focus_region(&self) -> Option<u8> {
+        self.focused.as_ref().map(|(_, r)| *r)
     }
 
     fn drain(&mut self, q: &Queue) {
@@ -187,6 +235,12 @@ impl Ctl {
                 if self.focus.as_deref() == Some(id) {
                     self.focus = None;
                 }
+            } else if let Some(rest) = m.strip_prefix("key:") {
+                let (key, alt) = match rest.split_once('\u{1}') {
+                    Some((k, m)) => (k, m.contains("alt")),
+                    None => (rest, false),
+                };
+                self.keys.push(KeyEv { key: key.into(), alt });
             } else if let Some(rest) = m.strip_prefix("text:") {
                 if let Some((id, v)) = rest.split_once('\u{1}') {
                     self.typed.insert(id.into(), v.into());
@@ -241,6 +295,11 @@ pub struct App {
     typed: String,
     typed_for: Option<(String, String)>,
     status_msg: Option<String>,
+    status_err: bool,
+    dialog: Option<dialog::Dialog>,
+    /// Scroll position and size of the page stage, kept so zoom can hold the middle of the view.
+    stage: review::Stage,
+    font_requested: bool,
     theme_name: String,
     theme_override: Option<String>,
     dark_applied: Option<bool>,
@@ -276,6 +335,10 @@ impl App {
             typed: String::new(),
             typed_for: None,
             status_msg: None,
+            status_err: false,
+            dialog: None,
+            stage: review::Stage::default(),
+            font_requested: false,
             theme_name: "auto".into(),
             theme_override: None,
             dark_applied: None,
@@ -390,6 +453,44 @@ impl App {
                     self.save.pending = self.save.pending.saturating_sub(1);
                     self.save.failed = Some(m);
                 }
+                Event::Notice { text, error } => {
+                    if !text.is_empty() {
+                        self.status_msg = Some(text);
+                        self.status_err = error;
+                    }
+                }
+                Event::PageReplaced { id, name, bytes } => {
+                    if let Some(s) = &mut self.session {
+                        s.page_replaced(&id, &name);
+                    }
+                    let slot = decode_image(&self.ctx, &id, &bytes).map_or(Slot::Missing, Slot::Ready);
+                    self.images.insert(id, slot);
+                    self.status_msg = Some("Page replaced. Transcribe it again from this screen.".into());
+                    self.status_err = false;
+                }
+                Event::PagesAdded { pages } => {
+                    let n = pages.len();
+                    let mut first = None;
+                    let mut list = vec![];
+                    for (p, bytes) in pages {
+                        let id = p.id().to_string();
+                        let slot = decode_image(&self.ctx, &id, &bytes).map_or(Slot::Missing, Slot::Ready);
+                        self.images.insert(id.clone(), slot);
+                        first.get_or_insert(id);
+                        list.push(p);
+                    }
+                    if let Some(s) = &mut self.session {
+                        s.pages_added(list);
+                        if let Some(f) = first {
+                            s.select(&f);
+                        }
+                    }
+                    if n > 0 {
+                        self.status_msg = Some(format!("Added {}.", state::plural(n, "page", "pages")));
+                        self.status_err = false;
+                    }
+                }
+                Event::MathFont(bytes) => self.math.set_font(bytes),
             }
         }
     }
@@ -420,6 +521,12 @@ impl App {
         let d = s.take_dirty();
         let slug = s.slug.clone();
         let mut cmds = vec![];
+        for id in d.removed {
+            cmds.push(Cmd::RemovePage { slug: slug.clone(), id });
+        }
+        for id in d.rotated {
+            cmds.push(Cmd::RotateImage { slug: slug.clone(), id });
+        }
         for id in d.pages {
             if let Some(p) = s.a.pages.get(&id) {
                 cmds.push(Cmd::SavePage { slug: slug.clone(), page: p.clone() });
@@ -481,12 +588,19 @@ impl App {
     /// One frame: twin and host input, the screen, the twin output, saves, image requests, exit rules.
     fn step(&mut self, ctx: &egui::Context, system_dark: bool) {
         self.ctl.drain(&self.queue);
+        self.collect_egui_keys(ctx);
         self.handle_events();
+        self.ctl.focused = None;
         self.ui_frame(ctx, system_dark);
         // an activation or typed text whose control was not on screen this frame is dropped, not kept
         self.ctl.act.clear();
         self.ctl.typed.clear();
+        self.ctl.keys.clear();
 
+        // a modal dialog is the only thing the twin shows while it is open
+        if self.dialog.is_some() {
+            self.ctl.nodes.retain(|n| n.key().0 == twin::DIALOG);
+        }
         // reading order: region, then 16px row band, then x
         self.ctl.nodes.sort_by_key(|n| n.key());
         let nodes = std::mem::take(&mut self.ctl.nodes);
@@ -494,6 +608,16 @@ impl App {
             #[cfg(target_arch = "wasm32")]
             web::sync(&nodes);
             self.last_nodes = nodes;
+        }
+        if let Some(id) = self.ctl.dom_focus.take() {
+            #[cfg(target_arch = "wasm32")]
+            web::focus(&id);
+            #[cfg(not(target_arch = "wasm32"))]
+            let _ = id;
+        }
+        if self.math.wants_font() && !self.font_requested {
+            self.font_requested = true;
+            self.send(Cmd::LoadMathFont);
         }
 
         self.want_images();
@@ -511,6 +635,37 @@ impl App {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             } else {
                 ctx.request_repaint_after(Duration::from_millis(50));
+            }
+        }
+    }
+}
+
+impl App {
+    /// Keys egui saw (native, or the canvas on the web) become the same `KeyEv`s the twin forwards. Not while
+    /// a text field has the keyboard.
+    fn collect_egui_keys(&mut self, ctx: &egui::Context) {
+        if ctx.wants_keyboard_input() {
+            return;
+        }
+        let evs = ctx.input(|i| i.events.clone());
+        for e in evs {
+            if let egui::Event::Key { key, pressed: true, modifiers, .. } = e {
+                let name = match key {
+                    egui::Key::ArrowDown => "ArrowDown",
+                    egui::Key::ArrowUp => "ArrowUp",
+                    egui::Key::ArrowLeft => "ArrowLeft",
+                    egui::Key::ArrowRight => "ArrowRight",
+                    egui::Key::Home => "Home",
+                    egui::Key::End => "End",
+                    egui::Key::Delete => "Delete",
+                    egui::Key::Escape => "Escape",
+                    egui::Key::Plus => "+",
+                    egui::Key::Equals => "=",
+                    egui::Key::Minus => "-",
+                    egui::Key::Num0 => "0",
+                    _ => continue,
+                };
+                self.ctl.keys.push(KeyEv { key: name.into(), alt: modifiers.alt });
             }
         }
     }

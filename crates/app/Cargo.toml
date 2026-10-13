@@ -21,11 +21,19 @@ vishion-net.workspace = true
 eframe.workspace = true
 serde_json.workspace = true
 # Synthetic page images for the demo assignment (JPEG, like stored pages).
-image = { version = "0.25", default-features = false, features = ["jpeg"] }
+# Picked pictures are decoded in pure Rust and stored as JPEG (js/image.js `prepare`), same on native and wasm.
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
+
+# The native file dialog behind "Replace this page" and "Add page" (the browser uses an <input type=file>).
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+rfd = "0.15"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
-web-sys = { version = "0.3", features = ["Window", "Location"] }
+web-sys = { version = "0.3", features = [
+  "Window", "Location", "Document", "Element", "HtmlElement", "HtmlInputElement", "FileList", "File", "Blob",
+  "Event", "EventTarget", "Response", "Headers",
+] }
 log = "0.4"

@@ -200,6 +200,132 @@ try {
   expect((await page.evaluate(() => window.__violations)).length === 0, 'still zero violations after interaction');
   await page.screenshot({ path: path.join(here, '../dist/check.png') });
 
+  // ---- review tools by real keyboard (fresh demo): strip, stage zoom, transcript underline, tray Escape, dialogs
+  {
+    const ctx4 = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+    const p4 = await ctx4.newPage();
+    const reqs = [];
+    p4.on('request', r => reqs.push(r.url()));
+    await p4.addInitScript(track);
+    await p4.goto(base + '/?demo=1&theme=light', { waitUntil: 'load' });
+    await settled(p4);
+    const pump4 = async (n = 4) => { for (let i = 0; i < n; i++) { await p4.mouse.move(700 + i, 500 + i); await p4.waitForTimeout(70); } };
+    await pump4(8);
+    await p4.waitForSelector('#controls [data-id="done"]', { timeout: 20000 });
+    const active4 = () => p4.evaluate(() => { const a = document.activeElement; return a ? a.getAttribute('data-id') : null; });
+    const attr4 = (id, name) => p4.evaluate(([i, n]) => {
+      const e = [...document.querySelectorAll('#controls [data-id]')].find(x => x.dataset.id === i);
+      return e ? e.getAttribute(n) : undefined;
+    }, [id, name]);
+    const has4 = async (id) => (await attr4(id, 'data-id')) !== undefined;
+    const ids4 = () => p4.evaluate(() => [...document.querySelectorAll('#controls button, #controls input')].map(e => e.dataset.id));
+    const wait4 = async (fn, ms = 6000) => { const t0 = Date.now(); while (Date.now() - t0 < ms) { if (await fn()) return true; await pump4(2); } return false; };
+    const tab4 = async (id, limit = 140) => {
+      await p4.mouse.click(640, 4);
+      for (let i = 0; i < limit; i++) { await p4.keyboard.press('Tab'); if ((await active4()) === id) return true; }
+      return false;
+    };
+    expect(await wait4(async () => reqs.some(u => u.endsWith('/stix-two-math.otf'))), 'the math font is fetched on demand when a page has a formula (not linked into the wasm)');
+    const wasmReq = reqs.find(u => u.endsWith('.wasm'));
+    expect(!!wasmReq, 'the wasm itself is requested separately: ' + wasmReq);
+
+    // strip: Arrow, Home, End, Alt+Arrow
+    expect(await tab4('page-p-maya-1'), 'Tab reaches the first page thumbnail');
+    await p4.keyboard.press('ArrowRight');
+    expect(await wait4(async () => (await attr4('page-p-maya-2', 'aria-pressed')) === 'true'), 'ArrowRight on the strip selects the next page');
+    expect((await active4()) === 'page-p-maya-2', 'focus follows the selection in the strip');
+    await p4.keyboard.press('Home');
+    expect(await wait4(async () => (await attr4('page-p-maya-1', 'aria-pressed')) === 'true'), 'Home selects the first page');
+    await p4.keyboard.press('End');
+    expect(await wait4(async () => (await attr4('page-p-maya-2', 'aria-pressed')) === 'true'), 'End selects the last page');
+    await p4.keyboard.press('Alt+ArrowLeft');
+    const order = async () => (await ids4()).filter(i => i && i.startsWith('page-'));
+    expect(await wait4(async () => JSON.stringify(await order()) === JSON.stringify(['page-p-maya-2', 'page-p-maya-1'])),
+      'Alt+ArrowLeft moves the page one place earlier: ' + JSON.stringify(await order()));
+    await p4.keyboard.press('Alt+ArrowRight');
+    expect(await wait4(async () => JSON.stringify(await order()) === JSON.stringify(['page-p-maya-1', 'page-p-maya-2'])), 'Alt+ArrowRight moves it back');
+
+    // page stage: zoom keys only while it has focus
+    expect(await has4('stage') && !(await has4('zoom-out')) === false, 'the page stage is a focusable group in the twin');
+    expect((await attr4('zoom-out', 'disabled')) !== null, 'Zoom out starts disabled (fit)');
+    expect(await tab4('stage'), 'Tab reaches the page stage');
+    await p4.keyboard.press('+');
+    expect(await wait4(async () => (await attr4('zoom-out', 'disabled')) === null), 'plus zooms in (Zoom out becomes available)');
+    await p4.keyboard.press('0');
+    expect(await wait4(async () => (await attr4('zoom-out', 'disabled')) !== null), 'zero fits the page again');
+
+    // transcript: arrows move the underline only inside it; Escape clears it first, not the tray
+    const reading = () => p4.evaluate(() => { const e = document.querySelector('#controls p[data-reading]'); return e ? e.dataset.id : null; });
+    expect(await tab4('done'), 'Tab reaches Done');
+    await p4.keyboard.press('ArrowDown');
+    await pump4(3);
+    expect((await reading()) === null, 'ArrowDown with focus in the header does not move the reading underline');
+    expect(await tab4('transcript'), 'Tab reaches the transcript region');
+    await p4.keyboard.press('ArrowDown');
+    expect(await wait4(async () => /-0$/.test((await reading()) || '')), 'ArrowDown in the transcript underlines the first line: ' + await reading());
+    await p4.keyboard.press('ArrowDown');
+    expect(await wait4(async () => /-1$/.test((await reading()) || '')), 'ArrowDown again moves to the second line');
+    await p4.keyboard.press('Escape');
+    expect(await wait4(async () => (await reading()) === null), 'Escape clears the underline');
+    expect(await has4('alt-suggested'), 'and leaves the tray open');
+    // activating a flagged word underlines its line
+    const word = (await ids4()).find(i => i && /^word-.*-c:0$/.test(i));
+    expect(await tab4(word), 'Tab reaches a flagged word');
+    await p4.keyboard.press('Enter');
+    expect(await wait4(async () => (await reading()) !== null), 'activating a flagged word moves the underline to its line: ' + await reading());
+
+    // tray: Escape inside it closes it and returns focus to a word
+    expect(await tab4('alt-suggested'), 'Tab reaches a tray choice');
+    await p4.keyboard.press('Escape');
+    expect(await wait4(async () => !(await has4('alt-suggested'))), 'Escape inside the tray closes it');
+    expect(await wait4(async () => ((await active4()) || '').startsWith('word-')), 'focus returns to a flagged word: ' + await active4());
+
+    // dialogs: Settings (gear), Change student, Remove page; Escape closes; the screen is inert behind them
+    expect(await tab4('settings'), 'Tab reaches the Settings gear');
+    await p4.keyboard.press('Enter');
+    expect(await wait4(async () => (await p4.textContent('#controls [data-id="dialog-title"]').catch(() => null)) === 'Settings'), 'Settings opens a dialog');
+    const inDialog = await ids4();
+    expect(!inDialog.includes('done') && inDialog.includes('theme-dark'), 'while a dialog is open only its controls are in the twin: ' + inDialog.join(' '));
+    await p4.keyboard.press('Escape');
+    expect(await wait4(async () => (await has4('done')) && !(await has4('dialog-title'))), 'Escape closes the dialog');
+    expect(await tab4('change-student'), 'Tab reaches Change student');
+    await p4.keyboard.press('Enter');
+    expect(await wait4(async () => (await p4.textContent('#controls [data-id="dialog-title"]').catch(() => null)) === 'Change student'), 'Change student opens its dialog');
+    expect((await ids4()).includes('cs-student-0') && (await ids4()).includes('cs-new'), 'it lists the other students and "A new student"');
+    await p4.keyboard.press('Escape');
+    expect(await wait4(async () => await has4('done')), 'Escape cancels it');
+    expect(await tab4('remove'), 'Tab reaches Remove this page');
+    await p4.keyboard.press('Enter');
+    expect(await wait4(async () => (await p4.textContent('#controls [data-id="dialog-title"]').catch(() => null)) === 'Remove page'), 'Remove asks for confirmation');
+    await p4.keyboard.press('Escape');
+    expect(await wait4(async () => await has4('page-p-maya-1')), 'cancelling keeps the page');
+
+    // back to the assignment and into a student again
+    expect(await tab4('crumb'), 'Tab reaches the back-to-assignment crumb');
+    await p4.keyboard.press('Enter');
+    expect(await wait4(async () => (await p4.textContent('#controls [data-id="inbox-title"]').catch(() => null)) === 'Unit 5 written response'), 'the crumb shows the assignment overview');
+    await p4.screenshot({ path: path.join(here, '../dist/check-inbox.png') });
+    expect((await p4.evaluate(() => window.__violations)).length === 0, 'zero CSP violations through all of it');
+    await ctx4.close();
+  }
+
+  // ---- phone width: boots under the same CSP and exposes the page pane and the tools
+  {
+    const ctx5 = await browser.newContext({ viewport: { width: 390, height: 844 } });
+    const p5 = await ctx5.newPage();
+    await p5.addInitScript(track);
+    await p5.goto(base + '/?demo=1&theme=dark', { waitUntil: 'load' });
+    await settled(p5);
+    for (let i = 0; i < 8; i++) { await p5.mouse.move(100 + i, 400 + i); await p5.waitForTimeout(70); }
+    await p5.waitForSelector('#controls [data-id="done"]', { timeout: 20000 });
+    const ids = await p5.evaluate(() => [...document.querySelectorAll('#controls button')].map(e => e.dataset.id));
+    expect(['zoom-in', 'rotate', 'replace', 'remove', 'add-page', 'page-p-maya-1', 'settings', 'crumb'].every(i => ids.includes(i)),
+      'phone width exposes the page pane tools and the header');
+    expect((await p5.evaluate(() => window.__violations)).length === 0, 'zero CSP violations at phone width');
+    await p5.screenshot({ path: path.join(here, '../dist/check-phone.png') });
+    await ctx5.close();
+  }
+
   // ---- real storage: an assignment in IndexedDB `ocr_fs` (as the legacy app writes it) opens, edits and saves
   {
     const ctx3 = await browser.newContext({ viewport: { width: 1280, height: 800 } });

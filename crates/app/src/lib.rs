@@ -5,6 +5,7 @@
 
 pub mod backend;
 pub mod demo;
+pub mod pictures;
 
 /// Query-string options of the web build, as `key=value` pairs. Pure so it is testable natively.
 pub fn parse_query(search: &str) -> Vec<(String, String)> {
@@ -26,6 +27,17 @@ mod web {
     use vishion_store::idb::IdbStore;
     use vishion_ui::{Cmd, Event, Inbox};
     use wasm_bindgen::prelude::*;
+
+    async fn fetch_bytes(url: &str) -> Option<Vec<u8>> {
+        use wasm_bindgen::JsCast;
+        let w = web_sys::window()?;
+        let r: web_sys::Response = wasm_bindgen_futures::JsFuture::from(w.fetch_with_str(url)).await.ok()?.dyn_into().ok()?;
+        if !r.ok() {
+            return None;
+        }
+        let buf = wasm_bindgen_futures::JsFuture::from(r.array_buffer().ok()?).await.ok()?;
+        Some(js_sys::Uint8Array::new(&buf).to_vec())
+    }
 
     /// Mount the egui app on the canvas with the given id.
     ///
@@ -61,6 +73,12 @@ mod web {
                         Box::new(move |cmd: Cmd| {
                             let (b, inbox) = (b.clone(), inbox.clone());
                             wasm_bindgen_futures::spawn_local(async move {
+                                if matches!(cmd, Cmd::LoadMathFont) {
+                                    // the 840 KB math font is a separate file, fetched when a page first has math
+                                    let bytes = fetch_bytes("stix-two-math.otf").await.unwrap_or_default();
+                                    inbox.push(Event::MathFont(bytes));
+                                    return;
+                                }
                                 let e: Event = b.handle(cmd, js_sys::Date::now() as i64).await;
                                 inbox.push(e);
                             });

@@ -195,6 +195,98 @@ mod tests {
         assert!(matches!(img, Event::Image { bytes: Some(b), .. } if b.len() > 1000));
     }
 
+    fn png(w: u32, h: u32) -> Vec<u8> {
+        let im = image::RgbImage::from_pixel(w, h, image::Rgb([20, 80, 160]));
+        let mut out = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgb8(im).write_to(&mut out, image::ImageFormat::Png).unwrap();
+        out.into_inner()
+    }
+
+    fn dims(b: &[u8]) -> (u32, u32) {
+        let i = image::load_from_memory(b).unwrap();
+        (i.width(), i.height())
+    }
+
+    #[test]
+    fn rotate_turns_the_stored_image_and_answers_with_the_new_bytes() {
+        let (store, slug) = block_on(seed(1_700_000_000_000)).unwrap();
+        let be = Backend::new(store, "Demo");
+        let before = match block_on(be.handle(Cmd::LoadImage { slug: slug.clone(), id: "p-maya-1".into() }, 0)) {
+            Event::Image { bytes: Some(b), .. } => dims(&b),
+            e => panic!("{e:?}"),
+        };
+        let Event::Image { id, bytes: Some(b) } = block_on(be.handle(Cmd::RotateImage { slug: slug.clone(), id: "p-maya-1".into() }, 0)) else {
+            panic!("rotate")
+        };
+        assert_eq!(id, "p-maya-1");
+        assert_eq!(dims(&b), (before.1, before.0));
+        // stored: a second load sees the turned picture
+        let Event::Image { bytes: Some(again), .. } = block_on(be.handle(Cmd::LoadImage { slug, id: "p-maya-1".into() }, 0)) else { panic!() };
+        assert_eq!(dims(&again), (before.1, before.0));
+    }
+
+    #[test]
+    fn remove_deletes_the_page_and_its_image() {
+        let (store, slug) = block_on(seed(1_700_000_000_000)).unwrap();
+        let be = Backend::new(store, "Demo");
+        assert!(matches!(block_on(be.handle(Cmd::RemovePage { slug: slug.clone(), id: "p-maya-2".into() }, 0)), Event::Saved));
+        let img = block_on(be.handle(Cmd::LoadImage { slug: slug.clone(), id: "p-maya-2".into() }, 0));
+        assert!(matches!(img, Event::Image { bytes: None, .. }));
+        let Event::Opened { assignment, .. } = block_on(be.open(Some(&slug), 1)) else { panic!("open") };
+        assert!(assignment.page("p-maya-2").is_none());
+    }
+
+    #[test]
+    fn replace_and_add_store_pictures_and_hand_pages_to_the_ui() {
+        use crate::backend::Picked;
+        let (store, slug) = block_on(seed(1_700_000_000_000)).unwrap();
+        let be = Backend::new(store, "Demo");
+        let ev = block_on(be.replace_with(&slug, "p-maya-1", Picked { name: "retake.png".into(), bytes: png(2400, 1800) }));
+        let Event::PageReplaced { id, name, bytes } = ev else { panic!("{ev:?}") };
+        assert_eq!((id.as_str(), name.as_str()), ("p-maya-1", "retake.png"));
+        assert_eq!(dims(&bytes), (1600, 1200), "shrunk to 1600 on the long side");
+        // a bad file is a notice, not a change
+        let bad = block_on(be.replace_with(&slug, "p-maya-1", Picked { name: "x.txt".into(), bytes: b"hello".to_vec() }));
+        assert!(matches!(bad, Event::Notice { error: true, .. }));
+        // two pictures for a student, one unreadable
+        let ev = block_on(be.add_with(
+            &slug,
+            "Maya R.",
+            vec![
+                Picked { name: "a.png".into(), bytes: png(300, 400) },
+                Picked { name: "junk.png".into(), bytes: vec![1, 2, 3] },
+                Picked { name: "b.png".into(), bytes: png(300, 400) },
+            ],
+            1_700_000_000_500,
+        ));
+        let Event::PagesAdded { pages } = ev else { panic!("{ev:?}") };
+        assert_eq!(pages.len(), 2);
+        assert_ne!(pages[0].0.id(), pages[1].0.id(), "ids are unique");
+        assert_eq!(pages[0].0.student_name(), Some("Maya R."));
+        let Event::Image { bytes: Some(b), .. } =
+            block_on(be.handle(Cmd::LoadImage { slug, id: pages[0].0.id().to_string() }, 0)) else { panic!("image") };
+        assert_eq!(dims(&b), (300, 400));
+    }
+
+    #[test]
+    fn uid_is_base36_time_plus_a_tail() {
+        let a = crate::backend::uid(1_700_000_000_000, 0);
+        let b = crate::backend::uid(1_700_000_000_000, 1);
+        assert_ne!(a, b);
+        assert!(a.chars().all(|c| c.is_ascii_digit() || c.is_ascii_lowercase()) && a.len() >= 13, "{a}");
+        assert!(a.starts_with("lo"), "base36 of 1.7e12 is lo...: {a}");
+    }
+
+    #[test]
+    fn straighten_and_transcribe_are_honest_about_not_being_here_yet() {
+        let (store, slug) = block_on(seed(1)).unwrap();
+        let be = Backend::new(store, "Demo");
+        let s = block_on(be.handle(Cmd::Straighten { slug: slug.clone(), id: "p-maya-1".into() }, 0));
+        assert!(matches!(s, Event::Notice { ref text, error: false } if text.contains("unchanged")));
+        let t = block_on(be.handle(Cmd::Transcribe { slug, ids: vec!["p-maya-1".into()] }, 0));
+        assert!(matches!(t, Event::Notice { ref text, error: true } if text.contains("OCR")));
+    }
+
     /// The native path: a real folder, written and read back through `FsStore` and the project layer.
     #[test]
     fn folder_store_round_trip_keeps_edits() {
