@@ -9,7 +9,8 @@
 //!   Tab away from eframe and lets the browser move focus: no keyboard trap;
 //! - eframe's IME text agent `<input>` is named and removed from the Tab order.
 use crate::a11y;
-use crate::twin::{Node, Part, Reg, DIALOG};
+use crate::twin::{look, Node, Part, Reg, DIALOG};
+use std::collections::HashMap;
 use crate::Queue;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
@@ -27,9 +28,18 @@ fn data_id(e: &web_sys::Event) -> Option<String> {
     let el = e.target()?.dyn_into::<web_sys::Element>().ok()?;
     // buttons, text boxes and the focusable key regions (`role=group`, which carry `data-keys`)
     if !matches!(el.tag_name().as_str(), "BUTTON" | "INPUT") && !el.has_attribute("data-keys") {
+        // a click on the text of a DOM transcript line moves the reading underline (js: `.ln` click), unless
+        // the person has just selected some of it
+        if e.type_() == "click" && !has_selection() {
+            return el.closest("p[data-line]").ok().flatten().and_then(|p| p.get_attribute("data-id"));
+        }
         return None;
     }
     el.get_attribute("data-id")
+}
+
+fn has_selection() -> bool {
+    web_sys::window().and_then(|w| w.get_selection().ok().flatten()).is_some_and(|s| !s.is_collapsed())
 }
 
 /// eframe's hidden IME `<input type=text>`: a direct child of `<body>` (not one of ours).
@@ -70,6 +80,8 @@ pub fn install(q: Queue, ctx: egui::Context) {
         cb.forget();
     };
     listen("click", "act");
+    forward_scroll(&h);
+    observe_sizes(ctx.clone());
     // focus arriving by keyboard (`:focus-visible`: Tab, or a script while the keyboard is in use) brings up
     // the rings of regions that hide theirs for a mouse click
     {
@@ -187,6 +199,81 @@ pub fn install(q: Queue, ctx: egui::Context) {
     }
 }
 
+/// The DOM transcript is above the canvas, so a wheel turn or a finger drag over it would never reach the
+/// page's scroll area (egui). They are handed to the canvas as the wheel events it listens for.
+fn forward_scroll(h: &web_sys::Element) {
+    let Some(canvas) = document().and_then(|d| d.get_element_by_id("c")) else { return };
+    let send = {
+        let canvas = canvas.clone();
+        move |dx: f64, dy: f64, mode: u32, x: i32, y: i32, ctrl: bool| {
+            let init = web_sys::WheelEventInit::new();
+            init.set_delta_x(dx);
+            init.set_delta_y(dy);
+            init.set_delta_mode(mode);
+            init.set_client_x(x);
+            init.set_client_y(y);
+            init.set_ctrl_key(ctrl);
+            init.set_bubbles(true);
+            init.set_cancelable(true);
+            if let Ok(ev) = web_sys::WheelEvent::new_with_event_init_dict("wheel", &init) {
+                let _ = canvas.dispatch_event(&ev);
+            }
+        }
+    };
+    let in_text = |e: &web_sys::Event| e.target().and_then(|t| t.dyn_into::<web_sys::Element>().ok()).is_some_and(|el| el.closest(".tx-clip").ok().flatten().is_some());
+    let s1 = send.clone();
+    let on_wheel = Closure::<dyn FnMut(web_sys::WheelEvent)>::new(move |e: web_sys::WheelEvent| {
+        if !in_text(&e) {
+            return;
+        }
+        e.prevent_default();
+        s1(e.delta_x(), e.delta_y(), e.delta_mode(), e.client_x() as i32, e.client_y() as i32, e.ctrl_key());
+    });
+    let _ = h.add_event_listener_with_callback("wheel", on_wheel.as_ref().unchecked_ref());
+    on_wheel.forget();
+    let last = std::rc::Rc::new(std::cell::Cell::new(None::<(i32, i32)>));
+    let l1 = last.clone();
+    let on_start = Closure::<dyn FnMut(web_sys::TouchEvent)>::new(move |e: web_sys::TouchEvent| {
+        l1.set(if e.touches().length() == 1 { e.touches().get(0).map(|t| (t.client_x(), t.client_y())) } else { None });
+    });
+    let _ = h.add_event_listener_with_callback("touchstart", on_start.as_ref().unchecked_ref());
+    on_start.forget();
+    let on_move = Closure::<dyn FnMut(web_sys::TouchEvent)>::new(move |e: web_sys::TouchEvent| {
+        if e.touches().length() != 1 || !in_text(&e) {
+            return;
+        }
+        let Some(t) = e.touches().get(0) else { return };
+        if let Some((px, py)) = last.get() {
+            if e.cancelable() {
+                e.prevent_default();
+            }
+            send((px - t.client_x()) as f64, (py - t.client_y()) as f64, 0, t.client_x(), t.client_y(), false);
+        }
+        last.set(Some((t.client_x(), t.client_y())));
+    });
+    let _ = h.add_event_listener_with_callback("touchmove", on_move.as_ref().unchecked_ref());
+    on_move.forget();
+}
+
+thread_local! {
+    /// Watches every DOM transcript line: its box changes when the page's CSS does (a user stylesheet, a
+    /// font arriving, text spacing), and egui is asked for a frame then.
+    static SIZES: std::cell::RefCell<Option<web_sys::ResizeObserver>> = const { std::cell::RefCell::new(None) };
+    /// The context, for what the page reports on its own (KaTeX arriving).
+    static CTX: std::cell::RefCell<Option<egui::Context>> = const { std::cell::RefCell::new(None) };
+}
+
+fn observe_sizes(ctx: egui::Context) {
+    CTX.with(|c| *c.borrow_mut() = Some(ctx.clone()));
+    let cb = Closure::<dyn FnMut(js_sys::Array, web_sys::ResizeObserver)>::new(move |_: js_sys::Array, _: web_sys::ResizeObserver| {
+        ctx.request_repaint();
+    });
+    if let Ok(ro) = web_sys::ResizeObserver::new(cb.as_ref().unchecked_ref()) {
+        SIZES.with(|s| *s.borrow_mut() = Some(ro));
+    }
+    cb.forget();
+}
+
 /// Which keyboard region an element belongs to, by its own `data-id` or an ancestor's.
 fn scope_of(el: &web_sys::Element) -> Option<&'static str> {
     let mut cur = Some(el.clone());
@@ -274,11 +361,17 @@ struct Spec {
     /// Position and size in CSS pixels. The twin is laid over the canvas where its widget is drawn, so
     /// touch exploration (VoiceOver, TalkBack) and magnifier focus tracking land on the right place.
     rect: Option<(i32, i32, i32, i32)>,
+    /// The height is the content's (a DOM transcript line): only its position and width are set.
+    auto_h: bool,
+    /// Inline CSS properties besides the position (removed when `None`).
+    props: Vec<(&'static str, Option<String>)>,
+    /// A formula: (TeX, display), typeset by KaTeX once it has arrived.
+    math: Option<(String, bool)>,
 }
 
 impl Spec {
     fn new(key: &str, tag: &'static str) -> Spec {
-        Spec { key: key.into(), tag, attrs: vec![], text: None, value: None, children: None, rect: None }
+        Spec { key: key.into(), tag, attrs: vec![], text: None, value: None, children: None, rect: None, auto_h: false, props: vec![], math: None }
     }
     fn attr(mut self, k: &'static str, v: impl Into<String>) -> Spec {
         self.attrs.push((k, Some(v.into())));
@@ -327,6 +420,74 @@ fn control(r: &Reg) -> Spec {
         s.rect = Some((r.at.0, r.at.1, r.size.0 as i32, r.size.1 as i32));
     }
     s
+}
+
+/// The CSS classes of a run of transcript text.
+fn look_class(f: u16) -> String {
+    let mut c = vec![];
+    for (bit, name) in [(look::BOLD, "b"), (look::ITALIC, "i"), (look::CODE, "c"), (look::LEAD, "lead")] {
+        if f & bit != 0 {
+            c.push(name);
+        }
+    }
+    c.join(" ")
+}
+
+/// A transcript line as real, visible DOM text (`#controls .tx-clip p.tx`), styled by the page's CSS the way
+/// `.tx-text .ln` is in the JS app: the browser wraps it, a user stylesheet can restyle it, find-in-page and
+/// selection work on it, and its flagged words are inline buttons.
+fn dom_para(id: &str, parts: &[Part], flags: &[u16], reading: bool, margin: bool, at: (i32, i32), size: (u16, u16)) -> Spec {
+    let plain = flags.iter().any(|f| f & look::PLAIN != 0);
+    let display = parts.len() == 1 && matches!(parts[0], Part::Math(_)) && flags[0] & look::DISPLAY != 0;
+    let mut class = String::from("tx");
+    for (on, name) in [(plain, "plain"), (margin, "margin"), (display, "display")] {
+        if on {
+            class.push(' ');
+            class.push_str(name);
+        }
+    }
+    let mut p = Spec::new(id, "p").attr("class", class);
+    if id.starts_with("line-") {
+        p = p.attr("data-line", "1");
+    }
+    p.rect = rect_of(at, size);
+    p.auto_h = true;
+    // what egui made room for: the page compares it with what the browser laid out
+    p.attrs.push(("data-alloc-h", Some(size.1.to_string())));
+    p.attrs.push(("data-reading", if reading { Some("1".to_string()) } else { None }));
+    let mut kids = vec![];
+    for (i, part) in parts.iter().enumerate() {
+        let f = flags.get(i).copied().unwrap_or(0);
+        kids.push(match part {
+            Part::Text(t) => Spec::new(&format!("{id}#t{i}"), "span").attr("class", look_class(f)).text(t),
+            Part::Del(t) => Spec::new(&format!("{id}#d{i}"), "del").attr("class", look_class(f)).text(t),
+            Part::Math(t) => {
+                let disp = f & look::DISPLAY != 0;
+                let mut m = Spec::new(&format!("{id}#m{i}"), "span")
+                    .attr("class", if disp { "tx-math disp" } else { "tx-math" })
+                    .attr("role", "math")
+                    .attr("aria-label", a11y::tex_speech(t))
+                    .attr("data-tex", t.clone());
+                m.math = Some((t.clone(), disp));
+                m
+            }
+            Part::Control(r) => {
+                let mut class = String::from("w");
+                for (bit, name) in [(look::WARN, "suggest"), (look::BAD, "illegible"), (look::CHECKED, "checked"), (look::SEL, "sel"), (look::BOLD, "b"), (look::ITALIC, "i")] {
+                    if f & bit != 0 {
+                        class.push(' ');
+                        class.push_str(name);
+                    }
+                }
+                let mut b = Spec::new(&r.id, "button").attr("type", "button").attr("class", class).attr("aria-label", r.label.clone());
+                b.text = Some(r.shown.clone().unwrap_or_else(|| r.label.clone()));
+                b.attrs.push(("disabled", if r.disabled { Some(String::new()) } else { None }));
+                b
+            }
+        });
+    }
+    p.children = Some(kids);
+    p
 }
 
 fn spec_of(n: &Node) -> Spec {
@@ -379,6 +540,7 @@ fn spec_of(n: &Node) -> Spec {
             }
             s
         }
+        Node::Para { id, parts, reading, at, size, flags, margin, .. } if !flags.is_empty() => dom_para(id, parts, flags, *reading, *margin, *at, *size),
         Node::Para { id, parts, reading, at, size, .. } => {
             let mut p = Spec::new(id, "p");
             p.rect = rect_of(*at, *size);
@@ -406,15 +568,39 @@ fn spec_of(n: &Node) -> Spec {
 
 /// The nodes of one region as specs: consecutive related controls (`a11y::group_of`) share a group element,
 /// and list items sit in `<li>`s of their `<ul>`.
-fn region_specs(nodes: &[&Node]) -> Vec<Spec> {
+fn region_specs(nodes: &[&Node], holes: &[(i32, i32, i32, i32)]) -> Vec<Spec> {
     let mut out: Vec<Spec> = vec![];
     let mut open: Option<(&'static str, Spec)> = None;
+    // the DOM transcript lines of this region, in one box that is the part of the screen they may be seen in
+    let mut tx: Option<Spec> = None;
     let flush = |open: &mut Option<(&'static str, Spec)>, out: &mut Vec<Spec>| {
         if let Some((_, g)) = open.take() {
             out.push(g);
         }
     };
     for n in nodes {
+        if let Node::Para { flags, vis, .. } = n {
+            if !flags.is_empty() {
+                flush(&mut open, &mut out);
+                let item = spec_of(n);
+                let c = tx.get_or_insert_with(|| Spec::new("tx-clip", "div").attr("class", "tx-clip").kids(vec![]));
+                let v = (vis.0, vis.1, vis.2 as i32, vis.3 as i32);
+                c.rect = Some(match c.rect {
+                    None => v,
+                    Some((x, y, w, h)) => {
+                        let (l, t, r, b) = (x.min(v.0), y.min(v.1), (x + w).max(v.0 + v.2), (y + h).max(v.1 + v.3));
+                        (l, t, r - l, b - t)
+                    }
+                });
+                if let Some(k) = c.children.as_mut() {
+                    k.push(item);
+                }
+                continue;
+            }
+        }
+        if let Some(c) = tx.take() {
+            out.push(clip_holes(c, holes));
+        }
         let grp = match n {
             Node::Control(r) => a11y::group_of(&r.id),
             _ => None,
@@ -449,7 +635,49 @@ fn region_specs(nodes: &[&Node]) -> Vec<Spec> {
         }
     }
     flush(&mut open, &mut out);
+    if let Some(c) = tx.take() {
+        out.push(clip_holes(c, holes));
+    }
     out
+}
+
+/// What is drawn over the transcript by egui (the toast, a tray that rides over the page) is cut out of the
+/// box the DOM lines are seen in: a polygon with holes (even-odd), in the box's own coordinates.
+fn clip_holes(mut c: Spec, holes: &[(i32, i32, i32, i32)]) -> Spec {
+    let Some((cx, cy, cw, ch)) = c.rect else { return c };
+    let mut hs: Vec<(i32, i32, i32, i32)> = vec![];
+    for &(x, y, w, h) in holes {
+        // (left, top, right, bottom) inside the box
+        let (l, t, r, b) = ((x - cx).max(0), (y - cy).max(0), (x + w - cx).min(cw), (y + h - cy).min(ch));
+        if r > l && b > t {
+            hs.push((l, t, r, b));
+        }
+    }
+    // holes that touch are one hole (even-odd would fill where two overlap)
+    'again: loop {
+        for i in 0..hs.len() {
+            for j in i + 1..hs.len() {
+                let (a, b) = (hs[i], hs[j]);
+                if a.0 <= b.2 && b.0 <= a.2 && a.1 <= b.3 && b.1 <= a.3 {
+                    hs[i] = (a.0.min(b.0), a.1.min(b.1), a.2.max(b.2), a.3.max(b.3));
+                    hs.remove(j);
+                    continue 'again;
+                }
+            }
+        }
+        break;
+    }
+    let v = if hs.is_empty() {
+        None
+    } else {
+        let mut pts = vec![format!("0px 0px, {cw}px 0px, {cw}px {ch}px, 0px {ch}px, 0px 0px")];
+        for (l, t, r, b) in hs {
+            pts.push(format!("{l}px {t}px, {r}px {t}px, {r}px {b}px, {l}px {b}px, {l}px {t}px, 0px 0px"));
+        }
+        Some(format!("polygon(evenodd, {})", pts.join(", ")))
+    };
+    c.props.push(("clip-path", v));
+    c
 }
 
 fn main_spec(kids: Vec<Spec>, modal: bool) -> Spec {
@@ -479,8 +707,9 @@ fn structure(nodes: &[Node]) -> Vec<Spec> {
     // a modal dialog: the screen behind it is out of the tree and out of the Tab order (`inert`), with
     // aria-hidden for readers that do not know `inert`. It stays in the DOM so focus can come back to it.
     let modal = regions.iter().any(|(r, _)| *r == DIALOG);
+    let holes = overlays(nodes);
     for (region, list) in &regions {
-        let kids = region_specs(list);
+        let kids = region_specs(list, &holes);
         let mut s = Spec::new(&format!("region-{region}"), "div").attr("data-region", region.to_string());
         s.attrs.push(("inert", (modal && *region != DIALOG).then(String::new)));
         s.attrs.push(("aria-hidden", (modal && *region != DIALOG).then(|| "true".to_string())));
@@ -511,6 +740,37 @@ fn structure(nodes: &[Node]) -> Vec<Spec> {
     // rectangle of what it holds, as `tree::of` does for the native tree.
     contain(&mut top);
     top
+}
+
+/// Rectangles egui draws over the page that DOM text must not cover: the toast, and the word panel (a tray
+/// that rides over the transcript on a narrow screen).
+fn overlays(nodes: &[Node]) -> Vec<(i32, i32, i32, i32)> {
+    let mut out = vec![];
+    let mut tray: Option<(i32, i32, i32, i32)> = None;
+    for n in nodes {
+        let (id, region, at, size) = match n {
+            Node::Status { id, region, at, size, .. } => (id.as_str(), *region, *at, *size),
+            Node::Control(c) => (c.id.as_str(), c.region, c.at, c.size),
+            _ => continue,
+        };
+        if size.0 == 0 || size.1 == 0 {
+            continue;
+        }
+        let r = (at.0, at.1, size.0 as i32, size.1 as i32);
+        if id == "toast" {
+            out.push(r);
+        } else if region == crate::twin::TRAY {
+            tray = Some(match tray {
+                None => r,
+                Some((x, y, w, h)) => {
+                    let (l, t, rr, b) = (x.min(r.0), y.min(r.1), (x + w).max(r.0 + r.2), (y + h).max(r.1 + r.3));
+                    (l, t, rr - l, b - t)
+                }
+            });
+        }
+    }
+    out.extend(tray);
+    out
 }
 
 /// Give every container without a rectangle of its own the union of its children's, and return the union of
@@ -545,12 +805,19 @@ fn find_child(parent: &web_sys::Element, key: &str) -> Option<web_sys::Element> 
 
 /// `origin` is the top-left of the nearest positioned ancestor (a paragraph is laid over its line and its
 /// controls are placed inside it), so every rectangle stays where the canvas draws it.
-fn set_style(el: &web_sys::Element, rect: Option<(i32, i32, i32, i32)>, origin: (i32, i32)) {
+fn set_style(el: &web_sys::Element, rect: Option<(i32, i32, i32, i32)>, origin: (i32, i32), auto_h: bool) {
     let Some(style) = el.dyn_ref::<web_sys::HtmlElement>().map(|h| h.style()) else { return };
     match rect {
         Some((x, y, w, h)) => {
             let (x, y) = (x - origin.0, y - origin.1);
-            let want = [("position", "absolute".to_string()), ("left", format!("{x}px")), ("top", format!("{y}px")), ("width", format!("{w}px")), ("height", format!("{h}px")), ("margin", "0".to_string())];
+            let mut want = vec![("position", "absolute".to_string()), ("left", format!("{x}px")), ("top", format!("{y}px")), ("width", format!("{w}px")), ("margin", "0".to_string())];
+            if auto_h {
+                if style.get_property_value("height").map(|v| !v.is_empty()).unwrap_or(false) {
+                    let _ = style.remove_property("height");
+                }
+            } else {
+                want.push(("height", format!("{h}px")));
+            }
             for (k, v) in want {
                 if style.get_property_value(k).ok().as_deref() != Some(v.as_str()) {
                     let _ = style.set_property(k, &v);
@@ -613,7 +880,33 @@ fn reconcile(doc: &web_sys::Document, parent: &web_sys::Element, specs: &[Spec],
             }
         }
         // attributes a role change leaves behind (a button that was a checkbox) are not kept
-        set_style(&el, sp.rect, origin);
+        set_style(&el, sp.rect, origin, sp.auto_h);
+        for (k, v) in &sp.props {
+            if let Some(style) = el.dyn_ref::<web_sys::HtmlElement>().map(|h| h.style()) {
+                match v {
+                    Some(v) => {
+                        if style.get_property_value(k).ok().as_deref() != Some(v.as_str()) {
+                            let _ = style.set_property(k, v);
+                        }
+                    }
+                    None => {
+                        if style.get_property_value(k).map(|v| !v.is_empty()).unwrap_or(false) {
+                            let _ = style.remove_property(k);
+                        }
+                    }
+                }
+            }
+        }
+        if sp.auto_h {
+            SIZES.with(|s| {
+                if let Some(ro) = s.borrow().as_ref() {
+                    ro.observe(&el);
+                }
+            });
+        }
+        if let Some((tex, disp)) = &sp.math {
+            render_math(&el, tex, *disp);
+        }
         if let Some(t) = &sp.text {
             if el.text_content().as_deref() != Some(t.as_str()) {
                 el.set_text_content(Some(t));
@@ -917,4 +1210,180 @@ pub fn mark_preferences(reduced_motion: bool, high_contrast: bool) {
         let _ = h.set_attribute("data-reduced-motion", if reduced_motion { "1" } else { "0" });
         let _ = h.set_attribute("data-high-contrast", if high_contrast { "1" } else { "0" });
     }
+}
+
+// ---- the DOM transcript: measuring, formulas, colours
+
+/// What the browser laid out for the transcript lines: heights by line id, and the rectangle of each flagged
+/// word (x, y, w, h) relative to its line's top left corner, in egui points.
+#[derive(Default, Clone)]
+struct Measure {
+    h: HashMap<String, f32>,
+    chips: HashMap<String, [f32; 4]>,
+}
+
+thread_local! {
+    static MEASURED: std::cell::RefCell<Measure> = std::cell::RefCell::new(Measure::default());
+}
+
+/// The last measurement (line heights, word rectangles).
+pub fn measured() -> (HashMap<String, f32>, HashMap<String, [f32; 4]>) {
+    MEASURED.with(|m| {
+        let m = m.borrow();
+        (m.h.clone(), m.chips.clone())
+    })
+}
+
+/// Measure every transcript line. True when something is not where the last measurement had it, so the
+/// screen is drawn again with the new numbers.
+pub fn measure() -> bool {
+    let Some(h) = host() else { return false };
+    let Ok(list) = h.query_selector_all("p.tx") else { return false };
+    if list.length() == 0 && MEASURED.with(|m| m.borrow().h.is_empty()) {
+        return false;
+    }
+    // the twin may be scaled to the canvas (`place`): its boxes are then k times their layout size
+    let k = match h.dyn_ref::<web_sys::HtmlElement>() {
+        Some(e) if e.offset_width() > 0 => (e.get_bounding_client_rect().width() / e.offset_width() as f64).max(0.01),
+        _ => 1.0,
+    };
+    let mut now = Measure::default();
+    for i in 0..list.length() {
+        let Some(p) = list.item(i).and_then(|n| n.dyn_into::<web_sys::Element>().ok()) else { continue };
+        let Some(id) = p.get_attribute("data-id") else { continue };
+        let r = p.get_bounding_client_rect();
+        now.h.insert(id, (r.height() / k) as f32);
+        if let Ok(ws) = p.query_selector_all("button.w") {
+            for j in 0..ws.length() {
+                let Some(b) = ws.item(j).and_then(|n| n.dyn_into::<web_sys::Element>().ok()) else { continue };
+                let Some(bid) = b.get_attribute("data-id") else { continue };
+                let br = b.get_bounding_client_rect();
+                now.chips.insert(bid, [((br.x() - r.x()) / k) as f32, ((br.y() - r.y()) / k) as f32, (br.width() / k) as f32, (br.height() / k) as f32]);
+            }
+        }
+    }
+    let changed = MEASURED.with(|m| {
+        let old = m.borrow();
+        let same_h = old.h.len() == now.h.len() && now.h.iter().all(|(k, v)| old.h.get(k).is_some_and(|o| (o - v).abs() <= 0.5));
+        let same_c = old.chips.len() == now.chips.len() && now.chips.iter().all(|(k, v)| old.chips.get(k).is_some_and(|o| o.iter().zip(v).all(|(a, b)| (a - b).abs() <= 0.5)));
+        !(same_h && same_c)
+    });
+    if changed {
+        MEASURED.with(|m| *m.borrow_mut() = now);
+    }
+    changed
+}
+
+fn katex() -> Option<js_sys::Function> {
+    let w = web_sys::window()?;
+    let k = js_sys::Reflect::get(&w, &JsValue::from_str("katex")).ok()?;
+    if k.is_undefined() || k.is_null() {
+        return None;
+    }
+    js_sys::Reflect::get(&k, &JsValue::from_str("renderToString")).ok()?.dyn_into::<js_sys::Function>().ok()
+}
+
+thread_local! {
+    static KATEX_ASKED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// KaTeX (the JS app's typesetter) is fetched the first time a formula is on the page, as the math font is.
+fn ensure_katex() {
+    if KATEX_ASKED.with(|a| a.replace(true)) {
+        return;
+    }
+    let (Some(doc), Some(ctx)) = (document(), CTX.with(|c| c.borrow().clone())) else { return };
+    let Ok(el) = doc.create_element("script") else { return };
+    let _ = el.set_attribute("src", "katex.min.js");
+    let _ = el.set_attribute("async", "");
+    let onload = Closure::<dyn FnMut()>::new(move || {
+        // typeset what is waiting, then let the page measure it
+        if let Some(d) = document() {
+            if let Ok(list) = d.query_selector_all("#controls [data-tex]") {
+                for i in 0..list.length() {
+                    if let Some(e) = list.item(i).and_then(|n| n.dyn_into::<web_sys::Element>().ok()) {
+                        let tex = e.get_attribute("data-tex").unwrap_or_default();
+                        render_math(&e, &tex, e.class_list().contains("disp"));
+                    }
+                }
+            }
+        }
+        ctx.request_repaint();
+    });
+    let _ = el.add_event_listener_with_callback("load", onload.as_ref().unchecked_ref());
+    onload.forget();
+    if let Some(head) = doc.head() {
+        let _ = head.append_child(&el);
+    }
+}
+
+/// A formula in a transcript line: KaTeX's MathML (the browser's own math layout, in the STIX Two Math face),
+/// or its TeX source in monospace until KaTeX is there (plan rule 4: never nothing).
+fn render_math(el: &web_sys::Element, tex: &str, display: bool) {
+    let render = katex();
+    let state = format!("{}{}|{}", if render.is_some() { "m" } else { "s" }, display as u8, tex);
+    if el.get_attribute("data-done").as_deref() == Some(state.as_str()) {
+        return;
+    }
+    match render {
+        Some(f) => {
+            let opts = js_sys::Object::new();
+            let _ = js_sys::Reflect::set(&opts, &"output".into(), &"mathml".into());
+            let _ = js_sys::Reflect::set(&opts, &"displayMode".into(), &JsValue::from_bool(display));
+            let _ = js_sys::Reflect::set(&opts, &"throwOnError".into(), &JsValue::FALSE);
+            match f.call2(&JsValue::NULL, &JsValue::from_str(tex), &opts).ok().and_then(|v| v.as_string()) {
+                Some(html) => {
+                    el.set_inner_html(&html);
+                    let _ = el.class_list().remove_1("src");
+                    // the formula is spoken from the element's label (`tex_speech`): the typeset copy is not read
+                    // as well, and the TeX stays in the tree as its text
+                    if let Some(m) = el.first_element_child() {
+                        let _ = m.set_attribute("aria-hidden", "true");
+                    }
+                    if let Some(src) = document().and_then(|d| d.create_element("span").ok()) {
+                        let _ = src.set_attribute("class", "tx-tex");
+                        src.set_text_content(Some(tex));
+                        let _ = el.append_child(&src);
+                    }
+                }
+                None => {
+                    el.set_text_content(Some(tex));
+                    let _ = el.class_list().add_1("src");
+                }
+            }
+        }
+        None => {
+            el.set_text_content(Some(tex));
+            let _ = el.class_list().add_1("src");
+            ensure_katex();
+        }
+    }
+    let _ = el.set_attribute("data-done", &state);
+}
+
+fn css(c: egui::Color32) -> String {
+    format!("rgba({},{},{},{})", c.r(), c.g(), c.b(), c.a() as f32 / 255.0)
+}
+
+/// The colours of the DOM transcript are the screen's tokens (theme, contrast, the system's own colours).
+pub fn set_tokens(t: &crate::theme::Tokens) {
+    thread_local! {
+        static LAST: std::cell::RefCell<String> = const { std::cell::RefCell::new(String::new()) };
+    }
+    let v = [("--ink", t.ink), ("--muted", t.muted), ("--warn", t.warn), ("--bad", t.bad), ("--bad-bg", t.bad_bg), ("--ok", t.ok), ("--accent", t.accent), ("--sunken", t.sunken), ("--line2", t.line2)]
+        .iter()
+        .map(|(k, c)| format!("{k}:{}", css(*c)))
+        .collect::<Vec<_>>()
+        .join(";");
+    if LAST.with(|l| *l.borrow() == v) {
+        return;
+    }
+    if let Some(style) = host().and_then(|h| h.dyn_into::<web_sys::HtmlElement>().ok()).map(|h| h.style()) {
+        for part in v.split(';') {
+            if let Some((k, val)) = part.split_once(':') {
+                let _ = style.set_property(k, val);
+            }
+        }
+    }
+    LAST.with(|l| *l.borrow_mut() = v);
 }

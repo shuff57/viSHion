@@ -352,7 +352,7 @@ try {
     const l4 = await sentence('line-p-maya-1-4');
     expect(!!l4 && /^about 95% of those \[Word that could not be read\. Show options\.\] would capture the true \[Spelling to check: populaton\. Show options\.\] mean\.$/.test(l4), 'twin line 4 reads both words inside the sentence: ' + l4);
     const asnap = await p7.locator('#controls').ariaSnapshot();
-    expect(/The 95%[\s\S]{0,40}button "Spelling to check: confidance[\s\S]{0,40}interval for the average/.test(asnap), 'accessibility tree keeps the sentence order around a flagged word');
+    expect(/The 95%[\s\S]{0,40}button "Spelling to check: confidance[\s\S]{0,80}interval for the average/.test(asnap), 'accessibility tree keeps the sentence order around a flagged word');
     // the tray's position is in the twin, between Previous and Next, and follows the step
     await p7.evaluate(() => document.querySelector('#controls button[data-id^="word-p-maya-1-"]').click());
     const trayCount = () => p7.evaluate(() => { const e = document.querySelector('#controls [data-id="tray-count"]'); return e ? e.textContent : null; });

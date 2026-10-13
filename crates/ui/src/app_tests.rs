@@ -2630,3 +2630,72 @@ fn native_focus_stays_on_a_control_after_enter_on_a_plain_action() {
         }
     }
 }
+
+// ---- the transcript as DOM text (web): `Ctl::dom_text` makes the lines text for the page to lay out
+
+fn para<'a>(nodes: &'a [Node], id: &str) -> &'a Node {
+    nodes.iter().find(|n| matches!(n, Node::Para { id: i, .. } if i == id)).expect("line")
+}
+
+#[test]
+fn dom_lines_carry_their_looks_and_words_their_text() {
+    use crate::twin::look;
+    let mut h = H::new("m1");
+    h.app.ctl.dom_text = true;
+    h.frames(3);
+    let nodes = h.app.nodes();
+    let lines: Vec<&Node> = nodes.iter().filter(|n| matches!(n, Node::Para { id, .. } if id.starts_with("line-"))).collect();
+    assert!(lines.len() >= 3);
+    for n in &lines {
+        let Node::Para { parts, flags, vis, .. } = n else { unreachable!() };
+        assert_eq!(parts.len(), flags.len(), "one look per part");
+        assert!(vis.2 > 0 && vis.3 > 0, "the part of the screen the line may be seen in is known");
+    }
+    // the word is a button that shows the word, marked as a spelling to check
+    let Node::Para { parts, flags, .. } = para(nodes, "line-m1-0") else { unreachable!() };
+    let i = parts.iter().position(|p| matches!(p, Part::Control(c) if c.id.ends_with("-c:0"))).expect("word");
+    let Part::Control(c) = &parts[i] else { unreachable!() };
+    assert_eq!(c.shown.as_deref(), Some("confidance"));
+    assert!(flags[i] & look::WARN != 0, "{:?}", flags[i]);
+    // the egui layout is not used: native keeps its own (no looks)
+    let n = H::new("m1");
+    assert!(n.app.nodes().iter().all(|x| !matches!(x, Node::Para { flags, .. } if !flags.is_empty())));
+}
+
+#[test]
+fn dom_line_takes_the_height_the_page_measured_and_the_rest_follows() {
+    let mut h = H::new("m1");
+    h.app.ctl.dom_text = true;
+    h.frames(3);
+    let y = |h: &H, id: &str| match para(h.app.nodes(), id) {
+        Node::Para { at, size, .. } => (at.1, size.1),
+        _ => unreachable!(),
+    };
+    let (y0, h0) = y(&h, "line-m1-0");
+    let (y1, _) = y(&h, "line-m1-1");
+    assert_eq!(y1, y0 + h0 as i32, "lines are contiguous");
+    // a user stylesheet made the first line three times as tall
+    h.app.ctl.dom_h.insert("line-m1-0".into(), 240.0);
+    h.frames(3);
+    let (y0b, h0b) = y(&h, "line-m1-0");
+    let (y1b, _) = y(&h, "line-m1-1");
+    assert_eq!((y0b, h0b), (y0, 240));
+    assert_eq!(y1b, y0 + 240, "the next line starts under the taller one");
+}
+
+#[test]
+fn dom_click_on_a_line_underlines_it_and_a_word_keeps_its_measured_rectangle() {
+    let mut h = H::new("m1");
+    h.app.ctl.dom_text = true;
+    h.frames(3);
+    h.app.queue.lock().unwrap().push("act:line-m1-1".into());
+    h.frames(3);
+    assert_eq!(h.s().read_line.get("m1"), Some(&1), "the click on the text moved the reading underline");
+    assert!(h.app.nodes().iter().any(|n| matches!(n, Node::Para { id, reading: true, .. } if id == "line-m1-1")));
+    // the page says where the word landed in its line; the control follows
+    let w = h.word_id("c:0");
+    h.app.ctl.dom_chips.insert(w.clone(), [100.0, 4.0, 150.0, 30.0]);
+    h.frames(3);
+    let c = h.app.controls().into_iter().find(|c| c.id == w).unwrap().clone();
+    assert_eq!(c.size, (150, 30));
+}

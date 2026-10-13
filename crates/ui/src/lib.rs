@@ -96,6 +96,18 @@ pub struct Ctl {
     typed: HashMap<String, String>,
     nodes: Vec<Node>,
     para: Option<Vec<Part>>,
+    /// `twin::look` of each part of the paragraph being built, and whether it is a margin line.
+    para_flags: Vec<u16>,
+    para_margin: bool,
+    /// Draw the transcript as DOM text (the web): its lines are described to the twin with their look and
+    /// take the height the page measured for them, instead of being laid out and painted here.
+    pub(crate) dom_text: bool,
+    /// What the page measured of the DOM transcript last frame: line heights by line id, and the rectangle of
+    /// each flagged word (x, y, w, h) relative to its line's top left corner.
+    pub(crate) dom_h: HashMap<String, f32>,
+    pub(crate) dom_chips: HashMap<String, [f32; 4]>,
+    /// Where DOM transcript lines may be seen (the scroll area they are in): set when they are drawn.
+    pub(crate) dom_vis: Option<egui::Rect>,
     ring: egui::Color32,
     /// Keys of this frame (twin and egui).
     pub(crate) keys: Vec<KeyEv>,
@@ -261,6 +273,7 @@ impl Ctl {
             pos: twin::pos_of(r.rect.min),
             at: (r.rect.min.x.round() as i32, r.rect.min.y.round() as i32),
             size: (r.rect.width().round() as u16, r.rect.height().round() as u16),
+            shown: None,
         });
         self.track_focus(ui, r, c.id, c.region, c.ring);
         let from_dom = match self.act.iter().position(|a| a == c.id) {
@@ -276,6 +289,19 @@ impl Ctl {
             self.activated = Some(c.id.to_string());
         }
         hit
+    }
+
+    /// An activation of `id` from the twin that no widget of egui's owns (a click on a DOM transcript line):
+    /// true once per activation.
+    pub(crate) fn take_act(&mut self, id: &str) -> bool {
+        match self.act.iter().position(|a| a == id) {
+            Some(i) => {
+                self.act.remove(i);
+                self.consumed.insert(id.to_string());
+                true
+            }
+            None => false,
+        }
     }
 
     /// Register a textbox. `value` is what the canvas widget currently holds; text typed into the twin
@@ -297,6 +323,7 @@ impl Ctl {
             pos: twin::pos_of(r.rect.min),
             at: (r.rect.min.x.round() as i32, r.rect.min.y.round() as i32),
             size: (r.rect.width().round() as u16, r.rect.height().round() as u16),
+            shown: None,
         });
         self.track_focus(ui, r, c.id, c.region, c.ring);
         typed
@@ -333,8 +360,18 @@ impl Ctl {
                 // sentence where the word is, not after it
                 let slot = parts.iter().position(|p| matches!(p, Part::Control(c) if c.id == reg.id));
                 match slot {
-                    Some(i) => parts[i] = Part::Control(reg),
-                    None => parts.push(Part::Control(reg)),
+                    Some(i) => {
+                        // the word shows what the slot was reserved with
+                        let shown = match &parts[i] {
+                            Part::Control(c) => c.shown.clone(),
+                            _ => None,
+                        };
+                        parts[i] = Part::Control(Reg { shown: reg.shown.clone().or(shown), ..reg });
+                    }
+                    None => {
+                        parts.push(Part::Control(reg));
+                        self.para_flags.push(0);
+                    }
                 }
             }
             None => self.nodes.push(Node::Control(reg)),
@@ -344,7 +381,13 @@ impl Ctl {
     /// Reserve the place of a control in the paragraph being built: it is registered later (while painting),
     /// but reads where the word stands in the line.
     pub fn para_slot(&mut self, id: &str, label: &str, region: u8) {
+        self.para_slot_look(id, label, region, None, 0);
+    }
+
+    /// `para_slot` for a word the web draws as DOM text: `shown` is the word, `look` how it is marked.
+    pub fn para_slot_look(&mut self, id: &str, label: &str, region: u8, shown: Option<String>, look: u16) {
         if let Some(p) = &mut self.para {
+            self.para_flags.push(look);
             p.push(Part::Control(Reg {
                 id: id.into(),
                 role: "button",
@@ -356,6 +399,7 @@ impl Ctl {
                 pos: (0, 0),
                 at: (0, 0),
                 size: (0, 0),
+                shown,
             }));
         }
     }
@@ -434,22 +478,42 @@ impl Ctl {
     /// Start a paragraph: controls registered until `end_para` are inline in it.
     pub fn begin_para(&mut self) {
         self.para = Some(vec![]);
+        self.para_flags.clear();
+        self.para_margin = false;
     }
 
     pub fn para_text(&mut self, s: &str) {
+        self.para_text_look(s, 0);
+    }
+
+    /// Text with the `twin::look` it is drawn in (bold, italic, code, the lead-in of a margin note).
+    pub fn para_text_look(&mut self, s: &str, look: u16) {
         if let Some(p) = &mut self.para {
             match p.last_mut() {
-                Some(Part::Text(t)) => t.push_str(s),
-                _ => p.push(Part::Text(s.into())),
+                Some(Part::Text(t)) if self.para_flags.last() == Some(&look) => t.push_str(s),
+                _ => {
+                    p.push(Part::Text(s.into()));
+                    self.para_flags.push(look);
+                }
             }
         }
     }
 
     /// Struck-through text in the paragraph being built.
     pub fn para_del(&mut self, s: &str) {
+        self.para_del_look(s, 0);
+    }
+
+    pub fn para_del_look(&mut self, s: &str, look: u16) {
         if let Some(p) = &mut self.para {
             p.push(Part::Del(s.into()));
+            self.para_flags.push(look);
         }
+    }
+
+    /// The paragraph being built is a `Margin:` line.
+    pub fn para_margin(&mut self) {
+        self.para_margin = true;
     }
 
     /// A picture the twin describes with `label`, at `rect` (clipped to what is on screen).
@@ -468,15 +532,41 @@ impl Ctl {
     }
 
     pub fn para_math(&mut self, tex: &str) {
+        self.para_math_look(tex, 0);
+    }
+
+    pub fn para_math_look(&mut self, tex: &str, look: u16) {
         if let Some(p) = &mut self.para {
             p.push(Part::Math(tex.into()));
+            self.para_flags.push(look);
         }
     }
 
     pub fn end_para(&mut self, id: &str, region: u8, rect: egui::Rect, keys: bool, reading: bool) {
         if let Some(parts) = self.para.take() {
             let (at, size) = twin::geo(rect);
-            self.nodes.push(Node::Para { id: id.into(), parts, region, pos: twin::pos_of(rect.min), keys, reading, at, size });
+            // the looks are for the web's DOM text; egui-drawn lines (and every native line) carry none
+            let (flags, vis) = if self.dom_text {
+                let v = self.dom_vis.unwrap_or(rect);
+                let (vat, vsize) = twin::geo(v);
+                (std::mem::take(&mut self.para_flags), (vat.0, vat.1, vsize.0, vsize.1))
+            } else {
+                self.para_flags.clear();
+                (vec![], (0, 0, 0, 0))
+            };
+            self.nodes.push(Node::Para {
+                id: id.into(),
+                parts,
+                region,
+                pos: twin::pos_of(rect.min),
+                keys,
+                reading,
+                at,
+                size,
+                flags,
+                margin: std::mem::take(&mut self.para_margin),
+                vis,
+            });
         }
     }
 
@@ -671,7 +761,7 @@ impl App {
         let mut app = App {
             ctx,
             queue,
-            ctl: Ctl::default(),
+            ctl: Ctl { dom_text: cfg!(target_arch = "wasm32"), ..Ctl::default() },
             last_nodes: vec![],
             last_screen: (0.0, 0.0),
             host: None,
@@ -1154,6 +1244,9 @@ impl App {
             self.dark_applied = Some(t.dark);
         }
         self.ctl.ring = t.ink;
+        // the DOM transcript is painted in the same colours
+        #[cfg(target_arch = "wasm32")]
+        web::set_tokens(t);
         self.ctl.scrolls = [false; 5];
         self.ctl.pending_scroll = None;
         self.ctl.nodes.clear();
@@ -1228,6 +1321,13 @@ impl App {
                 self.ctl.restore_kb = None;
             }
         }
+        // what the page made of the DOM transcript last frame (line heights, where the words landed)
+        #[cfg(target_arch = "wasm32")]
+        {
+            let (h, c) = web::measured();
+            self.ctl.dom_h = h;
+            self.ctl.dom_chips = c;
+        }
         self.ctl.drain(&self.queue);
         self.collect_egui_keys(ctx);
         self.handle_events();
@@ -1297,6 +1397,12 @@ impl App {
             }
             self.last_nodes = nodes;
             self.last_screen = screen;
+        }
+        // the browser lays the transcript out: when it came to other heights than the ones this frame
+        // allocated (a user stylesheet, a font that arrived), draw the screen again with them
+        #[cfg(target_arch = "wasm32")]
+        if web::measure() {
+            ctx.request_repaint();
         }
         if let Some(id) = self.ctl.dom_focus.take() {
             #[cfg(target_arch = "wasm32")]

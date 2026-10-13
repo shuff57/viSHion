@@ -2122,6 +2122,18 @@ fn plain_text(ui: &mut Ui, cx: &mut Cx, s: &Session, p: &Page) {
     let text = s.plain_text(p);
     // `.tx-text.plain { white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/1.65 mono }`
     let w = ui.available_width();
+    if cx.ctl.dom_text {
+        // the web: the same text as a DOM paragraph, measured by the page
+        let id = format!("plain-{}", p.id());
+        cx.ctl.begin_para();
+        dom_vis(ui, cx);
+        cx.ctl.para_text_look(&text, crate::twin::look::PLAIN);
+        let h = cx.ctl.dom_h.get(&id).copied().unwrap_or_else(|| text.lines().count().max(1) as f32 * 13.0 * 1.65);
+        let (rect, _) = ui.allocate_exact_size(vec2(w, h), Sense::hover());
+        cx.ctl.end_para(&id, TEXT, rect, false, false);
+        transcript_group(ui, cx, rect);
+        return;
+    }
     let r = css_text(ui, &text, egui::FontId::new(13.0, egui::FontFamily::Monospace), t.ink, 13.0 * 1.65, w, true);
     cx.ctl.text(&format!("plain-{}", p.id()), &text, TEXT, r);
     transcript_group(ui, cx, r);
@@ -2207,6 +2219,11 @@ fn unit(ui: &mut Ui, cx: &mut Cx, s: &Session, p: &Page, line: &Line, items: &[w
     let px = if small { 16.0 } else { TEXT_PX };
     let pitch = if small { 16.0 * 1.5 } else { PITCH };
     cx.ctl.begin_para();
+
+    // the web draws the line as DOM text (user stylesheets, text spacing, find and selection act on it)
+    if cx.ctl.dom_text {
+        return dom_unit(ui, cx, s, p, line, items, sel_key, width, reading);
+    }
 
     // display math alone on its line: a centred block
     if let Some(m) = line.display_only() {
@@ -2465,6 +2482,117 @@ fn unit(ui: &mut Ui, cx: &mut Cx, s: &Session, p: &Page, line: &Line, items: &[w
             let y = origin.y + l.top + l.h / 2.0 + px * 0.35 + 7.0;
             ui.painter().rect_filled(Rect::from_min_max(pos2(origin.x + seg.1, y), pos2(origin.x + seg.2.max(seg.1 + 1.0), y + 3.0)), 1.0, t.accent);
         }
+    }
+    cx.ctl.end_para(&id, TEXT, rect, true, reading);
+    rect
+}
+
+/// Where DOM transcript lines may be seen: the scroll area they are in.
+fn dom_vis(ui: &Ui, cx: &mut Cx) {
+    cx.ctl.dom_vis = Some(ui.clip_rect());
+}
+
+/// What the browser lays out for a line before the page has measured it: the rows its words would take.
+fn dom_estimate(line: &Line, width: f32, px: f32, pitch: f32) -> f32 {
+    if line.display_only().is_some() {
+        return pitch + 2.0 * 22.0 + 2.0;
+    }
+    let chars = line.plain().chars().count() as f32 + if line.margin { 13.0 } else { 0.0 };
+    let per_row = (width / (px * 0.5)).max(1.0);
+    (chars / per_row).ceil().max(1.0) * pitch + 2.0
+}
+
+/// A transcript line as DOM text (web): what it says goes to the twin with its look, the browser lays it out
+/// and the page reports its height, which is the room the line takes here. The reading underline and the
+/// selected word are CSS; the focus ring of a word follows the rectangle the page measured for it.
+#[allow(clippy::too_many_arguments)]
+fn dom_unit(ui: &mut Ui, cx: &mut Cx, s: &Session, p: &Page, line: &Line, items: &[words::Item], sel_key: Option<&str>, width: f32, reading: bool) -> Rect {
+    use crate::twin::look;
+    let id = format!("line-{}-{}", p.id(), line.index);
+    let small = line.margin;
+    let px = if small { 16.0 } else { TEXT_PX };
+    let pitch = if small { 16.0 * 1.5 } else { PITCH };
+    cx.ctl.begin_para();
+    dom_vis(ui, cx);
+    if line.margin {
+        cx.ctl.para_margin();
+        // `.ln.margin::before { content: "Margin note  " }`: bold lead-in, then the note
+        cx.ctl.para_text_look("Margin note", look::BOLD | look::LEAD);
+        cx.ctl.para_text_look(" ", 0);
+    }
+    let style = |st: &Style| (if st.bold { look::BOLD } else { 0 }) | (if st.italic { look::ITALIC } else { 0 }) | (if st.code { look::CODE } else { 0 });
+    let mut chips: Vec<(String, String, String)> = vec![];
+    for run in &line.runs {
+        match run {
+            Run::Text { s: txt, st } => {
+                if st.strike {
+                    cx.ctl.para_del_look(txt, style(st));
+                } else {
+                    cx.ctl.para_text_look(txt, style(st));
+                }
+            }
+            Run::Math(n) => {
+                let m = &line.math[*n];
+                cx.ctl.para_math_look(&m.tex, if m.display { look::DISPLAY } else { 0 });
+            }
+            Run::Word { key, text, st } => {
+                let Some(item) = items.iter().find(|i| &i.key == key) else {
+                    cx.ctl.para_text_look(text, style(st));
+                    continue;
+                };
+                let (kind, checked) = s.word_kind(item);
+                let shown = if text.is_empty() { s.word_text(item) } else { text.clone() };
+                let label = if checked {
+                    format!("Checked word: {shown}. Show options.")
+                } else if item.kind == "illegible" {
+                    "Word that could not be read. Show options.".to_string()
+                } else {
+                    format!("Spelling to check: {shown}. Show options.")
+                };
+                let mut lk = style(st) & !look::CODE;
+                lk |= if checked {
+                    look::CHECKED
+                } else if kind == Kind::Bad {
+                    look::BAD
+                } else if kind == Kind::Warn {
+                    look::WARN
+                } else {
+                    look::CHECKED
+                };
+                if sel_key == Some(key.as_str()) {
+                    lk |= look::SEL;
+                }
+                let wid = format!("word-{}-{}", p.id(), key);
+                cx.ctl.para_slot_look(&wid, &label, TEXT, Some(shown), lk);
+                chips.push((wid, label, key.clone()));
+            }
+        }
+    }
+    let h = cx.ctl.dom_h.get(&id).copied().unwrap_or_else(|| dom_estimate(line, width, px, pitch));
+    let (rect, _) = ui.allocate_exact_size(vec2(width, h), Sense::hover());
+    cx.ctl.lines.push((id.clone(), rect));
+    // a click on the text (not on a word, which is a button of its own) moves the reading underline
+    if cx.ctl.take_act(&id) {
+        cx.acts.push(Act::ReadLine(line.index));
+        cx.ctl.want_focus = Some("transcript".into());
+    }
+    for (wid, label, key) in chips {
+        // the browser says where the word landed; before it has, the top left of the line stands in
+        let chip = match cx.ctl.dom_chips.get(&wid) {
+            Some(c) => Rect::from_min_size(rect.min + vec2(c[0], c[1]), vec2(c[2], c[3])),
+            None => Rect::from_min_size(rect.min + vec2(0.0, 1.0), vec2(8.0, px * 1.35)),
+        };
+        let r = ui.interact(chip, ui.id().with(wid.as_str()), Sense::hover());
+        if cx.ctl.want_focus.as_deref() == Some(wid.as_str()) {
+            // `w.focus()` scrolls the word into view, only as far as the painted word needs
+            ui.scroll_to_rect(chip, None);
+        }
+        if cx.ctl.reg(ui, &r, C::new(&wid, &label, TEXT).ring(chip.expand(3.0), 7.0)) {
+            cx.acts.push(Act::Pick(p.id().to_string(), key));
+        }
+    }
+    if reading && cx.scroll_read {
+        ui.scroll_to_rect(rect, None);
     }
     cx.ctl.end_para(&id, TEXT, rect, true, reading);
     rect

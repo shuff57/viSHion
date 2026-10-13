@@ -31,6 +31,26 @@ pub struct Reg {
     pub at: (i32, i32),
     /// Hit-target size in points. Everything interactive must be at least 44 x 44.
     pub size: (u16, u16),
+    /// What a transcript word shows when it is drawn as DOM text (the label is its spoken name).
+    pub shown: Option<String>,
+}
+
+/// How a part of a transcript line looks when the web draws the line as DOM text (`Node::Para::flags`).
+pub mod look {
+    pub const BOLD: u16 = 1;
+    pub const ITALIC: u16 = 2;
+    pub const CODE: u16 = 4;
+    /// Display math (a block of its own).
+    pub const DISPLAY: u16 = 8;
+    /// The "Margin note" lead-in of a margin line.
+    pub const LEAD: u16 = 16;
+    /// A flagged word: spelling to check / could not be read / already checked, and the one open in the tray.
+    pub const WARN: u16 = 32;
+    pub const BAD: u16 = 64;
+    pub const CHECKED: u16 = 128;
+    pub const SEL: u16 = 256;
+    /// The transcript as plain text (`white-space: pre-wrap`, monospace).
+    pub const PLAIN: u16 = 512;
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -53,7 +73,12 @@ pub enum Node {
     Text { id: String, text: String, region: u8, pos: (i32, i32), at: (i32, i32), size: (u16, u16) },
     /// A transcript line. `keys`: arrow keys inside it move the reading underline; `reading`: it is the
     /// line being read (web: `data-reading`, so the underline is observable without pixels).
-    Para { id: String, parts: Vec<Part>, region: u8, pos: (i32, i32), keys: bool, reading: bool, at: (i32, i32), size: (u16, u16) },
+    ///
+    /// `flags` (web, the transcript drawn as DOM text): one `look` word per part, empty when the line is
+    /// drawn by egui. `margin`: a `Margin:` line. `vis`: the part of the screen the line may be seen in (the
+    /// scroll area it is in, less what covers it); `size` is then the height the line took, which the page
+    /// measures from the DOM, not a rectangle egui drew.
+    Para { id: String, parts: Vec<Part>, region: u8, pos: (i32, i32), keys: bool, reading: bool, at: (i32, i32), size: (u16, u16), flags: Vec<u16>, margin: bool, vis: (i32, i32, u16, u16) },
     /// A focusable region that takes keys of its own (`keys` names the set: stage, transcript, strip).
     /// `at`/`size`: its rectangle in points; the web twin is laid over the canvas there.
     Group { id: String, label: String, keys: &'static str, region: u8, pos: (i32, i32), at: (i32, i32), size: (u16, u16) },

@@ -15,8 +15,58 @@
      exploration and magnifier tracking land in the right place; invisible (the canvas draws the focus ring) and
      never hit by the pointer (clicks go to the canvas; assistive technology activates through the DOM).
      overflow: clip, unlike hidden, can never be scrolled, so focus() on an off-screen control cannot shift it. */
-  #controls { position: fixed; inset: 0; overflow: clip; opacity: 0; pointer-events: none; }
+  #controls { position: fixed; inset: 0; overflow: clip; pointer-events: none; }
+  /* everything in the twin is invisible and unselectable except the transcript (.tx-clip), which is real text: its
+     ancestors are left alone (an element at opacity 0 hides all that is in it). */
+  #controls *:not(.tx-clip):not(.tx-clip *):not(:has(.tx-clip)) { opacity: 0; user-select: none; }
   #controls p, #controls h1, #controls h2, #controls h3, #controls ul { margin: 0; padding: 0; list-style: none; }
+  /* the transcript as DOM text, laid over the canvas where the page puts it (css/components.css `.tx-text`):
+     the browser wraps it, so a user stylesheet, text spacing, minimum font size, find-in-page and selection work */
+  @font-face { font-family: "Instrument Sans"; font-weight: 400; font-display: swap; src: url("fonts/instrument-sans-latin-400-normal.woff2") format("woff2"); }
+  @font-face { font-family: "Instrument Sans"; font-weight: 600; font-display: swap; src: url("fonts/instrument-sans-latin-600-normal.woff2") format("woff2"); }
+  @font-face { font-family: "Source Serif 4"; font-weight: 400; font-style: normal; font-display: swap; src: url("fonts/source-serif-4-latin-400-normal.woff2") format("woff2"); }
+  @font-face { font-family: "Source Serif 4"; font-weight: 600; font-style: normal; font-display: swap; src: url("fonts/source-serif-4-latin-600-normal.woff2") format("woff2"); }
+  @font-face { font-family: "Source Serif 4"; font-weight: 400; font-style: italic; font-display: swap; src: url("fonts/source-serif-4-latin-400-italic.woff2") format("woff2"); }
+  @font-face { font-family: "Hack"; font-weight: 400; font-display: swap; src: url("fonts/hack-latin-400-normal.ttf") format("truetype"); }
+  @font-face { font-family: "STIX Two Math"; font-display: swap; src: url("stix-two-math.otf") format("opentype"); }
+  #controls .tx-clip { position: absolute; overflow: clip; pointer-events: none; }
+  #controls [inert] .tx-clip { visibility: hidden; }
+  #controls p.tx {
+    position: absolute; margin: 0; padding: 1px 0; pointer-events: auto; cursor: text; touch-action: pinch-zoom;
+    font: 22px/1.7 "Source Serif 4", Georgia, "Times New Roman", serif; color: var(--ink, #1B2230);
+    overflow-wrap: anywhere; user-select: text;
+  }
+  #controls p.tx.margin { font: 16px/1.5 "Instrument Sans", system-ui, sans-serif; color: var(--muted, #5A6478); }
+  #controls p.tx.plain { white-space: pre-wrap; padding: 0; font: 13px/1.65 "Hack", ui-monospace, Consolas, monospace; cursor: auto; }
+  #controls p.tx[data-reading] { text-decoration: underline 3px var(--accent, #2F5BEA); text-underline-offset: 7px; text-decoration-skip-ink: none; }
+  #controls p.tx .b { font-weight: 600; }
+  #controls p.tx .i { font-style: italic; }
+  #controls p.tx .c { font: 0.85em "Hack", ui-monospace, Consolas, monospace; background: var(--sunken, #F3F5F8); border-radius: 3px; padding: 0 2px; }
+  #controls p.tx .lead { color: var(--ink, #1B2230); font-weight: 600; }
+  #controls p.tx del { color: var(--muted, #5A6478); }
+  #controls p.tx.display { text-align: center; }
+  #controls p.tx .tx-math { font-size: 1.21em; }
+  #controls p.tx .tx-math.disp { display: block; margin: 22px 0; }
+  #controls p.tx .tx-tex { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; user-select: none; }
+  #controls p.tx .tx-math.src, #controls p.tx .katex-error { font: 0.85em "Hack", ui-monospace, Consolas, monospace; color: var(--bad, #B3261E); }
+  #controls p.tx math { font-family: "STIX Two Math", "Cambria Math", math; }
+  /* flagged words (css/components.css `.w`): the painted word is 4px of padding round the text as in the JS app; the
+     button itself reaches 8px further up and down (44px high, the same margin takes it back: the line is not taller) */
+  #controls p.tx .w {
+    position: relative; isolation: isolate; display: inline-block; margin: -8px 0; padding: 8px 4px; border: 0; background: transparent;
+    font: inherit; color: inherit; line-height: 1.35; cursor: pointer; text-align: inherit; white-space: nowrap; outline: none;
+  }
+  #controls p.tx .w::before { content: ""; position: absolute; inset: 8px 0; z-index: -1; border-radius: 4px; }
+  #controls p.tx .w.suggest::before { background: var(--warn, #FFE8A3); }
+  #controls p.tx .w.illegible { color: var(--bad, #B3261E); text-decoration: underline dashed var(--bad, #B3261E); text-decoration-thickness: 2px; text-underline-offset: 5px; }
+  #controls p.tx .w.illegible::before { background: var(--bad-bg, #FCE9E7); }
+  #controls p.tx .w.checked { text-decoration: underline; text-decoration-color: var(--ok, #1F7A4D); text-decoration-thickness: 2px; text-underline-offset: 5px; }
+  #controls p.tx .w:hover::before { box-shadow: 0 0 0 1px var(--line2, #D5DAE3); }
+  #controls p.tx .w.sel::before { outline: 2px solid var(--ink, #1B2230); outline-offset: 2px; }
+  @media (forced-colors: active) {
+    #controls p.tx .w::before { border: 1px solid ButtonBorder; }
+    #controls p.tx .w.sel::before { outline-color: Highlight; }
+  }
   /* live regions: always in the document (one that appears together with its text is often not spoken) */
   .live { position: absolute; left: 0; top: 0; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
   /* what is on the page before the first frame, and instead of it when the app cannot start: plain text, so a

@@ -22,8 +22,9 @@ const rustflags = process.env.RUSTFLAGS && !process.env.RUSTFLAGS.includes(CFG) 
 run('cargo', ['build', '-p', 'vishion-app', '--lib', '--target', 'wasm32-unknown-unknown', ...(debug ? [] : ['--release'])],
   rustflags ? { env: { ...process.env, RUSTFLAGS: rustflags } } : {});
 
-fs.rmSync(dist, { recursive: true, force: true });
+// clear the folder's contents, not the folder: a shell or editor with it as its working directory (EPERM on Windows)
 fs.mkdirSync(dist, { recursive: true });
+for (const f of fs.readdirSync(dist)) fs.rmSync(path.join(dist, f), { recursive: true, force: true });
 run('wasm-bindgen', [
   '--target', 'web', '--no-typescript', '--out-dir', dist,
   path.join(repo, 'target/wasm32-unknown-unknown', profile, 'vishion_app.wasm'),
@@ -47,6 +48,14 @@ fs.copyFileSync(path.join(repo, 'crates/vendor/latex-rust/fonts/stix-two-math/ST
 fs.copyFileSync(path.join(repo, 'crates/ui/assets/fonts/fallback-cjk-emoji.ttf'), path.join(dist, 'fallback-cjk-emoji.ttf'));
 // And the colour emoji face (1.4 MB): fetched only when a page has an emoji.
 fs.copyFileSync(path.join(repo, 'crates/ui/assets/fonts/twemoji-colr.ttf'), path.join(dist, 'twemoji-colr.ttf'));
+// The transcript is DOM text (a user stylesheet and text spacing apply to it): the JS app's own faces, and KaTeX,
+// which typesets formulas as MathML. Fetched when the page has a formula.
+fs.mkdirSync(path.join(dist, 'fonts'), { recursive: true });
+for (const f of fs.readdirSync(path.join(repo, 'fonts')).filter((n) => /^(instrument-sans|source-serif-4).*\.woff2$/.test(n))) {
+  fs.copyFileSync(path.join(repo, 'fonts', f), path.join(dist, 'fonts', f));
+}
+fs.copyFileSync(path.join(repo, 'crates/ui/assets/fonts/hack-latin-400-normal.ttf'), path.join(dist, 'fonts/hack-latin-400-normal.ttf'));
+fs.copyFileSync(path.join(repo, 'spikes/s5-markdown-katex/vendor/katex-0.16.9/dist/katex.min.js'), path.join(dist, 'katex.min.js'));
 fs.copyFileSync(path.join(here, 'index.html'), path.join(dist, 'index.html'));
 fs.copyFileSync(path.join(repo, 'favicon.svg'), path.join(dist, 'favicon.svg'));
 
@@ -70,6 +79,12 @@ const headers = `/*
   Cache-Control: public, max-age=0, must-revalidate
 
 /stix-two-math.otf
+  Cache-Control: public, max-age=31536000, immutable
+
+/katex.min.js
+  Cache-Control: public, max-age=31536000, immutable
+
+/fonts/*
   Cache-Control: public, max-age=31536000, immutable
 
 /fallback-cjk-emoji.ttf

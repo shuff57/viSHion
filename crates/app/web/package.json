@@ -6,7 +6,8 @@
     "build": "node build.mjs",
     "serve": "node serve.mjs",
     "check": "node check.mjs",
-    "a11y": "node a11y.mjs"
+    "a11y": "node a11y.mjs",
+    "transcript": "node transcript-dom.mjs"
   },
   "devDependencies": {
     "axe-core": "4.10.2",
