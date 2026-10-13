@@ -82,6 +82,9 @@ pub(crate) enum Act {
     ExportSelected,
     ReviewAgain,
     ClearMulti,
+    Filter(state::Filter),
+    SelectGroup(String, bool),
+    RetryIds(Vec<String>),
     Dialog(dialog::Out),
 }
 
@@ -98,6 +101,8 @@ struct Cx<'a> {
     narrow: bool,
     screen_h: f32,
     stage: &'a mut Stage,
+    /// Page pictures a row asks for (visible thumbnails): loaded by the host, answered as `Event::Image`.
+    want: &'a mut Vec<String>,
     /// Keep the selected word / the reading line in view this frame.
     scroll_sel: bool,
     scroll_read: bool,
@@ -123,7 +128,9 @@ fn css_text(ui: &mut Ui, text: &str, font: egui::FontId, color: Color32, line_h:
     job.wrap.break_anywhere = anywhere;
     let nat = ui.painter().layout_no_wrap("Hg".to_string(), font_id_of(&job), color).size().y;
     let g = ui.painter().layout_job(job);
-    let (rect, _) = ui.allocate_exact_size(vec2(g.size().x.max(1.0), g.size().y.max(line_h)), Sense::hover());
+    // CSS line boxes are exactly `line_h` each (egui rounds its rows to whole pixels)
+    let height = g.rows.len().max(1) as f32 * line_h;
+    let (rect, _) = ui.allocate_exact_size(vec2(g.size().x.max(1.0), height), Sense::hover());
     // egui keeps the glyphs at the top of a taller or shorter row; a browser centres them (half-leading)
     ui.painter().galley(rect.min + vec2(0.0, ((line_h - nat) / 2.0 + 0.2).round()), g, color);
     rect
@@ -138,7 +145,7 @@ fn tw(ui: &Ui, text: &str, font: egui::FontId) -> f32 {
 }
 
 pub(crate) fn show(app: &mut App, ctx: &egui::Context, t: &Tokens) {
-    let App { ctl, session, math, images, typed, typed_for, status_msg, status_err, boot, notice, save, storage, dialog, stage, host, .. } = app;
+    let App { ctl, session, math, images, typed, typed_for, status_msg, status_err, boot, notice, save, storage, dialog, stage, host, want, .. } = app;
     let mut acts: Vec<Act> = vec![];
     if let Some(s) = session.as_mut() {
         // js renderWho: Original cannot stay set where both versions read the same
@@ -161,6 +168,7 @@ pub(crate) fn show(app: &mut App, ctx: &egui::Context, t: &Tokens) {
                 narrow,
                 screen_h: screen.height(),
                 stage: &mut *stage,
+                want: &mut *want,
                 scroll_sel: false,
                 scroll_read: false,
             };
@@ -319,9 +327,8 @@ fn apply(
             s.step_student(d);
         }
         Act::DoneNext => {
-            let name = s.group().map(|g| g.name);
             if !s.done_next() {
-                say(format!("{} is marked done. That was the last student.", name.unwrap_or_default()), false);
+                say("That was the last student.".into(), false);
                 s.view = View::Inbox;
             }
         }
@@ -484,10 +491,27 @@ fn apply(
                     then: After::ReviewAgain(ids),
                 });
             } else {
-                s.review_again(&ids);
+                s.review_again_and_open(&ids);
             }
         }
         Act::ClearMulti => s.multi.clear(),
+        Act::Filter(f) => s.filter = f,
+        Act::SelectGroup(key, on) => {
+            if let Some(g) = s.groups().into_iter().find(|g| g.key == key) {
+                for id in g.pages {
+                    if on {
+                        s.multi.insert(id);
+                    } else {
+                        s.multi.remove(&id);
+                    }
+                }
+            }
+        }
+        Act::RetryIds(ids) => {
+            if !ids.is_empty() {
+                send(Cmd::Transcribe { slug, ids });
+            }
+        }
         Act::Dialog(o) => {
             match o {
                 dialog::Out::Close => {}
@@ -505,7 +529,7 @@ fn apply(
                     After::RemovePage(id) => s.remove_page(&id),
                     After::TranscribeAgain(id) => send(Cmd::Transcribe { slug, ids: vec![id] }),
                     After::ReviewAgain(ids) => {
-                        let n = s.review_again(&ids);
+                        let n = s.review_again_and_open(&ids);
                         say(format!("{} back in review.", state::plural(n, "page is", "pages are")), false);
                     }
                 },
@@ -547,7 +571,8 @@ fn header(ui: &mut Ui, cx: &mut Cx, s: &Session) {
             ui.add_space((ui.available_width() - w - 4.0).max(0.0));
             let (sr, _) = ui.allocate_exact_size(vec2(sg.size().x + 24.0, TARGET), Sense::hover());
             let icon = if cx.save.failed.is_some() { Icon::Warn } else { Icon::Check };
-            widgets::paint_icon(ui, Rect::from_center_size(pos2(sr.left() + 9.0, sr.center().y), vec2(18.0, 18.0)), icon, save_col);
+            let icon_col = if cx.save.failed.is_some() { t.bad } else { t.ok };
+            widgets::paint_icon(ui, Rect::from_center_size(pos2(sr.left() + 9.0, sr.center().y), vec2(18.0, 18.0)), icon, icon_col);
             ui.painter().galley(pos2(sr.left() + 24.0, sr.center().y - sg.size().y / 2.0), sg, save_col);
             cx.ctl.status("save-state", &save_text, HEADER, sr.min);
             if widgets::icon_button(cx.ctl, ui, t, C::new("settings", "Settings", HEADER), Icon::Gear, false) {
@@ -608,7 +633,8 @@ fn header(ui: &mut Ui, cx: &mut Cx, s: &Session) {
         let sg = ui.painter().layout_no_wrap(save_text.clone(), theme::sans(13.0), save_col);
         let (sr, _) = ui.allocate_exact_size(vec2(sg.size().x + 24.0, TARGET), Sense::hover());
         let icon = if cx.save.failed.is_some() { Icon::Warn } else { Icon::Check };
-        widgets::paint_icon(ui, Rect::from_center_size(pos2(sr.left() + 9.0, sr.center().y), vec2(18.0, 18.0)), icon, save_col);
+        let icon_col = if cx.save.failed.is_some() { t.bad } else { t.ok };
+        widgets::paint_icon(ui, Rect::from_center_size(pos2(sr.left() + 9.0, sr.center().y), vec2(18.0, 18.0)), icon, icon_col);
         ui.painter().galley(pos2(sr.left() + 24.0, sr.center().y - sg.size().y / 2.0), sg, save_col);
         cx.ctl.status("save-state", &save_text, HEADER, sr.min);
         let split = s.split;
@@ -652,66 +678,373 @@ fn header(ui: &mut Ui, cx: &mut Cx, s: &Session) {
     }
 }
 
-// ------------------------------------------------------------------ inbox (assignment overview)
+/// ------------------------------------------------------------------ inbox (assignment overview)
 
+/// js/ui/inbox.js: title and counts, the run bar, the segmented status bar, the filter tabs and one row per
+/// student with its own status, selection box and Retry. Geometry follows css/components.css (`.runbar`,
+/// `.stackbar`, `.tab`, `.srows`, `.srow`).
 fn inbox(ctx: &egui::Context, cx: &mut Cx, s: &Session) {
     let t = cx.t;
     egui::CentralPanel::default().frame(egui::Frame::none().fill(t.bg)).show(ctx, |ui| {
-        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+        egui::ScrollArea::vertical().auto_shrink([false, false]).id_source("inbox-scroll").show(ui, |ui| {
             let avail = ui.available_width();
-            let inner = avail.min(1120.0);
+            // `.page-inner { max-width: 1120px; padding: 40px 24px 56px }` (28 16 48 on a phone)
             let pad = if cx.narrow { 16.0 } else { 24.0 };
-            egui::Frame::none().inner_margin(Margin { left: (avail - inner) / 2.0 + pad, right: (avail - inner) / 2.0 + pad, top: 40.0, bottom: 40.0 }).show(ui, |ui| {
+            let side = (avail - avail.min(1120.0)) / 2.0 + pad;
+            let margin = Margin { left: side, right: side, top: if cx.narrow { 28.0 } else { 40.0 }, bottom: if cx.narrow { 48.0 } else { 56.0 } };
+            egui::Frame::none().inner_margin(margin).show(ui, |ui| {
                 ui.set_width(ui.available_width());
-                let name = s.a.meta.name();
-                let r = ui.label(RichText::new(if name.is_empty() { "Assignment" } else { name }).font(theme::serif_semi(if cx.narrow { 30.0 } else { 36.0 })).color(t.ink));
-                cx.ctl.heading("inbox-title", 1, if name.is_empty() { "Assignment" } else { name }, TEXT, r.rect.min);
-                let groups = s.groups();
-                let pages: usize = groups.iter().map(|g| g.pages.len()).sum();
-                let sub = format!("{}, {}.", state::plural(groups.len(), "student", "students"), state::plural(pages, "page", "pages"));
-                ui.label(RichText::new(sub).font(theme::sans(14.0)).color(t.muted));
-                ui.add_space(24.0);
-                for g in groups {
-                    let (kind, label) = s.pill(&g);
-                    let meta = if g.words > 0 { format!("{}, {} words", state::plural(g.pages.len(), "page", "pages"), g.words) } else { state::plural(g.pages.len(), "page", "pages") };
-                    let w = ui.available_width();
-                    let r = ui.allocate_response(vec2(w, 64.0), Sense::click());
-                    let hover = r.hovered();
-                    ui.painter().rect_filled(r.rect, 10.0, if hover { t.sunken } else { t.surface });
-                    ui.painter().rect_stroke(r.rect, 10.0, Stroke::new(1.0, t.line));
-                    let gn = ui.painter().layout_no_wrap(g.name.clone(), theme::sans_semi(16.0), t.ink);
-                    let gm = ui.painter().layout_no_wrap(meta, theme::sans(13.0), t.muted);
-                    let h = gn.size().y + gm.size().y;
-                    let top = r.rect.center().y - h / 2.0;
-                    ui.painter().galley(pos2(r.rect.left() + 16.0, top), gn.clone(), t.ink);
-                    ui.painter().galley(pos2(r.rect.left() + 16.0, top + gn.size().y), gm, t.muted);
-                    let pg = ui.painter().layout_no_wrap(label.clone(), theme::sans_semi(13.0), t.ink);
-                    let pr = Rect::from_center_size(pos2(r.rect.right() - 16.0 - (pg.size().x + 24.0) / 2.0, r.rect.center().y), pg.size() + vec2(24.0, 10.0));
-                    let (bg, fg) = match kind {
-                        PillKind::Warn => (t.warn, t.ink),
-                        PillKind::Ok => (t.ok_bg, t.ok),
-                        PillKind::Bad => (t.bad_bg, t.bad),
-                        PillKind::Busy => (t.hover, t.ink),
-                        PillKind::Queued => (Color32::TRANSPARENT, t.muted),
-                    };
-                    ui.painter().rect_filled(pr, 999.0, bg);
-                    if kind == PillKind::Queued {
-                        ui.painter().rect_stroke(pr, 999.0, Stroke::new(1.0, t.line2));
-                    }
-                    ui.painter().galley(pr.center() - pg.size() / 2.0, pg, fg);
-                    let first = g.pages.first().cloned().unwrap_or_default();
-                    let lab = format!("Open {}, {}", g.name, label);
-                    if cx.ctl.reg(ui, &r, C::new(&format!("row-{}", g.key), &lab, TEXT)) {
-                        cx.acts.push(Act::OpenReview(first));
-                    }
-                    ui.add_space(8.0);
-                }
-                ui.add_space(12.0);
-                ui.label(RichText::new("Adding pages in bulk, running transcription and exporting arrive with phase 5 and 6.").font(theme::sans(13.0)).color(t.muted));
+                ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
+                inbox_body(ui, cx, s);
             });
         });
     });
 }
+
+/// A button of a run bar: id, label, primary, what it does.
+type BarBtn = (&'static str, String, bool, Act);
+
+/// `.runbar`: text (bold line and a muted one) at the left, buttons at the right; the buttons go under the
+/// text when the card is too narrow for both.
+fn run_bar(ui: &mut Ui, cx: &mut Cx, id: &str, title: &str, sub: &str, buttons: Vec<BarBtn>) {
+    let t = cx.t;
+    let w = ui.available_width();
+    let inner_w = w - 2.0 - 40.0;
+    let btn_w: Vec<f32> = buttons.iter().map(|(_, l, _, _)| tw(ui, l, theme::sans_semi(14.0)) + 36.0).collect();
+    let btns_w = btn_w.iter().sum::<f32>() + 8.0 * btn_w.len().saturating_sub(1) as f32;
+    let beside = buttons.is_empty() || 280.0 + 20.0 + btns_w <= inner_w;
+    let frame = egui::Frame::none().fill(t.surface).stroke(Stroke::new(1.0, t.line)).rounding(10.0).inner_margin(Margin::symmetric(20.0, 14.0));
+    let r = frame.show(ui, |ui| {
+        ui.set_width(inner_w);
+        let text = |ui: &mut Ui, cx: &mut Cx, width: f32| {
+            let r = css_text(ui, title, theme::sans_semi(14.0), t.ink, 14.0 * 1.4, width, false);
+            ui.add_space(2.0);
+            css_text(ui, sub, theme::sans(13.0), t.muted, 13.0 * 1.4, width, false);
+            cx.ctl.status(id, &format!("{title} {sub}"), TEXT, r.min);
+        };
+        let btns = |ui: &mut Ui, cx: &mut Cx, buttons: Vec<BarBtn>| {
+            ui.spacing_mut().item_spacing.x = 8.0;
+            for (bid, label, primary, act) in buttons {
+                let look = if primary { Look::Primary } else { Look::Outline };
+                if widgets::button(cx.ctl, ui, t, C::new(bid, &label, TEXT), &label, look, 0.0) {
+                    cx.acts.push(act);
+                }
+            }
+        };
+        if beside {
+            // (`align-items: center`: the text block is one 39.8 line pair, the buttons 44 high)
+            ui.horizontal_top(|ui| {
+                let tw_ = inner_w - btns_w - 20.0;
+                ui.allocate_ui_with_layout(vec2(tw_.max(120.0), 0.0), Layout::top_down(Align::Min), |ui| {
+                    ui.spacing_mut().item_spacing.y = 0.0;
+                    ui.add_space(if buttons.is_empty() { 0.0 } else { (TARGET - (14.0 * 1.4 + 2.0 + 13.0 * 1.4)) / 2.0 });
+                    text(ui, cx, tw_.max(120.0));
+                });
+                ui.add_space((ui.available_width() - btns_w).max(0.0));
+                btns(ui, cx, buttons);
+            });
+        } else {
+            text(ui, cx, inner_w);
+            ui.add_space(12.0);
+            ui.horizontal_wrapped(|ui| btns(ui, cx, buttons));
+        }
+    });
+    let _ = r;
+}
+
+fn inbox_body(ui: &mut Ui, cx: &mut Cx, s: &Session) {
+    let t = cx.t;
+    let w = ui.available_width();
+    let name = s.a.meta.name();
+    let title = if name.is_empty() { "Assignment" } else { name };
+    let groups = s.groups();
+    let tally = Session::tally(&groups);
+    let topic = s.a.meta.topic();
+    let sub = format!("{}{}", if topic.is_empty() { String::new() } else { format!("{topic}, ") }, state::plural(tally.total, "student", "students"));
+    let size = if cx.narrow { 30.0 } else { 36.0 };
+    let r = css_text(ui, title, theme::serif_semi(size), t.ink, size * 1.15, w, true);
+    cx.ctl.heading("inbox-title", 1, title, TEXT, r.min);
+    ui.add_space(8.0);
+    let r = css_text(ui, &sub, theme::sans(14.0), t.muted, 14.0 * 1.4, w, false);
+    cx.ctl.text("inbox-sub", &sub, TEXT, r.min);
+
+    if groups.is_empty() {
+        ui.add_space(28.0);
+        egui::Frame::none().fill(t.surface).stroke(Stroke::new(1.0, t.line)).rounding(10.0).inner_margin(Margin::symmetric(24.0, 40.0)).show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.vertical_centered(|ui| {
+                let (ir, _) = ui.allocate_exact_size(vec2(40.0, 40.0), Sense::hover());
+                widgets::paint_icon(ui, ir, Icon::Page, t.muted);
+                ui.add_space(10.0);
+                let r = css_text(ui, "No pages in this assignment", theme::sans_semi(18.0), t.ink, 18.0 * 1.4, w, false);
+                cx.ctl.heading("inbox-empty", 3, "No pages in this assignment", TEXT, r.min);
+            });
+        });
+        return;
+    }
+
+    // run bar
+    let c = s.a.counts();
+    let failed_btn = (c.error > 0).then(|| ("retry-failed", format!("Retry {} failed", c.error), false, Act::RetryIds(s.failed_ids())));
+    ui.add_space(28.0);
+    if c.pending > 0 {
+        let stopped = if c.done > 0 {
+            format!("Stopped. {} left.", state::plural(c.pending as usize, "page", "pages"))
+        } else {
+            format!("{} a transcript.", state::plural(c.pending as usize, "page needs", "pages need"))
+        };
+        let subtxt = format!("{} of {} pages have a transcript. The rest will pick up where they left off.", c.done, c.total);
+        let go = if c.done > 0 { format!("Resume ({} left)", c.pending) } else { format!("Transcribe {}", state::plural(c.pending as usize, "page", "pages")) };
+        let mut b: Vec<BarBtn> = failed_btn.into_iter().collect();
+        b.push(("resume", go, true, Act::RetryIds(s.pending_ids())));
+        run_bar(ui, cx, "run-status", &stopped, &subtxt, b);
+    } else if c.error > 0 {
+        let title = format!("{} couldn\u{2019}t be transcribed.", state::plural(c.error as usize, "page", "pages"));
+        run_bar(ui, cx, "run-status", &title, "Retry them, or open a student to see what went wrong.", failed_btn.into_iter().collect());
+    } else if tally.check > 0 {
+        let title = format!("All {} transcribed.", state::plural(c.total as usize, "page is", "pages are"));
+        let subtxt = format!("{} words to check before you read them.", state::plural(tally.check, "student has", "students have"));
+        let first = groups.iter().find(|g| g.status == vishion_core::groups::Status::Check).and_then(|g| g.pages.first().cloned());
+        let b = first.map(|f| ("start-first", "Start with the first one".to_string(), true, Act::OpenReview(f))).into_iter().collect();
+        run_bar(ui, cx, "run-status", &title, &subtxt, b);
+    } else {
+        ui.add_space(-28.0);
+    }
+
+    // selection bar
+    if !s.multi.is_empty() {
+        let names = groups.iter().filter(|g| g.pages.iter().any(|p| s.multi.contains(p))).count();
+        ui.add_space(16.0);
+        let title = format!("{} selected", state::plural(names, "student", "students"));
+        let subtxt = state::plural(s.multi.len(), "page", "pages");
+        let b: Vec<BarBtn> = vec![
+            ("sel-clear", "Clear selection".into(), false, Act::ClearMulti),
+            ("sel-review-again", "Review again".into(), false, Act::ReviewAgain),
+            ("sel-export", "Export selected".into(), true, Act::ExportSelected),
+        ];
+        run_bar(ui, cx, "sel-status", &title, &subtxt, b);
+    }
+
+    // `.stackbar { gap: 3px; height: 12px; margin-top: 24px }`: four segments that share what the gaps leave
+    ui.add_space(24.0);
+    {
+        let (rect, _) = ui.allocate_exact_size(vec2(w, 12.0), Sense::hover());
+        let usable = w - 9.0;
+        let total = tally.total.max(1) as f32;
+        let segs = [
+            (tally.ready, t.bar_ok, t.bar_ok_edge),
+            (tally.check, t.bar_warn, t.bar_warn_edge),
+            (tally.failed, t.bar_bad, t.bar_bad_edge),
+            (tally.processing, t.track, t.faint),
+        ];
+        let mut x = rect.left();
+        for (n, fill, edge) in segs {
+            let sw = n as f32 / total * usable;
+            let r = Rect::from_min_size(pos2(x, rect.top()), vec2(sw, 12.0));
+            if sw > 0.5 {
+                ui.painter().rect_filled(r, 6.0, fill);
+                ui.painter().rect_stroke(r.shrink(0.5), 5.5, Stroke::new(1.0, edge));
+            }
+            x += sw + 3.0;
+        }
+        let label = format!(
+            "{} ready to read, {} need a check, {} failed, {} not done yet",
+            tally.ready, tally.check, tally.failed, tally.processing
+        );
+        cx.ctl.status("stackbar", &label, TEXT, rect.min);
+    }
+
+    // tabs: `.tabs { gap: 8px; margin-top: 16px }`, `.tab { height: 44px; padding: 0 16px; gap: 8px }`
+    ui.add_space(16.0);
+    let counts = [tally.total, tally.ready, tally.check, tally.processing, tally.failed];
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = vec2(8.0, 8.0);
+        for (f, n) in state::Filter::ALL.into_iter().zip(counts) {
+            let on = s.filter == f;
+            let label = f.label();
+            let fg = if on { t.on_ink } else { t.ink };
+            let lg = ui.painter().layout_no_wrap(label.to_string(), theme::sans_semi(14.0), fg);
+            let ng = ui.painter().layout_no_wrap(n.to_string(), theme::sans_semi(14.0), fg.gamma_multiply(0.75));
+            let dot = match f {
+                state::Filter::All => None,
+                state::Filter::Ready => Some((t.bar_ok, t.bar_ok_edge)),
+                state::Filter::Check => Some((t.bar_warn, t.bar_warn_edge)),
+                state::Filter::Processing => None,
+                state::Filter::Failed => Some((t.bar_bad, t.bar_bad_edge)),
+            };
+            let dot_w = if dot.is_some() { 10.0 + 8.0 } else { 0.0 };
+            let width = 2.0 + 32.0 + dot_w + lg.size().x + 8.0 + ng.size().x;
+            let r = ui.allocate_response(vec2(width, TARGET), Sense::click());
+            let fill = if on { t.ink } else if r.hovered() { t.hover } else { Color32::TRANSPARENT };
+            ui.painter().rect_filled(r.rect, 22.0, fill);
+            ui.painter().rect_stroke(r.rect.shrink(0.5), 21.5, Stroke::new(1.0, if on { t.ink } else { t.line2 }));
+            let mut x = r.rect.left() + 17.0;
+            if let Some((fill, edge)) = dot {
+                let c = pos2(x + 5.0, r.rect.center().y);
+                ui.painter().circle_filled(c, 5.0, fill);
+                ui.painter().circle_stroke(c, 4.5, Stroke::new(1.0, edge));
+                x += 18.0;
+            }
+            ui.painter().galley(pos2(x, r.rect.center().y - lg.size().y / 2.0), lg.clone(), fg);
+            x += lg.size().x + 8.0;
+            ui.painter().galley(pos2(x, r.rect.center().y - ng.size().y / 2.0), ng, fg.gamma_multiply(0.75));
+            let lab = format!("{label} {n}");
+            if cx.ctl.reg(ui, &r, C::new(&format!("tab-{}", f.id()), &lab, TEXT).pressed(on)) {
+                cx.acts.push(Act::Filter(f));
+            }
+        }
+    });
+
+    // rows
+    ui.add_space(20.0);
+    let shown: Vec<&vishion_core::groups::Group> = groups.iter().filter(|g| s.filter.matches(g.status)).collect();
+    if shown.is_empty() {
+        egui::Frame::none().fill(t.surface).stroke(Stroke::new(1.0, t.line)).rounding(10.0).inner_margin(Margin::symmetric(24.0, 40.0)).show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.vertical_centered(|ui| {
+                let (ir, _) = ui.allocate_exact_size(vec2(40.0, 40.0), Sense::hover());
+                widgets::paint_icon(ui, ir, Icon::Check, t.muted);
+                ui.add_space(10.0);
+                let r = css_text(ui, "Nothing left to check", theme::sans_semi(18.0), t.ink, 18.0 * 1.4, w, false);
+                cx.ctl.heading("inbox-nothing", 3, "Nothing left to check", TEXT, r.min);
+                ui.add_space(10.0);
+                let msg = "Every student in this filter has been read. Pick another filter to see the rest.";
+                let r = css_text(ui, msg, theme::sans(14.0), t.muted, 14.0 * 1.4, 36.0 * 8.0, false);
+                cx.ctl.text("inbox-nothing-text", msg, TEXT, r.min);
+                ui.add_space(16.0);
+                if widgets::button(cx.ctl, ui, t, C::new("show-all", "Show all students", TEXT), "Show all students", Look::Outline, 0.0) {
+                    cx.acts.push(Act::Filter(state::Filter::All));
+                }
+            });
+        });
+    } else {
+        let card = egui::Frame::none().fill(t.surface).stroke(Stroke::new(1.0, t.line)).rounding(10.0).inner_margin(Margin::same(1.0));
+        let last = shown.len() - 1;
+        card.show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            for (i, g) in shown.iter().enumerate() {
+                student_row(ui, cx, s, g, i == 0, i == last);
+            }
+        });
+    }
+    ui.add_space(12.0);
+    css_text(
+        ui,
+        "Adding pages in bulk, assignment settings and exporting arrive with phase 5 and 6.",
+        theme::sans(13.0),
+        t.muted,
+        13.0 * 1.4,
+        w,
+        false,
+    );
+}
+
+/// `.srow`: selection box, thumbnail, name and counts, the status chip, a chevron, and Retry for a failed one.
+fn student_row(ui: &mut Ui, cx: &mut Cx, s: &Session, g: &vishion_core::groups::Group, first: bool, last: bool) {
+    use vishion_core::groups::Status;
+    let t = cx.t;
+    let (kind, label) = s.chip(g);
+    let idle = matches!(g.status, Status::Processing | Status::Queued | Status::Waiting | Status::Failed);
+    let meta = if idle { state::plural(g.pages.len(), "page", "pages") } else { format!("{}, {} words", state::plural(g.pages.len(), "page", "pages"), g.words) };
+    let w = ui.available_width();
+    let pill_w = tw(ui, &label, theme::sans_semi(14.0)) + 28.0;
+    let retry = g.status == Status::Failed;
+    let retry_w = if retry { tw(ui, "Retry", theme::sans_semi(14.0)) + 34.0 } else { 0.0 };
+    // the open button's content: pad 20, thumb 40, gap 20, who (160 at least), gap 20, chip, gap 20, icon 20, pad 20
+    let open_w = w - 12.0 - TARGET - if retry { retry_w + 20.0 } else { 0.0 };
+    let need = 20.0 + 40.0 + 20.0 + 160.0 + 20.0 + pill_w + 20.0 + 20.0 + 20.0;
+    let wrap = need > open_w;
+    let height = if wrap { 14.0 + 52.0 + 12.0 + PILL_ROW + 14.0 } else { 80.0 };
+    let (rect, _) = ui.allocate_exact_size(vec2(w, height + if last { 0.0 } else { 1.0 }), Sense::hover());
+    let row = Rect::from_min_size(rect.min, vec2(w, height));
+    let open = Rect::from_min_size(pos2(row.left() + 12.0 + TARGET, row.top()), vec2(open_w, height));
+    let r_open = ui.interact(open, ui.id().with(("open", &g.key)), Sense::click());
+    let hover = r_open.hovered();
+    if hover {
+        let round = egui::Rounding { nw: if first { 9.0 } else { 0.0 }, ne: if first { 9.0 } else { 0.0 }, sw: if last { 9.0 } else { 0.0 }, se: if last { 9.0 } else { 0.0 } };
+        ui.painter().rect_filled(row, round, t.sunken);
+    }
+    if !last {
+        ui.painter().hline(rect.x_range(), rect.bottom() - 0.5, Stroke::new(1.0, t.soft));
+    }
+    // selection box
+    let on = g.pages.iter().all(|p| s.multi.contains(p));
+    let cb = Rect::from_min_size(pos2(row.left() + 12.0, row.center().y - TARGET / 2.0), vec2(TARGET, TARGET));
+    let rc = ui.interact(cb, ui.id().with(("sel", &g.key)), Sense::click());
+    let bx = Rect::from_center_size(cb.center(), vec2(18.0, 18.0));
+    if on {
+        ui.painter().rect_filled(bx, 3.0, t.ink);
+        let c = bx.center();
+        ui.painter().add(egui::Shape::line(vec![pos2(c.x - 4.5, c.y + 0.5), pos2(c.x - 1.5, c.y + 3.5), pos2(c.x + 4.5, c.y - 3.5)], Stroke::new(2.0, t.on_ink)));
+    } else {
+        ui.painter().rect_filled(bx, 3.0, t.surface);
+        ui.painter().rect_stroke(bx.shrink(0.5), 3.0, Stroke::new(1.0, t.faint));
+    }
+    let sel_label = format!("Select {}", g.name);
+    if cx.ctl.reg(ui, &rc, C::new(&format!("sel-{}", g.key), &sel_label, TEXT).pressed(on)) {
+        cx.acts.push(Act::SelectGroup(g.key.clone(), !on));
+    }
+    // thumbnail: the first page, `object-fit: cover` on ruled paper; dimmed while the student is not read yet
+    let first_page = g.pages.first().cloned().unwrap_or_default();
+    let th = Rect::from_min_size(pos2(open.left() + 20.0, open.top() + 14.0), vec2(40.0, 52.0));
+    let alpha = if idle && g.status != Status::Failed { 0.55 } else { 1.0 };
+    if ui.is_rect_visible(th) {
+        ui.painter().rect_filled(th.translate(vec2(0.0, 1.0)).expand(0.5), 2.0, Color32::from_black_alpha(((if t.dark { 90.0 } else { 40.0 }) * alpha) as u8));
+        ui.painter().rect_filled(th, 2.0, t.paper.gamma_multiply(alpha));
+        match cx.images.get(&first_page) {
+            Some(Slot::Ready(im)) => {
+                // cover: crop the picture to the 40 x 52 box, centred
+                let (iw, ih) = (im.size.0 as f32, im.size.1 as f32);
+                let want = th.width() / th.height();
+                let have = iw / ih.max(1.0);
+                let uv = if have > want {
+                    let f = want / have;
+                    Rect::from_min_max(pos2((1.0 - f) / 2.0, 0.0), pos2((1.0 + f) / 2.0, 1.0))
+                } else {
+                    let f = have / want;
+                    Rect::from_min_max(pos2(0.0, (1.0 - f) / 2.0), pos2(1.0, (1.0 + f) / 2.0))
+                };
+                ui.painter().image(im.thumb.id(), th, uv, Color32::WHITE.gamma_multiply(alpha));
+            }
+            Some(_) => {}
+            None => cx.want.push(first_page.clone()),
+        }
+    }
+    // name and counts
+    let who_x = th.right() + 20.0;
+    let who_w = if wrap { open.right() - 20.0 - who_x } else { open.right() - 20.0 - 20.0 - 20.0 - pill_w - 20.0 - who_x };
+    let name_g = ui.painter().layout(g.name.clone(), theme::sans_semi(16.0), t.ink, who_w.max(40.0));
+    let meta_g = ui.painter().layout(meta.clone(), theme::sans(13.0), t.muted, who_w.max(40.0));
+    let block_h = 22.4 + 2.0 + 18.2;
+    let top = if wrap { th.top() + (52.0 - block_h) / 2.0 } else { row.center().y - block_h / 2.0 };
+    let dy = |gal: &std::sync::Arc<egui::Galley>, lh: f32| ((lh - gal.size().y.min(lh)) / 2.0 + 0.2).round();
+    ui.painter().galley(pos2(who_x, top + dy(&name_g, 22.4)), name_g, t.ink);
+    ui.painter().galley(pos2(who_x, top + 24.4 + dy(&meta_g, 18.2)), meta_g, t.muted);
+    // chip and chevron
+    let (chip_min, icon_c) = if wrap {
+        let y = th.bottom() + 12.0;
+        (pos2(who_x.min(open.left() + 20.0 + 60.0) - 0.0, y), pos2(open.right() - 20.0 - 10.0, y + PILL_ROW / 2.0))
+    } else {
+        let icon_c = pos2(open.right() - 20.0 - 10.0, row.center().y);
+        (pos2(icon_c.x - 10.0 - 20.0 - pill_w, row.center().y - widgets::PILL_H / 2.0), icon_c)
+    };
+    widgets::pill_at(ui, t, kind, &label, chip_min);
+    widgets::paint_icon(ui, Rect::from_center_size(icon_c, vec2(20.0, 20.0)), Icon::Right, t.muted);
+    let open_label = format!("Open {}, {}", g.name, label);
+    if cx.ctl.reg(ui, &r_open, C::new(&format!("row-{}", g.key), &open_label, TEXT)) {
+        cx.acts.push(Act::OpenReview(first_page));
+    }
+    if retry {
+        let at = pos2(row.right() - 20.0 - retry_w, row.center().y - TARGET / 2.0);
+        let label = format!("Retry {}", g.name);
+        if widgets::button_at(cx.ctl, ui, t, C::new(&format!("retry-{}", g.key), &label, TEXT), "Retry", Look::Outline, at) {
+            cx.acts.push(Act::RetryIds(g.failed.clone()));
+        }
+    }
+}
+
+/// Height of the chip row when a student's row wraps (the chip is taller than the 20px icon).
+const PILL_ROW: f32 = widgets::PILL_H;
 
 // ------------------------------------------------------------------ toast
 

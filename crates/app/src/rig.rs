@@ -98,6 +98,10 @@ mod tests {
         let h: f32 = std::env::var("H").ok().and_then(|v| v.parse().ok()).unwrap_or(800.0);
         let mut r = Rig::sized(w, h);
         r.frames(20);
+        if std::env::var("VIEW").as_deref() == Ok("inbox") {
+            r.act("crumb");
+            r.frames(10);
+        }
         for (t, x, y) in r.texts() {
             println!("{y:7.1} {x:7.1}  {t:?}");
         }
@@ -158,6 +162,64 @@ mod tests {
         // and again: one more read replaces it (the second sample is only for the second page of a run)
         r.act("transcribe-again");
         assert_eq!(r.page("p-ben-1").status(), "done");
+    }
+
+    fn label_of(r: &Rig, id: &str) -> String {
+        r.app.controls().into_iter().find(|c| c.id == id).map(|c| c.label.clone()).unwrap_or_default()
+    }
+
+    /// Blind critic round 3: after "Done, next student" the JS inbox reads "Ready to read" for that student
+    /// (the group status honours `reviewed`), has filter tabs with counts, the run bar and per-row Retry.
+    #[test]
+    fn blind3_inbox_honours_reviewed_and_has_tabs_counts_and_run_bar() {
+        let mut r = Rig::demo();
+        r.act("crumb");
+        // before: Maya has 4 words to check, Ana is ready, Ben is waiting, Omar failed
+        assert_eq!(label_of(&r, "row-n:maya r."), "Open Maya R., 4 words to check");
+        assert_eq!(label_of(&r, "row-n:ana l."), "Open Ana L., Ready to read");
+        assert_eq!(label_of(&r, "row-n:ben t."), "Open Ben T., Waiting");
+        assert_eq!(label_of(&r, "row-n:omar k."), "Open Omar K., Couldn’t transcribe");
+        // tabs with counts, as the JS inbox
+        assert_eq!(label_of(&r, "tab-all"), "All 4");
+        assert_eq!(label_of(&r, "tab-ready"), "Ready to read 1");
+        assert_eq!(label_of(&r, "tab-check"), "Needs a check 1");
+        assert_eq!(label_of(&r, "tab-processing"), "Transcribing 1");
+        assert_eq!(label_of(&r, "tab-failed"), "Failed 1");
+        // run bar: one page left to read, one failed
+        assert!(r.has("retry-failed") && r.has("resume"), "{:?}", r.app.controls().iter().map(|c| &c.label).collect::<Vec<_>>());
+        assert_eq!(label_of(&r, "retry-failed"), "Retry 1 failed");
+        assert_eq!(label_of(&r, "resume"), "Resume (1 left)");
+        assert!(r.has("retry-n:omar k."));
+        // a filter narrows the rows
+        r.act("tab-failed");
+        assert!(r.has("row-n:omar k.") && !r.has("row-n:maya r."));
+        r.act("tab-all");
+
+        // Done on Maya, then Done on the last student (Omar)
+        r.act("row-n:maya r.");
+        r.act("done");
+        r.act("done");
+        assert_eq!(r.app.session().unwrap().view, vishion_ui::state::View::Inbox, "the last student shows the inbox");
+        assert_eq!(label_of(&r, "row-n:maya r."), "Open Maya R., Ready to read");
+        assert!(label_of(&r, "tab-ready").ends_with(" 2"), "{}", label_of(&r, "tab-ready"));
+        assert!(label_of(&r, "tab-check").ends_with(" 0"));
+    }
+
+    /// The inbox's Resume and per-row Retry read pages through the same host path as the review screen.
+    #[test]
+    fn blind3_inbox_retry_and_resume_run_the_queue() {
+        let mut r = Rig::demo();
+        r.act("crumb");
+        r.act("retry-n:omar k.");
+        assert_eq!(r.page("p-omar-1").status(), "done");
+        assert!(!r.has("retry-n:omar k."));
+        assert!(!r.has("retry-failed"), "no failed page is left");
+        // Ben is the one page still waiting: Resume reads it
+        assert_eq!(label_of(&r, "resume"), "Resume (1 left)");
+        r.act("resume");
+        assert_eq!(r.page("p-ben-1").status(), "done");
+        // everything is read now: the bar offers to start with the first student that needs a check
+        assert!(r.has("start-first"), "{:?}", r.app.controls().iter().map(|c| &c.id).collect::<Vec<_>>());
     }
 
     /// Straighten is not a stub: a level page answers "already level" and the line boxes are redone from the

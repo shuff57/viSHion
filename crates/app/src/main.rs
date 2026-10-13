@@ -19,11 +19,12 @@ fn main() -> eframe::Result<()> {
 
     let mut root: Option<PathBuf> = None;
     let (mut project, mut demo, mut theme) = (None::<String>, false, None::<String>);
+    let mut inbox = false;
     let mut seed_to: Option<PathBuf> = None;
     let (mut exit_after, mut shot, mut dump) = (None, None::<PathBuf>, false);
     let mut size = (1280.0f32, 800.0f32);
     let mut args = std::env::args().skip(1);
-    let usage = "usage: vishion [--root DIR] [--project SLUG] [--demo] [--seed-demo-to DIR] [--theme light|dark] [--size WxH] [--exit-after-ms N] [--screenshot FILE.png] [--dump-controls]";
+    let usage = "usage: vishion [--root DIR] [--project SLUG] [--demo] [--seed-demo-to DIR] [--theme light|dark] [--size WxH] [--inbox] [--exit-after-ms N] [--screenshot FILE.png] [--dump-controls]";
     let need = |a: Option<String>, flag: &str| -> String {
         a.unwrap_or_else(|| {
             eprintln!("{flag} needs a value\n{usage}");
@@ -55,6 +56,7 @@ fn main() -> eframe::Result<()> {
             "--theme" => theme = Some(need(args.next(), &a)),
             "--screenshot" => shot = Some(PathBuf::from(need(args.next(), &a))),
             "--demo" => demo = true,
+            "--inbox" => inbox = true,
             "--seed-demo-to" => seed_to = Some(PathBuf::from(need(args.next(), &a))),
             "--dump-controls" => dump = true,
             other => {
@@ -76,9 +78,9 @@ fn main() -> eframe::Result<()> {
         "viSHion",
         native,
         Box::new(move |cc| {
-            let inbox = Inbox::new(cc.egui_ctx.clone());
+            let inbox_box = Inbox::new(cc.egui_ctx.clone());
             let (tx, rx) = mpsc::channel::<Cmd>();
-            let worker_inbox = inbox.clone();
+            let worker_inbox = inbox_box.clone();
             std::thread::spawn(move || {
                 let now = vishion_ui::now_ms;
                 let backend = if let Some(dir) = &seed_to {
@@ -109,7 +111,7 @@ fn main() -> eframe::Result<()> {
             let dispatch: vishion_ui::Dispatch = Box::new(move |c| {
                 let _ = tx.send(c);
             });
-            let mut app = vishion_ui::App::new(cc.egui_ctx.clone()).with_host(dispatch, inbox);
+            let mut app = vishion_ui::App::new(cc.egui_ctx.clone()).with_host(dispatch, inbox_box).inbox(inbox);
             if let Some(t) = &theme {
                 app = app.theme(t);
             }

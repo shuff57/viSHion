@@ -331,6 +331,8 @@ pub struct App {
     dialog: Option<dialog::Dialog>,
     /// Scroll position and size of the page stage, kept so zoom can hold the middle of the view.
     stage: review::Stage,
+    /// Pictures the screen asked for while drawing (inbox thumbnails).
+    want: Vec<String>,
     font_requested: bool,
     /// The fallback font is installed / was asked for / the text last checked for glyphs it needs.
     fallback_loaded: bool,
@@ -339,6 +341,8 @@ pub struct App {
     fallback_seen: Option<(String, usize)>,
     theme_name: String,
     theme_override: Option<String>,
+    /// Open on the assignment overview instead of the review screen (`--inbox`, `?view=inbox`).
+    start_inbox: bool,
     dark_applied: Option<bool>,
     exit_after: Option<Duration>,
     #[cfg(not(target_arch = "wasm32"))]
@@ -375,6 +379,7 @@ impl App {
             status_err: false,
             dialog: None,
             stage: review::Stage::default(),
+            want: vec![],
             font_requested: false,
             fallback_loaded: theme::bundled_fallback().is_some(),
             fallback_font: theme::bundled_fallback(),
@@ -382,6 +387,7 @@ impl App {
             fallback_seen: None,
             theme_name: "auto".into(),
             theme_override: None,
+            start_inbox: false,
             dark_applied: None,
             exit_after: None,
             #[cfg(not(target_arch = "wasm32"))]
@@ -402,6 +408,12 @@ impl App {
     /// Force a theme (`"light"` or `"dark"`) over `settings.theme`.
     pub fn theme(mut self, name: &str) -> Self {
         self.theme_override = Some(name.into());
+        self
+    }
+
+    /// Open on the assignment overview (the inbox) instead of the review screen.
+    pub fn inbox(mut self, on: bool) -> Self {
+        self.start_inbox = on;
         self
     }
 
@@ -491,7 +503,11 @@ impl App {
                     }
                     self.notice = msg;
                     self.images.clear();
-                    self.session = Some(state::Session::new(slug, *assignment, *settings, now_ms()));
+                    let mut sess = state::Session::new(slug, *assignment, *settings, now_ms());
+                    if self.start_inbox {
+                        sess.view = state::View::Inbox;
+                    }
+                    self.session = Some(sess);
                     self.boot = Boot::Ready;
                 }
                 Event::Empty { storage } => {
@@ -622,6 +638,16 @@ impl App {
 
     /// Ask for the images of the current student's pages that are not loaded yet.
     fn want_images(&mut self) {
+        let asked = std::mem::take(&mut self.want);
+        if let Some(s) = &self.session {
+            let slug = s.slug.clone();
+            for id in asked {
+                if !self.images.contains_key(&id) {
+                    self.images.insert(id.clone(), Slot::Loading);
+                    self.send(Cmd::LoadImage { slug: slug.clone(), id });
+                }
+            }
+        }
         let Some(s) = &self.session else { return };
         let Some(g) = s.group() else { return };
         let mut ids = g.pages.clone();

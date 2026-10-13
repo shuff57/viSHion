@@ -44,7 +44,7 @@ mod web {
     /// Mount the egui app on the canvas with the given id.
     ///
     /// URL options: `?demo=1` runs the sample assignment from memory (nothing is stored), `?project=<slug>`
-    /// opens that assignment instead of the most recent one, `?theme=light|dark` forces a theme.
+    /// opens that assignment instead of the most recent one, `?theme=light|dark` forces a theme, `?view=inbox` opens the assignment overview.
     #[wasm_bindgen]
     pub async fn start(canvas_id: String) -> Result<(), JsValue> {
         eframe::WebLogger::init(log::LevelFilter::Warn).ok();
@@ -54,6 +54,7 @@ mod web {
         let demo = get("demo").is_some_and(|v| v != "0");
         let want = get("project");
         let theme = get("theme").filter(|t| t == "light" || t == "dark");
+        let inbox_first = get("view").is_some_and(|v| v == "inbox");
 
         let now = || js_sys::Date::now() as i64;
         let backend: Rc<Backend> = Rc::new(if demo {
@@ -99,7 +100,7 @@ mod web {
                             inbox.push(e);
                         });
                     }
-                    let mut app = vishion_ui::App::new(cc.egui_ctx.clone()).with_host(dispatch, inbox);
+                    let mut app = vishion_ui::App::new(cc.egui_ctx.clone()).with_host(dispatch, inbox).inbox(inbox_first);
                     if let Some(t) = theme {
                         app = app.theme(&t);
                     }

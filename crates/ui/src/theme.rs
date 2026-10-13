@@ -23,6 +23,8 @@ pub struct Tokens {
     pub faint: Color32,
     pub line: Color32,
     pub line2: Color32,
+    pub soft: Color32,
+    pub track: Color32,
     pub hover: Color32,
     pub warn: Color32,
     pub warn_bg: Color32,
@@ -40,6 +42,11 @@ pub struct Tokens {
     pub paper_rule: Color32,
     pub bar_warn: Color32,
     pub bar_ok: Color32,
+    pub bar_ok_edge: Color32,
+    pub bar_warn_edge: Color32,
+    pub bar_bad: Color32,
+    pub bar_bad_edge: Color32,
+    pub warn_line: Color32,
 }
 
 pub const LIGHT: Tokens = Tokens {
@@ -53,6 +60,8 @@ pub const LIGHT: Tokens = Tokens {
     faint: rgb(0x8792A6),
     line: rgb(0xD3D9E2),
     line2: rgb(0xBCC5D2),
+    soft: rgb(0xE3E8EF),
+    track: rgb(0xE1E6EE),
     hover: rgb(0xE4E9F0),
     warn: rgb(0xFFE27A),
     warn_bg: rgb(0xFFF6CF),
@@ -69,6 +78,11 @@ pub const LIGHT: Tokens = Tokens {
     paper_rule: rgb(0xC3D4EA),
     bar_warn: rgb(0xFFE27A),
     bar_ok: rgb(0x2F8F62),
+    bar_ok_edge: rgb(0x176B45),
+    bar_warn_edge: rgb(0xD9A400),
+    bar_bad: rgb(0xE26D5C),
+    bar_bad_edge: rgb(0xA5221B),
+    warn_line: rgb(0xE6C84F),
 };
 
 pub const DARK: Tokens = Tokens {
@@ -82,6 +96,8 @@ pub const DARK: Tokens = Tokens {
     faint: rgb(0x6F7A90),
     line: rgb(0x2B3345),
     line2: rgb(0x3E4A63),
+    soft: rgb(0x222A3A),
+    track: rgb(0x2A3347),
     hover: rgb(0x232B3B),
     warn: rgb(0x6B5712),
     warn_bg: rgb(0x3A3110),
@@ -98,6 +114,11 @@ pub const DARK: Tokens = Tokens {
     paper_rule: rgb(0xC3D4EA),
     bar_warn: rgb(0xFFE27A),
     bar_ok: rgb(0x2F8F62),
+    bar_ok_edge: rgb(0x176B45),
+    bar_warn_edge: rgb(0xD9A400),
+    bar_bad: rgb(0xE26D5C),
+    bar_bad_edge: rgb(0xA5221B),
+    warn_line: rgb(0x7A6516),
 };
 
 /// `settings.theme`: "light", "dark" or anything else (auto: follow the system).

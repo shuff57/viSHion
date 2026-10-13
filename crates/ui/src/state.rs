@@ -51,6 +51,61 @@ pub enum PillKind {
     Queued,
 }
 
+/// The inbox filter tabs (`G.matches`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Filter {
+    All,
+    Ready,
+    Check,
+    Processing,
+    Failed,
+}
+
+impl Filter {
+    pub const ALL: [Filter; 5] = [Filter::All, Filter::Ready, Filter::Check, Filter::Processing, Filter::Failed];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Filter::All => "All",
+            Filter::Ready => "Ready to read",
+            Filter::Check => "Needs a check",
+            Filter::Processing => "Transcribing",
+            Filter::Failed => "Failed",
+        }
+    }
+
+    pub fn id(self) -> &'static str {
+        match self {
+            Filter::All => "all",
+            Filter::Ready => "ready",
+            Filter::Check => "check",
+            Filter::Processing => "processing",
+            Filter::Failed => "failed",
+        }
+    }
+
+    /// `G.matches`: "processing" covers waiting and queued students too.
+    pub fn matches(self, st: Status) -> bool {
+        match self {
+            Filter::All => true,
+            Filter::Ready => st == Status::Ready,
+            Filter::Check => st == Status::Check,
+            Filter::Failed => st == Status::Failed,
+            Filter::Processing => matches!(st, Status::Processing | Status::Queued | Status::Waiting),
+        }
+    }
+}
+
+/// `G.tally`: counts for the segmented bar and the tabs.
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
+pub struct Tally {
+    pub total: usize,
+    pub ready: usize,
+    pub check: usize,
+    pub failed: usize,
+    pub processing: usize,
+}
+
 /// One row of the tray: a flagged word of the current student, on some page.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Entry {
@@ -122,6 +177,8 @@ pub struct Session {
     pub zoom: f32,
     /// Pages ticked in the strip (ctrl/shift click).
     pub multi: BTreeSet<String>,
+    /// The inbox filter tab.
+    pub filter: Filter,
 }
 
 fn ui_str<'a>(a: &'a Assignment, k: &str) -> Option<&'a str> {
@@ -173,6 +230,7 @@ impl Session {
             text_raw: false,
             zoom: 1.0,
             multi: BTreeSet::new(),
+            filter: Filter::All,
         };
         s.sync_tray();
         s
@@ -269,6 +327,41 @@ impl Session {
                 (PillKind::Ok, if any { "All words checked" } else { "No words to check" }.into())
             }
         }
+    }
+
+    /// The chip of an inbox row (`chip(g)` of js/ui/inbox.js): the group's own status, so a student that was
+    /// marked done reads "Ready to read" even with words left in it.
+    pub fn chip(&self, g: &Group) -> (PillKind, String) {
+        match g.status {
+            Status::Ready => (PillKind::Ok, "Ready to read".into()),
+            Status::Check => (PillKind::Warn, plural(g.open, "word to check", "words to check")),
+            Status::Processing => (PillKind::Busy, "Transcribing".into()),
+            Status::Queued | Status::Waiting => (PillKind::Queued, "Waiting".into()),
+            Status::Failed => (PillKind::Bad, "Couldn’t transcribe".into()),
+        }
+    }
+
+    pub fn tally(groups: &[Group]) -> Tally {
+        let mut t = Tally { total: groups.len(), ..Default::default() };
+        for g in groups {
+            match g.status {
+                Status::Ready => t.ready += 1,
+                Status::Check => t.check += 1,
+                Status::Failed => t.failed += 1,
+                _ => t.processing += 1,
+            }
+        }
+        t
+    }
+
+    /// Pages `Q.start()` runs by default: every pending page, in order.
+    pub fn pending_ids(&self) -> Vec<String> {
+        self.pages().into_iter().filter(|p| p.status() == "pending").map(|p| p.id().to_string()).collect()
+    }
+
+    /// Pages `Q.retryFailed()` runs: every page whose last read failed.
+    pub fn failed_ids(&self) -> Vec<String> {
+        self.pages().into_iter().filter(|p| p.status() == "error").map(|p| p.id().to_string()).collect()
     }
 
     pub fn copy_text(&self, g: &Group) -> String {
@@ -789,6 +882,22 @@ impl Session {
         self.multi.clear();
         self.sel_word = None;
         self.sync_tray();
+        n
+    }
+
+    /// `U.reReview` from the inbox: the pages go back to "needs a check", the selection clears, and the review
+    /// screen opens on the first of those students. From the review strip it stays where it is.
+    pub fn review_again_and_open(&mut self, ids: &[String]) -> usize {
+        let first = if self.view == View::Inbox {
+            self.groups().into_iter().find(|g| g.pages.iter().any(|p| ids.contains(p))).and_then(|g| g.pages.first().cloned())
+        } else {
+            None
+        };
+        let n = self.review_again(ids);
+        if let Some(f) = first {
+            self.select(&f);
+            self.view = View::Review;
+        }
         n
     }
 
