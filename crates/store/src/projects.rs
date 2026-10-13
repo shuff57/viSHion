@@ -231,7 +231,8 @@ impl<S: Store> Projects<S> {
             let path = format!("{slug}/pages/{id}.json");
             match self.read_text(&path).await {
                 Ok(Some(t)) if !t.is_empty() => match Page::from_json(&t) {
-                    Ok(p) => {
+                    Ok(mut p) => {
+                        p.1 = Some(id.clone());
                         pages.insert(id.clone(), p);
                     }
                     Err(e) => unreadable.push(Unreadable { id: id.clone(), error: e.to_string() }),
@@ -267,8 +268,12 @@ impl<S: Store> Projects<S> {
 
     /// `savePage`: compact JSON, plain write.
     pub async fn save_page(&self, slug: &str, page: &Page) -> Result<()> {
+        let key = page.file_key();
+        if key.is_empty() {
+            return Err(StoreError::Invalid("page has no id and was not loaded from a project".into()));
+        }
         let text = page.to_json().map_err(|e| StoreError::Invalid(e.to_string()))?;
-        self.write_text(&format!("{slug}/pages/{}.json", page.id()), &text).await
+        self.write_text(&format!("{slug}/pages/{key}.json"), &text).await
     }
 
     pub async fn save_image(&self, slug: &str, id: &str, bytes: &[u8]) -> Result<()> {
@@ -375,7 +380,11 @@ impl<S: Store> Projects<S> {
             if rel.is_empty() || rel.starts_with("exports/") {
                 continue;
             }
-            self.store.put(&format!("{slug}/{rel}"), bytes).await?;
+            match self.store.put(&format!("{slug}/{rel}"), bytes).await {
+                // a name the store can never hold (device names, trailing dot): skip it, keep importing
+                Err(StoreError::InvalidKey(_)) => {}
+                r => r?,
+            }
         }
         Ok(slug)
     }

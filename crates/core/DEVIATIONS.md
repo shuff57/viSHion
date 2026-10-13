@@ -25,7 +25,10 @@ later phase. Quirks of the JS (for example `$&` in a glossary term being expande
   and the store layer go through `lenient` (S3 rule 3): each lone `\udXXX` escape is carried in memory as
   U+10FFFE followed by its four hex digits and written back as the original escape, so such documents load,
   can be edited, and stay byte-identical where untouched. `lenient::display` maps the markers to U+FFFD for
-  the UI. A lone surrogate typed in after load is not representable (the UI cannot produce one).
+  the UI. A lone surrogate typed in after load is not representable (the UI cannot produce one). A real
+  U+10FFFE (raw or as the escaped pair) stays a literal character; only U+10FFFE directly followed by four
+  surrogate hex digits reads as a marker, and a document that already holds that exact spelling is refused
+  by `parse` and never rewritten.
 * **Number text.** Numbers that come from stored JSON are kept verbatim (`arbitrary_precision`). Numbers the
   core computes (`conf`, `percent`, band geometry) print with the shortest round-trip digits, like JS, but
   exponent forms differ outside `1e-6 <= |x| < 1e21` (`1e21` vs JS `1e+21`); none of the computed values

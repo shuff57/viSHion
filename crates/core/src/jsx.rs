@@ -221,9 +221,28 @@ pub fn to_fixed1(x: f64) -> String {
 /// `a.localeCompare(b, undefined, {numeric: true, sensitivity: 'base'})`: CLDR root collation at primary
 /// strength with numeric ordering, via ICU4X (the same algorithm and data family V8 uses).
 pub fn nat_compare(a: &str, b: &str) -> Ordering {
+    let (a, b) = (catalan_strip(a), catalan_strip(b));
+    let (a, b) = (&*a, &*b);
     let (fa, fb) = (crate::hanfold::fold(a), crate::hanfold::fold(b));
     let (fa, fb) = icu_equal_prefix_skip(a, b, &fa, &fb);
     nat_compare_raw(fa, fb)
+}
+
+/// Root collation has the Catalan contractions "L" + U+00B7 / U+0387: the dot is ignorable at primary
+/// strength in V8's ICU, but ICU4X as configured keeps it. Drop it before comparing.
+fn catalan_strip(s: &str) -> std::borrow::Cow<'_, str> {
+    if !s.contains(['\u{b7}', '\u{387}']) {
+        return std::borrow::Cow::Borrowed(s);
+    }
+    let mut out = String::with_capacity(s.len());
+    let mut prev = '\0';
+    for c in s.chars() {
+        if !(matches!(c, '\u{b7}' | '\u{387}') && matches!(prev, 'L' | 'l')) {
+            out.push(c);
+        }
+        prev = c;
+    }
+    std::borrow::Cow::Owned(out)
 }
 
 /// Lead-surrogate blocks (`(cp - 0x10000) >> 10`) that ICU treats as "unsafe backward" (the rest are not).

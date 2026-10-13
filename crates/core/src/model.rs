@@ -94,9 +94,18 @@ impl Project {
 }
 
 /// One page record (`pages/<id>.json`).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+///
+/// `.1` is the storage key the page was loaded from (the `meta.order` entry), never serialised and ignored
+/// by `==`. JS saves a page under that key, not under the page's own `id` field.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(transparent)]
-pub struct Page(pub Map<String, Value>);
+pub struct Page(pub Map<String, Value>, #[serde(skip)] pub Option<String>);
+
+impl PartialEq for Page {
+    fn eq(&self, o: &Self) -> bool {
+        self.0 == o.0
+    }
+}
 
 impl Page {
     /// Lenient parse (lone-surrogate escapes accepted).
@@ -109,7 +118,7 @@ impl Page {
     }
     pub fn from_value(v: Value) -> Option<Self> {
         match v {
-            Value::Object(m) => Some(Page(m)),
+            Value::Object(m) => Some(Page(m, None)),
             _ => None,
         }
     }
@@ -128,6 +137,10 @@ impl Page {
     }
     pub fn id(&self) -> &str {
         self.s("id")
+    }
+    /// File key (without `.json`) this page is saved under: the key it was loaded from, else its `id`.
+    pub fn file_key(&self) -> &str {
+        self.1.as_deref().unwrap_or_else(|| self.id())
     }
     pub fn name(&self) -> &str {
         self.s("name")

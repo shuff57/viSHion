@@ -11,11 +11,38 @@ static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
 pub struct FsStore {
     root: PathBuf,
+    /// Directories already swept for stale temp files left by killed writers.
+    swept: std::sync::Mutex<std::collections::HashSet<PathBuf>>,
+}
+
+/// Windows device names (with or without an extension) that alias a device instead of a file.
+fn is_device_name(seg: &str) -> bool {
+    let stem = seg.split('.').next().unwrap_or("").trim_end().to_ascii_uppercase();
+    matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$")
+        || (stem.len() == 4 && (stem.starts_with("COM") || stem.starts_with("LPT")) && stem.as_bytes()[3].is_ascii_digit() && stem.as_bytes()[3] != b'0')
 }
 
 impl FsStore {
     pub fn new(root: impl Into<PathBuf>) -> Self {
-        Self { root: root.into() }
+        Self { root: root.into(), swept: Default::default() }
+    }
+
+    /// Once per directory and process: delete `.vishion-tmp-*` files older than an hour (a killed writer).
+    fn sweep_stale(&self, dir: &Path) {
+        if !self.swept.lock().map(|mut s| s.insert(dir.to_path_buf())).unwrap_or(false) {
+            return;
+        }
+        let Ok(rd) = std::fs::read_dir(dir) else { return };
+        let hour = std::time::Duration::from_secs(3600);
+        for e in rd.flatten() {
+            if !e.file_name().to_string_lossy().starts_with(TMP_PREFIX) {
+                continue;
+            }
+            let old = e.metadata().and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok()).is_some_and(|d| d > hour);
+            if old {
+                let _ = std::fs::remove_file(e.path());
+            }
+        }
     }
 
     fn path(&self, key: &str) -> Result<PathBuf> {
@@ -25,6 +52,10 @@ impl FsStore {
                 || seg == "."
                 || seg == ".."
                 || seg.starts_with(TMP_PREFIX)
+                // Windows drops a trailing dot / space, so `a.` would alias `a`; device names open devices
+                || seg.ends_with('.')
+                || seg.ends_with(' ')
+                || is_device_name(seg)
                 || seg.chars().any(|c| matches!(c, '\\' | '\0' | ':'));
             if bad {
                 return Err(StoreError::InvalidKey(key.into()));
@@ -91,7 +122,9 @@ impl Store for FsStore {
         if res.is_err() {
             let _ = std::fs::remove_file(&tmp);
         }
-        Ok(res?)
+        res?;
+        self.sweep_stale(dir);
+        Ok(())
     }
 
     async fn list(&self, prefix: &str) -> Result<Vec<String>> {
@@ -101,6 +134,28 @@ impl Store for FsStore {
         let mut out = vec![];
         walk(&start, dir_rel, &mut out)?;
         out.retain(|k| k.starts_with(prefix));
+        out.sort();
+        Ok(out)
+    }
+
+    async fn children(&self, dir: &str) -> Result<Vec<(String, bool)>> {
+        // read_dir directly so empty directories are visible (unique_slug sees them, like JS)
+        let d = dir.trim_matches('/');
+        let p = if d.is_empty() { self.root.clone() } else { self.path(d)? };
+        let rd = match std::fs::read_dir(&p) {
+            Ok(r) => r,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(vec![]),
+            Err(e) => return Err(e.into()),
+        };
+        let mut out = vec![];
+        for e in rd {
+            let e = e?;
+            let Some(name) = e.file_name().to_str().map(str::to_string) else { continue };
+            if name.starts_with(TMP_PREFIX) {
+                continue;
+            }
+            out.push((name, e.file_type()?.is_dir()));
+        }
         out.sort();
         Ok(out)
     }
@@ -208,6 +263,11 @@ mod tests {
             "c:x",
             "a/\0",
             ".vishion-tmp-1-1",
+            "p/a.",
+            "p/a ",
+            "p/NUL",
+            "p/nul.txt",
+            "COM1",
         ] {
             assert!(
                 block_on(s.put(k, b"x")).is_err(),

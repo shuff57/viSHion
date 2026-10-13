@@ -146,6 +146,7 @@ impl Store for IdbStore {
 
     async fn delete_tree(&self, path: &str) -> Result<()> {
         let p = path.trim_end_matches('/');
+        crate::check_key(p)?; // "" / "/" would match every key
         let pre = dir_prefix(p);
         let del: Vec<String> = idb_keys(&self.db, FILES).await?.into_iter().filter(|k| k == p || k.starts_with(&pre)).collect();
         idb_delete_many(&self.db, FILES, &del).await

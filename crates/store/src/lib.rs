@@ -75,6 +75,7 @@ pub trait Store {
     fn delete_tree(&self, path: &str) -> impl Future<Output = Result<()>> {
         async move {
             let p = path.trim_end_matches('/');
+            check_key(p)?; // "" / "/" would match every key
             for k in self.list(&dir_prefix(p)).await? {
                 self.delete(&k).await?;
             }
