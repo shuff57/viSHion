@@ -121,7 +121,8 @@ try {
       const added = Object.keys(S1).filter((k) => !(k in S0));
       if (process.env.DEBUG) for (const k of changed) if (!k.endsWith('.bak')) console.log(k, '\nBEFORE', JSON.stringify(S0[k]), '\nAFTER ', JSON.stringify(S1[k]));
       const unreadable = rep.unreadable;
-      ck(T('rewrite: no unusable project'), rep.unusable.length === 0, rep);
+      // an unrepresentable project.json (documented U+10FFFE limitation) is reported and left untouched, never restored from .bak
+      ck(T('rewrite: unusable projects only for the documented U+10FFFE limitation, none from backup'), rep.unusable.every((u) => /unrepresentable/.test(u)) && rep.fromBackup.length === 0, rep);
       // lone surrogate + U+10FFFE followed by 'd800' text may legally be refused (unrepresentable)
       ck(T('rewrite: unreadable pages only for the documented U+10FFFE limitation'), unreadable.every((u) => /unrepresentable/.test(u)), unreadable);
       ck(T('rewrite: entries byte-identical, only .bak added/changed'), changed.every((k) => k.endsWith('.bak')) && added.every((k) => k.endsWith('.bak')), { changed: changed.slice(0, 5), added: added.filter((k) => !k.endsWith('.bak')).slice(0, 5) });

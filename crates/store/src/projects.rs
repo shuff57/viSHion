@@ -113,7 +113,7 @@ impl<S: Store> Projects<S> {
     pub async fn safe_json(&self, path: &str, text: &str) -> Result<()> {
         if is_project_json(path) {
             if let Ok(Some(old)) = self.read_text(path).await {
-                if !old.is_empty() && lenient::parse::<Value>(&old).is_ok() {
+                if !old.is_empty() && lenient::is_valid_json(&old) {
                     let _ = self.write_text(&format!("{path}.bak"), &old).await;
                 }
             }
@@ -129,7 +129,7 @@ impl<S: Store> Projects<S> {
 
     /// `readMeta`. `Ok(None)` when project.json is absent. `Err(Parse)` when neither project.json nor its
     /// backup is usable (nothing is written). With `restore`, a usable backup is copied over a damaged
-    /// project.json after the damaged bytes are kept as `project.json.damaged`.
+    /// project.json (as JS does; no extra files). Valid JSON that cannot be represented is not damaged.
     async fn read_meta(&self, slug: &str, restore: bool, now: i64) -> Result<Option<(Project, bool, bool)>> {
         let path = format!("{slug}/project.json");
         let Some(txt) = self.read_text(&path).await? else { return Ok(None) };
@@ -137,11 +137,14 @@ impl<S: Store> Projects<S> {
             Ok(m) => return Ok(Some((m.normalized(now), false, false))),
             Err(e) => e,
         };
+        // Valid JSON that this crate cannot represent (the JS app opens it): not damaged, never replaced.
+        if lenient::is_valid_json(&txt) && lenient::parse::<Value>(&txt).is_err() {
+            return Err(parse_err(&path, first_err));
+        }
         if let Some(bak) = self.read_text(&format!("{path}.bak")).await? {
             if let Ok(m) = Project::from_json(&bak) {
                 let mut restored = false;
                 if restore {
-                    let _ = self.write_text(&format!("{path}.damaged"), &txt).await;
                     self.write_text(&path, &bak).await?;
                     restored = true;
                 }
@@ -157,11 +160,12 @@ impl<S: Store> Projects<S> {
     }
 
     async fn unique_slug(&self, base: &str) -> Result<String> {
-        let taken: BTreeSet<String> = self.store.children("").await?.into_iter().map(|(n, _)| n).collect();
+        // Case-insensitive: Windows / macOS folders alias `Quiz` and `quiz`.
+        let taken: BTreeSet<String> = self.store.children("").await?.into_iter().map(|(n, _)| n.to_lowercase()).collect();
         let base = if base.is_empty() { "project" } else { base };
         let mut s = base.to_string();
         let mut i = 2;
-        while taken.contains(&s) {
+        while taken.contains(&s.to_lowercase()) {
             s = format!("{base}-{i}");
             i += 1;
         }
@@ -213,6 +217,10 @@ impl<S: Store> Projects<S> {
             meta.set(&k, v);
         }
         let meta = meta.normalized(now);
+        // never overwrite an existing project.json (aliased names, racing creators)
+        if self.store.get(&format!("{slug}/project.json")).await?.is_some() {
+            return Err(StoreError::Invalid(format!("{slug}/project.json already exists")));
+        }
         self.write_text(&format!("{slug}/project.json"), &Self::pretty(&meta)?).await?;
         Ok(slug)
     }
@@ -312,8 +320,17 @@ impl<S: Store> Projects<S> {
 
     async fn copy_tree(&self, src: &str, dst: &str) -> Result<()> {
         for k in self.store.list(&format!("{src}/")).await? {
-            if let Some(b) = self.store.get(&k).await? {
-                self.store.put(&format!("{dst}/{}", &k[src.len() + 1..]), &b).await?;
+            // a name the store lists but can never read (device names, ':' ...) is skipped
+            let b = match self.store.get(&k).await {
+                Ok(b) => b,
+                Err(StoreError::InvalidKey(_)) => continue,
+                Err(e) => return Err(e),
+            };
+            if let Some(b) = b {
+                match self.store.put(&format!("{dst}/{}", &k[src.len() + 1..]), &b).await {
+                    Err(StoreError::InvalidKey(_)) => {}
+                    r => r?,
+                }
             }
         }
         Ok(())
@@ -353,8 +370,10 @@ impl<S: Store> Projects<S> {
             if k.starts_with(&skip) {
                 continue;
             }
-            if let Some(b) = self.store.get(&k).await? {
-                out.push((k, b));
+            match self.store.get(&k).await {
+                Ok(Some(b)) => out.push((k, b)),
+                Ok(None) | Err(StoreError::InvalidKey(_)) => {}
+                Err(e) => return Err(e),
             }
         }
         Ok(out)

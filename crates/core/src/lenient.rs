@@ -38,6 +38,10 @@ fn surrogate_hex(s: &str) -> Option<&str> {
 /// Replace lone `\udXXX` escapes so the text parses with serde_json. `Err(())` when the document holds a
 /// literal U+10FFFE directly followed by surrogate-looking hex digits (unrepresentable, see module docs).
 fn encode_checked(text: &str) -> Result<Cow<'_, str>, ()> {
+    encode_impl(text, true)
+}
+
+fn encode_impl(text: &str, strict: bool) -> Result<Cow<'_, str>, ()> {
     let b = text.as_bytes();
     let mut out = String::new();
     let (mut i, mut last, mut touched) = (0usize, 0usize, false);
@@ -51,7 +55,7 @@ fn encode_checked(text: &str) -> Result<Cow<'_, str>, ()> {
                         if let Some(lo) = hex4(text.get(i + 8..i + 12)).filter(|c| (0xDC00..0xE000).contains(c)) {
                             // a valid pair: serde_json handles it. The pair that decodes to the marker
                             // character must not be followed by marker-looking text.
-                            if cp == 0xDBFF && lo == 0xDFFE && text.get(i + 12..).is_some_and(|r| surrogate_hex(r).is_some()) {
+                            if strict && cp == 0xDBFF && lo == 0xDFFE && text.get(i + 12..).is_some_and(|r| surrogate_hex(r).is_some()) {
                                 return Err(());
                             }
                             i += 12;
@@ -72,7 +76,7 @@ fn encode_checked(text: &str) -> Result<Cow<'_, str>, ()> {
             i += 2;
         } else if b[i] == 0xF4 && text[i..].starts_with(SENT) {
             i += SENT.len_utf8();
-            if surrogate_hex(&text[i..]).is_some() {
+            if strict && surrogate_hex(&text[i..]).is_some() {
                 return Err(());
             }
         } else {
@@ -84,6 +88,16 @@ fn encode_checked(text: &str) -> Result<Cow<'_, str>, ()> {
     }
     out.push_str(&text[last..]);
     Ok(Cow::Owned(out))
+}
+
+/// True when `text` is syntactically valid JSON as `JSON.parse` sees it, even if this crate cannot
+/// represent it (U+10FFFE directly followed by surrogate-like hex digits). Lets callers tell "damaged"
+/// from "valid but unrepresentable".
+pub fn is_valid_json(text: &str) -> bool {
+    match encode_impl(text, false) {
+        Ok(enc) => serde_json::from_str::<serde::de::IgnoredAny>(&enc).is_ok(),
+        Err(()) => false,
+    }
 }
 
 /// Infallible form of the encoder (an unrepresentable document is passed through unchanged).
@@ -163,6 +177,15 @@ pub fn to_string<T: Serialize + ?Sized>(v: &T, pretty: bool) -> Result<String, s
 mod tests {
     use super::*;
     use serde_json::Value;
+
+    #[test]
+    fn valid_json_even_when_unrepresentable() {
+        assert!(is_valid_json("{\"a\":\"\u{10FFFE}d800\"}"));
+        assert!(is_valid_json("{\"a\":\"\\udbff\\udffed800\"}"));
+        assert!(is_valid_json("{\"a\":\"\\ud800\"}"));
+        assert!(!is_valid_json("{\"a\":\"\u{10FFFE}d800\""));
+        assert!(!is_valid_json("{\"a\":"));
+    }
 
     fn rt(src: &str, pretty: bool) -> String {
         let v: Value = parse(src).unwrap();

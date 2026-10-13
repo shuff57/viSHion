@@ -176,9 +176,22 @@ pub async fn run<S: Store>(store: S) -> std::result::Result<(), String> {
     check!(ob.from_backup && ob.restored, "restored");
     check!(e(pr.read_text(&format!("{slug}/project.json")).await)?.unwrap() == good, "restored bytes");
     check!(
-        e(pr.read_text(&format!("{slug}/project.json.damaged")).await)?.as_deref() == Some("{\"name\": \"Alg"),
-        "damaged copy kept"
+        e(pr.read_text(&format!("{slug}/project.json.damaged")).await)?.is_none(),
+        "JS writes no .damaged copy"
     );
+    // valid JSON that lenient cannot represent: an error, never replaced by the stale backup
+    let unrep = "{\"name\":\"N\",\"prompt\":\"\u{10FFFE}d800\",\"order\":[\"a\"]}";
+    ea(pr.write_text(&format!("{slug}/project.json"), unrep)).await?;
+    check!(matches!(pr.open_project(&slug, true, T0).await, Err(StoreError::Parse { .. })), "unrepresentable is an error");
+    check!(e(pr.read_text(&format!("{slug}/project.json")).await)?.unwrap() == unrep, "unrepresentable project.json untouched");
+    ea(pr.write_text(&format!("{slug}/project.json"), "{\"name\": \"Alg")).await?;
+    // slug taken case-insensitively: never overwrite
+    ea(pr.write_text("CaseKeep/project.json", "{\"name\":\"Mine\",\"order\":[]}")).await?;
+    let ck = e(pr.create_project("CaseKeep", T0).await)?;
+    check!(ck.to_lowercase() != "casekeep", "slug {ck:?} aliases CaseKeep");
+    check!(e(pr.read_text("CaseKeep/project.json").await)?.unwrap().contains("Mine"), "existing project kept");
+    ea(pr.delete_project("CaseKeep")).await?;
+    ea(pr.delete_project(&ck)).await?;
     // both damaged: error, nothing written
     ea(pr.write_text(&format!("{slug}/project.json"), "{oops")).await?;
     ea(pr.write_text(&format!("{slug}/project.json.bak"), "{also oops")).await?;
