@@ -1722,3 +1722,194 @@ fn a11y_short_window_scrolls_the_header_with_the_page() {
     let r = h.ctl("remove").unwrap();
     assert!(r.at.1 >= 0 && r.at.1 + r.size.1 as i32 <= 257, "{:?}", r.at);
 }
+
+// ---- phase 4 a11y twin, round 3: the native tree, announcements, title, scope in spoken math
+
+impl H {
+    /// A frame with AccessKit on (what a screen reader attaching does), and its tree update.
+    fn ak(&mut self) -> Vec<(accesskit::NodeId, accesskit::Node)> {
+        self.ctx.enable_accesskit();
+        self.frames(2);
+        self.out.platform_output.accesskit_update.clone().expect("an AccessKit update").nodes
+    }
+}
+
+fn ak_find<'a>(nodes: &'a [(accesskit::NodeId, accesskit::Node)], role: accesskit::Role, name: &str) -> Option<&'a (accesskit::NodeId, accesskit::Node)> {
+    nodes.iter().find(|(_, n)| n.role() == role && n.name() == Some(name))
+}
+
+/// The native window exposes the same structure as the web twin: landmarks, a level 1 heading, named
+/// buttons, flagged words inline in the transcript, math with its spoken form. (Before this the Windows tree
+/// was 50 unnamed custom nodes.)
+#[test]
+fn native_tree_names_what_the_screen_shows() {
+    use accesskit::Role as R;
+    let mut h = H::new("m1");
+    let n = h.ak();
+    let named = n.iter().filter(|(_, x)| x.name().is_some_and(|s| !s.is_empty())).count();
+    assert!(named >= 20, "{named} named nodes");
+    for (role, name) in [
+        (R::Button, "Zoom in"),
+        (R::Button, "Done, next student"),
+        (R::Heading, "Maya R."),
+        (R::Banner, ""),
+        (R::Main, ""),
+        (R::Complementary, "Word panel"),
+        (R::Region, "Transcript"),
+    ] {
+        let hit = n.iter().any(|(_, x)| x.role() == role && (name.is_empty() || x.name() == Some(name)));
+        assert!(hit, "no {role:?} {name:?}");
+    }
+    let (_, h1) = ak_find(&n, R::Heading, "Maya R.").unwrap();
+    assert_eq!(h1.hierarchical_level(), Some(1));
+    assert!(n.iter().any(|(_, x)| x.role() == R::Math && x.name() == Some("x bar") && x.value().is_some_and(|v| v.contains("bar{x}"))));
+    assert!(n.iter().any(|(_, x)| x.role() == R::Button && x.name().is_some_and(|s| s.contains("confidance"))), "flagged words are buttons");
+    let (_, tb) = ak_find(&n, R::TextInput, "Type what the word says").expect("typed word box");
+    assert_eq!(tb.value(), Some(""));
+    // the live region for announcements is there
+    assert!(n.iter().any(|(_, x)| x.role() == R::Status && x.live() == Some(accesskit::Live::Polite)));
+}
+
+/// A screen reader presses a node with `Action::Default`: it must reach the widget.
+#[test]
+fn native_tree_activation_presses_the_control() {
+    let mut h = H::new("m1");
+    let n = h.ak();
+    let (id, _) = ak_find(&n, accesskit::Role::Button, "Zoom in").expect("zoom in");
+    let before = h.ctl("zoom-fit").unwrap().label.clone();
+    h.events.push(egui::Event::AccessKitActionRequest(accesskit::ActionRequest {
+        action: accesskit::Action::Default,
+        target: *id,
+        data: None,
+    }));
+    h.frames(3);
+    let after = h.ctl("zoom-fit").unwrap().label.clone();
+    assert_ne!(before, after, "Zoom in from the accessibility tree changed the zoom");
+}
+
+/// The tree update must be one a platform adapter accepts: every node reachable from the root. (An update
+/// with a stray node makes AccessKit panic in the window thread: the first version of the native tree did.)
+#[test]
+fn native_tree_updates_are_consistent_through_a_session() {
+    let mut h = H::new("m1");
+    h.ctx.enable_accesskit();
+    h.frames(2);
+    let upd = h.out.platform_output.accesskit_update.clone().expect("update");
+    let mut tree = accesskit_consumer::Tree::new(upd, true);
+    let feed = |h: &mut H, tree: &mut accesskit_consumer::Tree| {
+        for _ in 0..3 {
+            h.frames(1);
+            let u = h.out.platform_output.accesskit_update.clone().expect("update");
+            tree.update(u);
+        }
+    };
+    let w = h.word_id("i:0");
+    h.act(&w);
+    feed(&mut h, &mut tree);
+    h.app.queue.lock().unwrap().push("text:typed-word\u{1}forty".into());
+    feed(&mut h, &mut tree);
+    h.act("alt-marked");
+    feed(&mut h, &mut tree);
+    h.act("settings");
+    feed(&mut h, &mut tree);
+    h.act("theme-dark");
+    feed(&mut h, &mut tree);
+    h.app.queue.lock().unwrap().push("key:Escape".into());
+    feed(&mut h, &mut tree);
+    h.act("layout-text");
+    feed(&mut h, &mut tree);
+    h.size = (390.0, 844.0);
+    feed(&mut h, &mut tree);
+    let root = tree.state().root();
+    assert!(root.children().count() >= 3, "the window has the banner, main and the panel");
+}
+
+/// Reading order of the tree is the visual order: banner, main (page image, transcript), word panel.
+#[test]
+fn native_tree_reading_order_and_groups() {
+    use crate::tree::Role as R;
+    let h = H::new("m1");
+    let t = crate::tree::of(h.app.nodes());
+    let roles: Vec<_> = t.iter().map(|n| n.role).collect();
+    assert_eq!(roles, vec![R::Banner, R::Main, R::Complementary], "{roles:?}");
+    let kids: Vec<_> = t[1].children.iter().map(|c| c.name.as_str()).collect();
+    assert_eq!(kids, vec!["Page image", "Transcript"]);
+    let zoom = t[1].find("grp-zoom").expect("zoom group");
+    assert_eq!(zoom.children.iter().map(|c| c.key.as_str()).collect::<Vec<_>>(), vec!["zoom-out", "zoom-fit", "zoom-in"]);
+    assert!(t[1].find("grp-pages").is_some_and(|g| g.role == R::List && g.children.iter().all(|c| c.role == R::ListItem)));
+    let layout = t.iter().find_map(|n| n.find("layout-split")).expect("layout button");
+    assert!(layout.checked.is_some());
+}
+
+#[test]
+fn title_names_the_assignment() {
+    let h = H::new("m1");
+    assert!(h.app.title().ends_with(" | viSHion") && h.app.title().len() > " | viSHion".len(), "{:?}", h.app.title());
+    let empty = App::new(egui::Context::default());
+    assert_eq!(empty.title(), "viSHion");
+}
+
+#[test]
+fn moved_to_a_name_with_a_full_stop_has_one() {
+    assert_eq!(state::moved_pages(1, "Ben T."), "Moved 1 page to Ben T.");
+    assert_eq!(state::moved_pages(2, "Ben"), "Moved 2 pages to Ben.");
+}
+
+/// A decision that carries the panel to a word on the other page says that the page changed.
+#[test]
+fn decision_across_pages_says_the_page() {
+    let mut h = H::new("m1");
+    let w = h.word_id("i:0");
+    h.act(&w);
+    let before = h.app.announced().len();
+    h.act("alt-marked");
+    assert_eq!(h.s().selected.as_deref(), Some("m2"));
+    let said = h.app.announced()[before..].join(" | ");
+    assert!(said.contains("Now on page 2 of 2"), "{said}");
+}
+
+/// "Marked as checked." and who the next student is reach the live region as one sentence.
+#[test]
+fn done_says_it_in_one_utterance() {
+    let mut h = H::new("a1");
+    let before = h.app.announced().len();
+    h.act("done");
+    h.frames(3);
+    let said: Vec<_> = h.app.announced()[before..].to_vec();
+    assert!(said.iter().any(|s| s.starts_with("Marked as checked.") && s.contains("student")), "{said:?}");
+    assert!(!said.iter().any(|s| s == "Marked as checked."), "{said:?}");
+}
+
+/// Typed text and Enter reach the app in one frame: the box the twin shows afterwards is empty, as on the
+/// canvas (the twin used to keep "mean" and a screen reader read text that was not there).
+#[test]
+fn typed_word_box_is_empty_after_it_is_used_in_the_same_frame() {
+    let mut h = H::new("m1");
+    let w = h.word_id("i:0");
+    h.act(&w);
+    {
+        let mut q = h.app.queue.lock().unwrap();
+        q.push("text:typed-word\u{1}mean".into());
+        q.push("act:use-typed".into());
+    }
+    h.frames(1);
+    h.frames(2);
+    assert_eq!(h.s().page("m1").unwrap().resolved().get("i:0").and_then(|v| v.as_str()), Some("typed"));
+    assert_eq!(h.ctl("typed-word").and_then(|c| c.value.clone()), Some(String::new()));
+}
+
+#[test]
+fn spoken_math_says_which_part_belongs_to_which() {
+    use crate::a11y::tex_speech as t;
+    assert_eq!(t(r"\frac{\frac{1}{2}}{3}"), "the fraction the fraction 1 over 2 end fraction over 3 end fraction");
+    assert_eq!(t(r"\frac{1}{\frac{2}{3}}"), "the fraction 1 over the fraction 2 over 3 end fraction end fraction");
+    assert_eq!(t(r"\frac{1}{2}x"), "the fraction 1 over 2 end fraction x");
+    assert_eq!(t(r"\frac{1}{2} + 3"), "1 over 2 plus 3");
+    assert_eq!(t(r"\begin{pmatrix}a&b\\c&d\end{pmatrix}"), "the 2 by 2 matrix, row 1: a, b; row 2: c, d; end matrix");
+    assert_eq!(t(r"\begin{vmatrix} 1 & 2 \\ 3 & 4 \end{vmatrix} = -2"), "the 2 by 2 determinant, row 1: 1, 2; row 2: 3, 4; end determinant equals minus 2");
+    assert_eq!(t(r"\binom{n}{k}"), "n choose k");
+    assert_eq!(t(r"\binom{n}{k} x^k"), "the binomial n choose k end binomial x to the power of k");
+    // truncated environments do not panic
+    let _ = t(r"\begin{pmatrix} a & b \\");
+    let _ = t(r"\begin{");
+}

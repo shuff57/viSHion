@@ -546,8 +546,17 @@ fn reconcile(doc: &web_sys::Document, parent: &web_sys::Element, specs: &[Spec])
             }
         }
         if let (Some(v), Some(input)) = (&sp.value, el.dyn_ref::<web_sys::HtmlInputElement>()) {
+            // `data-app-value` is what the canvas box held when the twin was last told. Typing changes the
+            // box in the twin first and the canvas follows a frame later, so a box that holds what the person
+            // typed is left alone; when the screen itself changed the value (a decision cleared the field)
+            // the twin follows even though it has focus, or a screen reader would read text that is not there.
+            let told = el.get_attribute("data-app-value");
+            let app_changed = told.as_deref() != Some(v.as_str());
+            if app_changed {
+                let _ = el.set_attribute("data-app-value", v);
+            }
             let focused = doc.active_element().is_some_and(|a| a.is_same_node(Some(&el)));
-            if !focused && input.value() != *v {
+            if input.value() != *v && (!focused || app_changed) {
                 input.set_value(v);
             }
         }
@@ -649,46 +658,101 @@ pub fn place(screen: (f32, f32)) {
 fn reconcile_into(h: &web_sys::Element, doc: &web_sys::Document, nodes: &[Node]) {
     let (h, doc) = (h.clone(), doc.clone());
     let was = doc.active_element().filter(|a| h.contains(Some(a)) && !a.is_same_node(Some(&h)));
-    // where the focused control was: its region and place among that region's focusable controls
+    // where the focused control was: its region and place among that region's focusable controls, and its
+    // place among the controls of its own group (the zoom buttons, the page strip)
     let was_at = was.as_ref().and_then(|a| {
         let reg = region_of(a)?;
         let idx = focusables(&reg).iter().position(|f| f.is_same_node(Some(a)))?;
         Some((reg.get_attribute("data-id")?, idx))
     });
+    let was_in = was.as_ref().and_then(|a| {
+        let g = a.parent_element()?.closest("[role=group], [role=list]").ok().flatten().filter(|g| h.contains(Some(g)))?;
+        let idx = focusables(&g).iter().position(|f| f.is_same_node(Some(a)))?;
+        Some((g.get_attribute("data-id")?, idx))
+    });
     let was_id = was.as_ref().and_then(|a| a.get_attribute("data-id"));
+    let was_name = was.as_ref().map(|a| a.get_attribute("aria-label").or_else(|| a.text_content()).unwrap_or_default());
     let h1_before = h1_ids(&h);
     let specs = structure(nodes);
     reconcile(&doc, &h, &specs);
     let Some(was) = was else { return };
-    let now = doc.active_element();
-    let disabled_still_active = was.has_attribute("disabled") && now.as_ref().is_some_and(|n| n.is_same_node(Some(&was)));
-    if was.is_connected() && !disabled_still_active {
+    // A control that disables itself loses focus at once in current browsers (`activeElement` is the body
+    // before the next frame), in older ones it keeps it: either way focus must be handed on.
+    let lost = !was.is_connected() || was.has_attribute("disabled");
+    if !lost {
         return; // focus is where the person put it
+    }
+    let now = doc.active_element();
+    let elsewhere = now.as_ref().is_some_and(|n| h.contains(Some(n)) && !n.is_same_node(Some(&h)) && !n.is_same_node(Some(&was)));
+    if elsewhere {
+        return;
     }
     // a new screen heading wins
     if let Some(new_h1) = h1_ids(&h).into_iter().find(|i| !h1_before.contains(i)) {
         focus(&new_h1);
         return;
     }
-    // the same control, rebuilt (its element type changed)
-    if let Some(id) = was_id {
-        focus(&id);
-        if doc.active_element().is_some_and(|a| a.get_attribute("data-id").as_deref() == Some(id.as_str())) {
-            return;
-        }
-    }
-    if let Some((region, idx)) = was_at {
-        if let Some(reg) = find_child_deep(&h, &region) {
-            let list = focusables(&reg);
-            if !list.is_empty() {
-                let _ = list[idx.min(list.len() - 1)].focus();
+    // the same control, rebuilt (its element type changed). A disabled one is not that: it still reads as the
+    // active element until the browser's next focus fix-up, and then focus falls to the body.
+    if let Some(id) = &was_id {
+        if !was.has_attribute("disabled") || !was.is_connected() {
+            focus(id);
+            if doc.active_element().is_some_and(|a| a.get_attribute("data-id").as_deref() == Some(id.as_str()) && !a.has_attribute("disabled")) {
                 return;
             }
         }
     }
-    if let Some(first) = focusables(&h).first() {
-        let _ = first.focus();
+    let mut landed = false;
+    // a control of its own group first (Zoom in at the largest size: the control beside it)
+    if let Some((group, idx)) = was_in {
+        if let Some(g) = find_child_deep_any(&h, &group) {
+            let list = focusables(&g);
+            if !list.is_empty() {
+                let _ = list[idx.min(list.len() - 1)].focus();
+                landed = true;
+            }
+        }
     }
+    if !landed {
+        if let Some((region, idx)) = was_at {
+            if let Some(reg) = find_child_deep(&h, &region) {
+                let list = focusables(&reg);
+                if !list.is_empty() {
+                    let _ = list[idx.min(list.len() - 1)].focus();
+                    landed = true;
+                }
+            }
+        }
+    }
+    if !landed {
+        if let Some(first) = focusables(&h).first() {
+            let _ = first.focus();
+            landed = true;
+        }
+    }
+    // a control that went unavailable under the person's hands is said, or the change of focus is a puzzle
+    if landed && was.is_connected() && was.has_attribute("disabled") {
+        if let Some(n) = was_name.filter(|n| !n.is_empty()) {
+            NOTICE.with(|c| *c.borrow_mut() = Some(format!("{n} is not available now.")));
+        }
+    }
+}
+
+thread_local! {
+    /// News the twin itself produced while syncing (a focused control became unavailable): the app speaks it
+    /// on its next frame, with the rest of the announcements.
+    static NOTICE: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+}
+
+/// The sentence `sync` left for the live region, once.
+pub fn take_notice() -> Option<String> {
+    NOTICE.with(|c| c.borrow_mut().take())
+}
+
+/// An element with this `data-id` anywhere under the twin (groups and lists as well as regions).
+fn find_child_deep_any(h: &web_sys::Element, id: &str) -> Option<web_sys::Element> {
+    let list = h.query_selector_all("[data-id]").ok()?;
+    (0..list.length()).filter_map(|i| list.item(i)).filter_map(|n| n.dyn_into::<web_sys::Element>().ok()).find(|e| e.get_attribute("data-id").as_deref() == Some(id))
 }
 
 fn find_child_deep(h: &web_sys::Element, id: &str) -> Option<web_sys::Element> {
@@ -696,15 +760,42 @@ fn find_child_deep(h: &web_sys::Element, id: &str) -> Option<web_sys::Element> {
     (0..list.length()).filter_map(|i| list.item(i)).filter_map(|n| n.dyn_into::<web_sys::Element>().ok()).find(|e| e.get_attribute("data-id").as_deref() == Some(id))
 }
 
-/// Speak `text` through the page's live regions (`#announce` polite, `#announce-alert` assertive). The same
-/// sentence twice in a row gets a trailing no-break space so the second one is still a change.
+/// The browser tab title (`document.title`).
+pub fn set_title(title: &str) {
+    if let Some(d) = document() {
+        if d.title() != title {
+            d.set_title(title);
+        }
+    }
+}
+
+thread_local! {
+    /// When each live region (polite, assertive) was last written, and what it holds.
+    static SPOKEN: std::cell::RefCell<[(f64, String); 2]> = std::cell::RefCell::new([(0.0, String::new()), (0.0, String::new())]);
+}
+
+/// Speak `text` through the page's live regions (`#announce` polite, `#announce-alert` assertive). News that
+/// arrives within a few frames of the last (one action, spoken in two steps) is added to it, not written over: a live
+/// region rewritten twice in a moment is usually read as the second write alone, and the first (which
+/// student this is, what was decided) would be lost. The same sentence twice in a row gets a trailing
+/// no-break space so the second one is still a change.
 pub fn announce(text: &str, assertive: bool) {
     let Some(doc) = document() else { return };
     let Some(el) = doc.get_element_by_id(if assertive { "announce-alert" } else { "announce" }) else { return };
+    let now = js_sys::Date::now();
     let mut t = text.to_string();
-    if el.text_content().as_deref() == Some(t.as_str()) {
-        t.push('\u{a0}');
-    }
+    SPOKEN.with(|s| {
+        let mut s = s.borrow_mut();
+        let slot = &mut s[assertive as usize];
+        let prev = slot.1.trim_end_matches('\u{a0}').to_string();
+        if now - slot.0 < 300.0 && !prev.is_empty() && prev != t && prev.len() < 400 {
+            t = format!("{prev} {t}");
+        }
+        if el.text_content().as_deref() == Some(t.as_str()) {
+            t.push('\u{a0}');
+        }
+        *slot = (now, t.clone());
+    });
     el.set_text_content(Some(&t));
 }
 

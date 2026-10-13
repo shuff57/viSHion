@@ -363,8 +363,8 @@ fn apply(
                 say("That was the last student.".into(), false);
                 s.view = View::Inbox;
             } else {
-                ctl.say("Marked as checked.");
-                ctl.say_node("student-pos");
+                // one utterance: two writes in one breath are often reduced to the second
+                ctl.say_node_after("Marked as checked.", "student-pos");
             }
         }
         Act::Copy => {
@@ -405,8 +405,11 @@ fn apply(
             }
         }
         Act::Choose(via, text) => {
+            let from_page = s.selected.clone();
             if s.choose_open(via, &text) {
                 typed.clear();
+                // the text box is empty now: the twin has to be told in a frame of its own
+                ctx.request_repaint();
                 let head = match via {
                     "suggested" => "Used the suggested word.".to_string(),
                     "written" => "Kept the word as read from the page.".to_string(),
@@ -415,7 +418,9 @@ fn apply(
                 };
                 // the panel moved on by itself: say which word it is on now, or a second Enter would accept
                 // a guess nobody has heard
-                ctl.say(format!("{head} {}", s.next_word_phrase()));
+                // and when that word is on another page, which page the transcript now shows
+                let moved = if s.selected != from_page { format!(" {}", s.page_phrase()) } else { String::new() };
+                ctl.say(format!("{head}{moved} {}", s.next_word_phrase()));
             }
         }
         Act::UseAll => {
@@ -573,7 +578,7 @@ fn apply(
                 dialog::Out::Close => {}
                 dialog::Out::Student { name, all } => {
                     let n = s.set_student(&name, all);
-                    say(format!("Moved {} to {}.", state::plural(n, "page", "pages"), name), false);
+                    say(state::moved_pages(n, &name), false);
                 }
                 dialog::Out::Theme(v) => {
                     s.settings.set("theme", serde_json::json!(v));

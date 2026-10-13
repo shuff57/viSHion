@@ -47,9 +47,17 @@ pub fn in_main(region: u8) -> bool {
     region == SCAN || region == TEXT
 }
 
-/// What a screen reader should say for a formula written in TeX: `\frac{s}{\sqrt{n}}` is "s over square
-/// root of n". The TeX itself stays in the element's text, so it can still be read letter by letter.
+thread_local! {
+    /// How many fractions or binomials enclose the one being spoken: an inner one is always closed with its
+    /// own "end fraction", or "1 over 2 over 3" would not say which division comes first.
+    static NEST: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// What a screen reader should say for a formula written in TeX: `\frac{s}{\sqrt{n}}` is "the fraction s
+/// over square root of n end fraction". The TeX itself stays in the element's text, so it can still be read
+/// letter by letter.
 pub fn tex_speech(tex: &str) -> String {
+    NEST.with(|n| n.set(0));
     let cs: Vec<char> = tex.chars().collect();
     let mut p = 0;
     let out = seq(&cs, &mut p, false);
@@ -114,7 +122,7 @@ fn atom(cs: &[char], p: &mut usize) -> String {
     }
 }
 
-/// The text of a `{group}` as written, for 	ext{...}: words stay words.
+/// The text of a `{group}` as written, for the text command: words stay words.
 fn raw_group(cs: &[char], p: &mut usize) -> String {
     while *p < cs.len() && cs[*p].is_whitespace() {
         *p += 1;
@@ -226,6 +234,119 @@ fn limits(cs: &[char], p: &mut usize, head: &str) -> String {
     out
 }
 
+/// The two arguments of `\frac` or `\binom`; the flag says the fraction sits inside another one.
+fn two_args(cs: &[char], p: &mut usize) -> (String, String, bool) {
+    let outer = NEST.with(|n| n.get());
+    NEST.with(|n| n.set(outer + 1));
+    let (a, b) = (atom(cs, p), atom(cs, p));
+    NEST.with(|n| n.set(outer));
+    (a, b, outer > 0)
+}
+
+/// Is what follows a closed fraction an operator, a closing bracket or the end (so "1 over 2" cannot be
+/// taken for the start of something longer)?
+fn ends_here(cs: &[char], p: usize) -> bool {
+    let mut q = p;
+    while q < cs.len() && cs[q].is_whitespace() {
+        q += 1;
+    }
+    match cs.get(q) {
+        None => true,
+        Some('\\') => {
+            let w: String = cs[q + 1..].iter().take_while(|c| c.is_ascii_alphabetic()).collect();
+            w.is_empty()
+                || matches!(w.as_str(), "pm" | "mp" | "cdot" | "times" | "div" | "le" | "leq" | "ge" | "geq" | "ne" | "neq" | "approx" | "sim" | "quad" | "qquad" | "right" | "to" | "in" | "end")
+        }
+        Some(c) => "+-=<>,;.)]}&|/!\u{2212}".contains(*c),
+    }
+}
+
+/// `\begin{pmatrix} a & b \\ c & d \end{pmatrix}`: rows and columns are said, not spelled. `p` is just
+/// after `\begin`.
+fn environment(cs: &[char], p: &mut usize) -> String {
+    let name = raw_group(cs, p);
+    // the body runs to the `\end{name}` that matches, nested environments of the same name included
+    let begin: Vec<char> = format!("\\begin{{{name}}}").chars().collect();
+    let end: Vec<char> = format!("\\end{{{name}}}").chars().collect();
+    let at = |q: usize, pat: &[char]| cs.len() >= q + pat.len() && cs[q..q + pat.len()] == *pat;
+    let (start, mut q, mut depth) = (*p, *p, 1);
+    let mut stop = cs.len();
+    while q < cs.len() {
+        if at(q, &begin) {
+            depth += 1;
+            q += begin.len();
+        } else if at(q, &end) {
+            depth -= 1;
+            if depth == 0 {
+                stop = q;
+                break;
+            }
+            q += end.len();
+        } else {
+            q += 1;
+        }
+    }
+    *p = (stop + end.len()).min(cs.len());
+    let mut body: &[char] = &cs[start..stop];
+    // `array` takes a column spec first: `{cc}`
+    if matches!(name.as_str(), "array" | "subarray" | "alignedat") {
+        let mut r = 0;
+        let _ = raw_group(body, &mut r);
+        body = &body[r..];
+    }
+    let say = |cell: &[char]| {
+        let mut r = 0;
+        seq(cell, &mut r, false).split_whitespace().collect::<Vec<_>>().join(" ")
+    };
+    // rows split at a top level `\\`, cells at a top level `&`
+    let (mut rows, mut cells, mut cur): (Vec<Vec<String>>, Vec<String>, Vec<char>) = (vec![], vec![], vec![]);
+    let (mut brace, mut env, mut k) = (0i32, 0i32, 0usize);
+    let starts = |k: usize, s: &str| {
+        let n = s.chars().count();
+        body.len() >= k + n && body[k..k + n].iter().copied().eq(s.chars())
+    };
+    while k < body.len() {
+        let c = body[k];
+        if starts(k, "\\begin{") {
+            env += 1;
+        } else if starts(k, "\\end{") {
+            env -= 1;
+        }
+        match c {
+            '{' => brace += 1,
+            '}' => brace -= 1,
+            _ => {}
+        }
+        if brace == 0 && env == 0 && c == '&' {
+            cells.push(say(&cur));
+            cur.clear();
+            k += 1;
+        } else if brace == 0 && env == 0 && starts(k, "\\\\") {
+            cells.push(say(&cur));
+            cur.clear();
+            rows.push(std::mem::take(&mut cells));
+            k += 2;
+        } else {
+            cur.push(c);
+            k += 1;
+        }
+    }
+    if !cur.iter().all(|c| c.is_whitespace()) || !cells.is_empty() {
+        cells.push(say(&cur));
+        rows.push(cells);
+    }
+    let cols = rows.iter().map(|r| r.len()).max().unwrap_or(0);
+    let list = |label: &str| rows.iter().enumerate().map(|(i, r)| format!("{label} {}: {}", i + 1, r.join(", "))).collect::<Vec<_>>().join("; ");
+    let n = rows.len();
+    let out = match name.trim_end_matches('*') {
+        "pmatrix" | "bmatrix" | "Bmatrix" | "matrix" | "smallmatrix" | "array" => format!("the {n} by {cols} matrix, {}; end matrix", list("row")),
+        "vmatrix" | "Vmatrix" => format!("the {n} by {cols} determinant, {}; end determinant", list("row")),
+        "cases" => format!("cases, {}; end cases", list("case")),
+        _ => list("line"),
+    };
+    format!(" {out} ")
+}
+
 /// `\name` with its arguments, `p` at the backslash.
 fn command(cs: &[char], p: &mut usize) -> String {
     *p += 1;
@@ -247,13 +368,28 @@ fn command(cs: &[char], p: &mut usize) -> String {
     };
     let multi = |s: &str| s.trim().contains(' ');
     match name.as_str() {
-        "frac" | "dfrac" | "tfrac" => {
-            let (a, b) = (atom(cs, p), atom(cs, p));
-            if multi(&a) || multi(&b) {
+        "frac" | "dfrac" | "tfrac" | "cfrac" => {
+            let (a, b, nested) = two_args(cs, p);
+            // short only when nothing can attach to it: "1 over 2 x" would read as 1 over 2x
+            if nested || multi(&a) || multi(&b) || !ends_here(cs, *p) {
                 format!(" the fraction {a} over {b} end fraction ")
             } else {
                 format!(" {a} over {b} ")
             }
+        }
+        "binom" | "dbinom" | "tbinom" => {
+            let (a, b, nested) = two_args(cs, p);
+            if nested || multi(&a) || multi(&b) || !ends_here(cs, *p) {
+                format!(" the binomial {a} choose {b} end binomial ")
+            } else {
+                format!(" {a} choose {b} ")
+            }
+        }
+        "begin" => environment(cs, p),
+        "end" => {
+            // a stray end of an environment: its name is not said
+            let _ = raw_group(cs, p);
+            String::new()
         }
         "sqrt" => {
             let mut idx = String::new();

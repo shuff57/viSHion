@@ -27,10 +27,13 @@ mod review;
 pub mod state;
 pub mod theme;
 pub mod transcript;
+pub mod tree;
 pub mod twin;
 mod svgpath;
 mod widgets;
 
+#[cfg(not(target_arch = "wasm32"))]
+mod native;
 #[cfg(target_arch = "wasm32")]
 mod web;
 #[cfg(test)]
@@ -118,8 +121,13 @@ pub struct Ctl {
     /// Sentences for the live region this frame: (text, assertive). `web::announce` speaks them.
     pub(crate) said: Vec<(String, bool)>,
     /// Twin nodes whose text is announced once the next frame has drawn the state they describe.
-    pub(crate) say_nodes: Vec<&'static str>,
-    say_wait: Vec<&'static str>,
+    /// (node id, words said before its text), see `say_node_after`.
+    pub(crate) say_nodes: Vec<(&'static str, String)>,
+    say_wait: Vec<(&'static str, String)>,
+    /// Native: the egui widget that draws each twin control, so the accessibility tree reuses its node
+    /// (activation from a screen reader is then a click on that widget).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) widgets: HashMap<String, egui::Id>,
 }
 
 /// What a control is, for the twin.
@@ -212,6 +220,8 @@ impl Ctl {
 
     /// The single funnel for interactive widgets. Returns true when activated from the canvas or the twin.
     pub fn reg(&mut self, ui: &Ui, r: &egui::Response, c: C) -> bool {
+        #[cfg(not(target_arch = "wasm32"))]
+        self.widgets.insert(c.id.to_string(), r.id);
         self.push(Reg {
             id: c.id.into(),
             role: c.role,
@@ -239,12 +249,17 @@ impl Ctl {
     /// Register a textbox. `value` is what the canvas widget currently holds; text typed into the twin
     /// is returned once (the caller writes it into its buffer).
     pub fn reg_text(&mut self, ui: &Ui, r: &egui::Response, c: C, value: &str) -> Option<String> {
+        #[cfg(not(target_arch = "wasm32"))]
+        self.widgets.insert(c.id.to_string(), r.id);
+        // text typed into the twin this frame is the box's value from now on: the twin reports what the
+        // canvas box holds, so a decision in this same frame that clears it shows as a change next frame
+        let typed = self.typed.remove(c.id);
         self.push(Reg {
             id: c.id.into(),
             role: "textbox",
             label: c.label.into(),
             pressed: None,
-            value: Some(value.into()),
+            value: Some(typed.clone().unwrap_or_else(|| value.to_string())),
             disabled: c.disabled,
             region: c.region,
             pos: twin::pos_of(r.rect.min),
@@ -252,12 +267,14 @@ impl Ctl {
             size: (r.rect.width().round() as u16, r.rect.height().round() as u16),
         });
         self.track_focus(ui, r, c.id, c.region, c.ring);
-        self.typed.remove(c.id)
+        typed
     }
 
     /// A focusable, named region that takes keys (`keys` is the set the web twin forwards). Not a control:
     /// it is absent from `controls()` and from the parity list.
     pub fn group(&mut self, ui: &Ui, r: &egui::Response, id: &str, label: &str, keys: &'static str, region: u8) {
+        #[cfg(not(target_arch = "wasm32"))]
+        self.widgets.insert(id.to_string(), r.id);
         // one pixel left of its content, so it sorts just before the first paragraph it governs
         let pos = twin::pos_of(r.rect.min - egui::vec2(1.0, 0.0));
         // the twin sits where the region is on screen: a transcript taller than the window is its visible part
@@ -318,7 +335,13 @@ impl Ctl {
 
     /// Announce what the node `id` says once the next frame has drawn it (a page or student that just changed).
     pub fn say_node(&mut self, id: &'static str) {
-        self.say_nodes.push(id);
+        self.say_nodes.push((id, String::new()));
+    }
+
+    /// `say_node`, with `lead` spoken first in the same sentence: two writes to a live region in one breath
+    /// are often reduced to the second, so what belongs together is one utterance.
+    pub fn say_node_after(&mut self, lead: &str, id: &'static str) {
+        self.say_nodes.push((id, lead.to_string()));
     }
 
     pub fn heading(&mut self, id: &str, level: u8, text: &str, region: u8, min: egui::Pos2) {
@@ -472,6 +495,13 @@ pub struct App {
     last_toast: Option<String>,
     last_save: Option<String>,
     said_log: Vec<String>,
+    /// The last utterance and how many there were (native: the live region of the accessibility tree).
+    #[cfg(not(target_arch = "wasm32"))]
+    native_said: String,
+    #[cfg(not(target_arch = "wasm32"))]
+    native_said_n: u32,
+    /// The window / tab title last set (`<assignment> | viSHion` once an assignment is open).
+    last_title: Option<String>,
     status_err: bool,
     dialog: Option<dialog::Dialog>,
     /// Scroll position and size of the page stage, kept so zoom can hold the middle of the view.
@@ -549,6 +579,11 @@ impl App {
             last_toast: None,
             last_save: None,
             said_log: vec![],
+            #[cfg(not(target_arch = "wasm32"))]
+            native_said: String::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            native_said_n: 0,
+            last_title: None,
             status_err: false,
             dialog: None,
             stage: review::Stage::default(),
@@ -981,6 +1016,8 @@ impl App {
         self.ctl.scrolls = [false; 5];
         self.ctl.pending_scroll = None;
         self.ctl.nodes.clear();
+        #[cfg(not(target_arch = "wasm32"))]
+        self.ctl.widgets.clear();
         self.ctl.para = None;
         review::show(self, ctx, t);
     }
@@ -1056,6 +1093,7 @@ impl App {
         self.ctl.keys.clear();
 
         self.announce();
+        self.set_title(ctx);
         // a modal dialog is the only thing the twin shows while it is open
         // (the screen's h1 stays, so the page keeps its main landmark and its heading behind the dialog)
         if self.dialog.is_some() {
@@ -1063,6 +1101,8 @@ impl App {
         }
         // reading order: region, then 16px row band, then x
         self.ctl.nodes.sort_by_key(|n| n.key());
+        #[cfg(not(target_arch = "wasm32"))]
+        native::publish(ctx, &tree::of(&self.ctl.nodes), &self.ctl.widgets, &self.native_said, self.native_said_n, self.title());
         let nodes = std::mem::take(&mut self.ctl.nodes);
         let sr = ctx.screen_rect();
         let screen = (sr.width(), sr.height());
@@ -1118,11 +1158,16 @@ impl App {
                 _ => None,
             })
         }
-        for id in std::mem::take(&mut self.ctl.say_wait) {
+        for (id, lead) in std::mem::take(&mut self.ctl.say_wait) {
             if let Some(t) = text_of(&self.ctl.nodes, id) {
-                let t = t.to_string();
+                let t = if lead.is_empty() { t.to_string() } else { format!("{lead} {t}") };
                 self.ctl.said.push((t, false));
             }
+        }
+        // what the twin said about itself on the last sync (a focused control became unavailable)
+        #[cfg(target_arch = "wasm32")]
+        if let Some(n) = web::take_notice() {
+            self.ctl.said.push((n, false));
         }
         self.ctl.say_wait = std::mem::take(&mut self.ctl.say_nodes);
         if !self.ctl.say_wait.is_empty() {
@@ -1144,15 +1189,53 @@ impl App {
             }
             self.last_save = save;
         }
-        for (text, assertive) in std::mem::take(&mut self.ctl.said) {
+        let said = std::mem::take(&mut self.ctl.said);
+        // one write per live region per frame: the sentences of a frame are one utterance
+        for assertive in [false, true] {
+            let all: Vec<&str> = said.iter().filter(|(_, a)| *a == assertive).map(|(t, _)| t.as_str()).collect();
+            if all.is_empty() {
+                continue;
+            }
             #[cfg(target_arch = "wasm32")]
-            web::announce(&text, assertive);
-            let _ = assertive;
+            web::announce(&all.join(" "), assertive);
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                self.native_said = all.join(" ");
+                self.native_said_n += 1;
+            }
+        }
+        for (text, _) in said {
             self.said_log.push(text);
             if self.said_log.len() > 40 {
                 self.said_log.remove(0);
             }
         }
+    }
+
+    /// js/main.js: the title names the assignment outside the home screen (`<name> | viSHion`), WCAG 2.4.2.
+    fn set_title(&mut self, ctx: &egui::Context) {
+        let title = match (&self.boot, &self.session) {
+            (Boot::Ready, Some(s)) => {
+                let name = s.a.meta.name();
+                format!("{} | viSHion", if name.is_empty() { "Assignment" } else { name })
+            }
+            _ => "viSHion".to_string(),
+        };
+        if self.last_title.as_deref() != Some(title.as_str()) {
+            #[cfg(target_arch = "wasm32")]
+            {
+                let _ = ctx;
+                web::set_title(&title);
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
+            self.last_title = Some(title);
+        }
+    }
+
+    /// The title the window or tab has now.
+    pub fn title(&self) -> &str {
+        self.last_title.as_deref().unwrap_or("viSHion")
     }
 
     /// Keys egui saw (native, or the canvas on the web) become the same `KeyEv`s the twin forwards. Not while

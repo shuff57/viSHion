@@ -231,6 +231,34 @@ try {
     await a.close();
   }
 
+  // ---------------------------------------------------------------- state the page and the twin must agree on
+  {
+    const a = await open('state');
+    const { page } = a;
+    // WCAG 2.4.2: the tab names the assignment, as js/main.js does
+    expect(/^.+ \| viSHion$/.test(await page.title()), 'document title names the assignment: ' + JSON.stringify(await page.title()));
+    // a typed fix leaves the text box empty in the twin as it is on the canvas (the box keeps focus)
+    const val = () => page.evaluate(() => document.querySelector('#controls [data-id="typed-word"]')?.value ?? null);
+    await page.evaluate(() => document.querySelector('#controls [data-id="word-p-maya-1-i:0"]').focus());
+    await page.keyboard.press('Enter');
+    expect(await a.wait(async () => await a.has('typed-word')), 'the illegible word opens its text box');
+    await page.evaluate(() => document.querySelector('#controls [data-id="typed-word"]').focus());
+    await page.keyboard.type('mean');
+    expect(await val() === 'mean', 'typing shows in the twin box');
+    await page.keyboard.press('Enter');
+    expect(await a.wait(async () => (await val()) === ''), 'after the typed word is used the box is empty, not stale: ' + JSON.stringify(await val()));
+    expect(await a.wait(async () => /Used .mean.\./.test((await a.announced())[0])), 'the typed decision is announced: ' + JSON.stringify(await a.announced()));
+    expect(/Now on page 2 of 2/.test((await a.announced())[0]), 'a decision that moves to the other page says so: ' + JSON.stringify(await a.announced()));
+    // a control that disables itself under the keyboard hands focus on, and says so
+    expect(await a.tabTo('zoom-in'), 'Tab reaches Zoom in');
+    for (let i = 0; i < 4; i++) { await page.keyboard.press('Enter'); await a.pump(4); }
+    const now = await a.active();
+    expect(now && now !== 'body' && now !== 'html' && now !== 'zoom-in', 'at the largest zoom focus moved to a control beside it: ' + now);
+    expect(await a.wait(async () => /not available now/.test((await a.announced())[0])), 'and it says why: ' + JSON.stringify(await a.announced()));
+    expect(await a.attr('zoom-in', 'disabled') !== null, 'Zoom in is disabled at 400%');
+    await a.close();
+  }
+
   // ---------------------------------------------------------------- display preferences
   {
     const a = await open('prefs', { reducedMotion: 'reduce', forcedColors: 'active', colorScheme: 'dark' });

@@ -204,6 +204,12 @@ pub fn plural(n: usize, one: &str, many: &str) -> String {
     format!("{} {}", n, if n == 1 { one } else { many })
 }
 
+/// "Moved 1 page to Ben T." A name that ends in a full stop is not given a second one.
+pub fn moved_pages(n: usize, name: &str) -> String {
+    let stop = if name.ends_with('.') { "" } else { "." };
+    format!("Moved {} to {name}{stop}", plural(n, "page", "pages"))
+}
+
 impl Session {
     pub fn new(slug: String, a: Assignment, settings: Settings, now: i64) -> Session {
         let layout_text = ui_str(&a, "layout") == Some("text");
@@ -450,6 +456,15 @@ impl Session {
             (Some(_), _) => format!("You chose \u{201C}{}\u{201D}. Choose another option to change it.", shown_str(it)),
             (None, "illegible") => "The model could not read this word. Pick one of its best guesses, type it yourself, or keep the marker.".into(),
             _ => format!("The model wrote \u{201C}{}\u{201D}, which is close to a course word.", word_str(it)),
+        }
+    }
+
+    /// "Now on page 2 of 2." for the page the panel is on (a decision that crossed to the next page).
+    pub fn page_phrase(&self) -> String {
+        let Some(g) = self.group() else { return String::new() };
+        match self.selected.as_ref().and_then(|id| g.pages.iter().position(|p| p == id)) {
+            Some(i) => format!("Now on page {} of {}.", i + 1, g.pages.len()),
+            None => String::new(),
         }
     }
 
