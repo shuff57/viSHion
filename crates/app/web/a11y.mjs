@@ -386,6 +386,35 @@ try {
     expect(off.length === 0, `${w}x${h}: every Tab stop is scrolled into view (WCAG 2.4.7, 2.4.11)` + (off.length ? ': ' + off.slice(0, 8) : ''));
     await a.close();
   }
+  // ---------------------------------------------------------------- Tab and Shift+Tab visit every control of every dialog
+  for (const [dlgName, trigger, vp] of [['Settings', 'settings', { width: 1280, height: 800 }], ['Settings', 'settings', { width: 1280, height: 1800 }],
+    ['Change student', 'change-student', { width: 1280, height: 800 }], ['Remove page', 'remove', { width: 1280, height: 800 }]]) {
+    const a = await open(`dialog tab ${dlgName} ${vp.width}x${vp.height}`, { viewport: vp });
+    const { page } = a;
+    await page.evaluate((id) => document.querySelector(`#controls [data-id="${id}"]`).focus(), trigger);
+    await a.pump(3);
+    await page.keyboard.press('Enter');
+    await a.pump(8);
+    const ids = await page.evaluate(() => [...document.querySelectorAll('#controls [role=dialog] [data-id]')]
+      .filter((e) => e.matches('button,input,textarea,select,[tabindex]') && !e.disabled && e.getAttribute('aria-disabled') !== 'true').map((e) => e.dataset.id));
+    const walk = async (key) => {
+      const got = [];
+      for (let i = 0; i < ids.length + 6; i++) {
+        await page.keyboard.press(key); await page.waitForTimeout(80); await a.pump(1);
+        got.push(await page.evaluate(() => document.activeElement?.closest('[role=dialog]') ? document.activeElement.dataset.id : 'OUTSIDE:' + document.activeElement?.tagName));
+      }
+      return got;
+    };
+    const fwd = await walk('Tab');
+    expect(ids.length > 0 && ids.every((i) => fwd.includes(i)), `${dlgName} ${vp.width}x${vp.height}: Tab reaches every control` + ids.filter((i) => !fwd.includes(i)).map((i) => ' [' + i + ']').join(''));
+    expect(!fwd.some((x) => x.startsWith('OUTSIDE')), `${dlgName} ${vp.width}x${vp.height}: Tab never leaves the dialog or falls to body`);
+    const back = await walk('Shift+Tab');
+    expect(ids.every((i) => back.includes(i)), `${dlgName} ${vp.width}x${vp.height}: Shift+Tab reaches every control` + ids.filter((i) => !back.includes(i)).map((i) => ' [' + i + ']').join(''));
+    expect(!back.some((x) => x.startsWith('OUTSIDE')), `${dlgName} ${vp.width}x${vp.height}: Shift+Tab never leaves the dialog or falls to body`);
+    const vis = await page.evaluate(() => { const e = document.activeElement; const b = e.getBoundingClientRect(); return b.bottom <= innerHeight + 1 && b.top >= -1; });
+    expect(vis, `${dlgName} ${vp.width}x${vp.height}: the focused control is on screen`);
+    await a.close();
+  }
 } catch (e) {
   console.error(e);
   failures.push('exception: ' + (e && e.message));
