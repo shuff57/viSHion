@@ -38,10 +38,55 @@ fn surrogate_hex(s: &str) -> Option<&str> {
 /// Replace lone `\udXXX` escapes so the text parses with serde_json. `Err(())` when the document holds a
 /// literal U+10FFFE directly followed by surrogate-looking hex digits (unrepresentable, see module docs).
 fn encode_checked(text: &str) -> Result<Cow<'_, str>, ()> {
-    encode_impl(text, true)
+    encode_impl(text, true, SENT)
 }
 
-fn encode_impl(text: &str, strict: bool) -> Result<Cow<'_, str>, ()> {
+/// Marker candidates in preference order: the plain default first, so a document that never collides
+/// keeps the historical marker.
+fn candidates() -> impl Iterator<Item = char> {
+    let astral = (1u32..=0x10).rev().flat_map(|p| [(p << 16) | 0xFFFE, (p << 16) | 0xFFFF]);
+    astral.chain([0xFFFE, 0xFFFF]).chain(0xFDD0..=0xFDEF).filter_map(char::from_u32)
+}
+
+/// The per-document marker: the first candidate that occurs nowhere in `text`, neither literally nor as a
+/// `\uXXXX` escape. Falls back to [`SENT`], whose collisions [`parse`] then refuses.
+pub fn pick_marker(text: &str) -> char {
+    let b = text.as_bytes();
+    // every escape value >= D800 (surrogates and the BMP noncharacters)
+    let mut esc: Vec<u32> = vec![];
+    let mut i = 0;
+    while i + 6 <= b.len() {
+        if b[i] == b'\\' {
+            if b[i + 1] == b'u' {
+                if let Some(v) = hex4(text.get(i + 2..i + 6)).filter(|v| *v >= 0xD800) {
+                    esc.push(v);
+                }
+            }
+            i += 2;
+        } else {
+            i += 1;
+        }
+    }
+    candidates()
+        .find(|&c| {
+            if text.contains(c) {
+                return false;
+            }
+            let u = c as u32;
+            if u > 0xFFFF {
+                let hi = 0xD800 + ((u - 0x10000) >> 10);
+                let lo = 0xDC00 + ((u - 0x10000) & 0x3FF);
+                !(esc.contains(&hi) && esc.contains(&lo))
+            } else {
+                !esc.contains(&u)
+            }
+        })
+        .unwrap_or(SENT)
+}
+
+fn encode_impl(text: &str, strict: bool, marker: char) -> Result<Cow<'_, str>, ()> {
+    let mut mbuf = [0u8; 4];
+    let mfirst = marker.encode_utf8(&mut mbuf).as_bytes()[0];
     let b = text.as_bytes();
     let mut out = String::new();
     let (mut i, mut last, mut touched) = (0usize, 0usize, false);
@@ -55,7 +100,7 @@ fn encode_impl(text: &str, strict: bool) -> Result<Cow<'_, str>, ()> {
                         if let Some(lo) = hex4(text.get(i + 8..i + 12)).filter(|c| (0xDC00..0xE000).contains(c)) {
                             // a valid pair: serde_json handles it. The pair that decodes to the marker
                             // character must not be followed by marker-looking text.
-                            if strict && cp == 0xDBFF && lo == 0xDFFE && text.get(i + 12..).is_some_and(|r| surrogate_hex(r).is_some()) {
+                            if strict && 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00) == marker as u32 && text.get(i + 12..).is_some_and(|r| surrogate_hex(r).is_some()) {
                                 return Err(());
                             }
                             i += 12;
@@ -65,7 +110,7 @@ fn encode_impl(text: &str, strict: bool) -> Result<Cow<'_, str>, ()> {
                     if high || low {
                         touched = true;
                         out.push_str(&text[last..i]);
-                        out.push(SENT);
+                        out.push(marker);
                         out.push_str(&text[i + 2..i + 6]);
                         i += 6;
                         last = i;
@@ -74,8 +119,8 @@ fn encode_impl(text: &str, strict: bool) -> Result<Cow<'_, str>, ()> {
                 }
             }
             i += 2;
-        } else if b[i] == 0xF4 && text[i..].starts_with(SENT) {
-            i += SENT.len_utf8();
+        } else if b[i] == mfirst && text[i..].starts_with(marker) {
+            i += marker.len_utf8();
             if strict && surrogate_hex(&text[i..]).is_some() {
                 return Err(());
             }
@@ -94,7 +139,7 @@ fn encode_impl(text: &str, strict: bool) -> Result<Cow<'_, str>, ()> {
 /// represent it (U+10FFFE directly followed by surrogate-like hex digits). Lets callers tell "damaged"
 /// from "valid but unrepresentable".
 pub fn is_valid_json(text: &str) -> bool {
-    match encode_impl(text, false) {
+    match encode_impl(text, false, SENT) {
         Ok(enc) => serde_json::from_str::<serde::de::IgnoredAny>(&enc).is_ok(),
         Err(()) => false,
     }
@@ -107,14 +152,19 @@ pub fn encode(text: &str) -> Cow<'_, str> {
 
 /// Inverse of [`encode`] for serialised output.
 pub fn decode(s: String) -> String {
-    if !s.contains(SENT) {
+    decode_with(s, SENT)
+}
+
+/// [`decode`] for a document whose marker is `sent` (see [`pick_marker`]).
+pub fn decode_with(s: String, sent: char) -> String {
+    if !s.contains(sent) {
         return s;
     }
     let mut out = String::with_capacity(s.len());
     let mut rest = s.as_str();
-    while let Some(pos) = rest.find(SENT) {
+    while let Some(pos) = rest.find(sent) {
         out.push_str(&rest[..pos]);
-        let after = &rest[pos + SENT.len_utf8()..];
+        let after = &rest[pos + sent.len_utf8()..];
         match surrogate_hex(after) {
             Some(h) => {
                 out.push_str("\\u");
@@ -122,7 +172,7 @@ pub fn decode(s: String) -> String {
                 rest = &after[4..];
             }
             None => {
-                out.push(SENT);
+                out.push(sent);
                 rest = after;
             }
         }
@@ -133,24 +183,32 @@ pub fn decode(s: String) -> String {
 
 /// True when `s` carries an escaped lone surrogate (`SENT` + 4 surrogate hex digits).
 pub fn has_lone(s: &str) -> bool {
-    s.match_indices(SENT).any(|(i, _)| surrogate_hex(&s[i + SENT.len_utf8()..]).is_some())
+    has_lone_with(s, SENT)
+}
+
+pub fn has_lone_with(s: &str, marker: char) -> bool {
+    s.match_indices(marker).any(|(i, _)| surrogate_hex(&s[i + marker.len_utf8()..]).is_some())
 }
 
 /// Text for display: lone-surrogate markers become U+FFFD.
 pub fn display(s: &str) -> Cow<'_, str> {
-    if !has_lone(s) {
+    display_with(s, SENT)
+}
+
+pub fn display_with(s: &str, marker: char) -> Cow<'_, str> {
+    if !has_lone_with(s, marker) {
         return Cow::Borrowed(s);
     }
     let mut out = String::with_capacity(s.len());
     let mut rest = s;
-    while let Some(pos) = rest.find(SENT) {
+    while let Some(pos) = rest.find(marker) {
         out.push_str(&rest[..pos]);
-        let after = &rest[pos + SENT.len_utf8()..];
+        let after = &rest[pos + marker.len_utf8()..];
         if surrogate_hex(after).is_some() {
             out.push('\u{FFFD}');
             rest = &after[4..];
         } else {
-            out.push(SENT);
+            out.push(marker);
             rest = after;
         }
     }
@@ -165,6 +223,24 @@ pub fn parse<T: DeserializeOwned>(text: &str) -> Result<T, serde_json::Error> {
         serde_json::Error::custom("document holds U+10FFFE followed by surrogate-like hex digits (unrepresentable)")
     })?;
     serde_json::from_str(&enc)
+}
+
+/// [`parse`] with a per-document marker: the returned char is the marker chosen for this text (a char
+/// absent from it), so a document holding U+10FFFE followed by hex digits still opens. Pass it to
+/// [`to_string_with`] when writing the document back.
+pub fn parse_marked<T: DeserializeOwned>(text: &str) -> Result<(T, char), serde_json::Error> {
+    use serde::de::Error;
+    let marker = pick_marker(text);
+    let enc = encode_impl(text, true, marker).map_err(|_| {
+        serde_json::Error::custom("document uses every lone-surrogate marker character (unrepresentable)")
+    })?;
+    Ok((serde_json::from_str(&enc)?, marker))
+}
+
+/// [`to_string`] for a document parsed with [`parse_marked`].
+pub fn to_string_with<T: Serialize + ?Sized>(v: &T, pretty: bool, marker: char) -> Result<String, serde_json::Error> {
+    let s = if pretty { serde_json::to_string_pretty(v)? } else { serde_json::to_string(v)? };
+    Ok(decode_with(s, marker))
 }
 
 /// `serde_json::to_string(_pretty)` that restores lone-surrogate escapes.
@@ -215,6 +291,24 @@ mod tests {
         assert!(parse::<Value>("{\"a\":\"\u{10FFFE}d800\"}").is_err());
         assert!(parse::<Value>("{\"a\":\"\\udbff\\udffeDC00\"}").is_err());
         assert!(parse::<Value>("{\"a\":\"\\udbff\\udffe xyz\"}").is_ok());
+    }
+
+    #[test]
+    fn marked_parse_opens_lookalikes_and_round_trips() {
+        for src in [
+            "{\"a\":\"x\u{10FFFE}dc00y\"}",
+            "{\"a\":\"\u{10FFFE}d800 \\ud800 \u{10FFFF}dc00\"}",
+        ] {
+            let (v, m): (Value, char) = parse_marked(src).unwrap();
+            assert_ne!(m, SENT, "{src}");
+            assert_eq!(to_string_with(&v, false, m).unwrap(), src);
+        }
+        // an escaped pair spelling the default marker also moves the marker
+        let (v, m): (Value, char) = parse_marked("{\"a\":\"\\udbff\\udffeDC00 \\udfff\"}").unwrap();
+        assert_ne!(m, SENT);
+        assert_eq!(to_string_with(&v, false, m).unwrap(), "{\"a\":\"\u{10FFFE}DC00 \\udfff\"}");
+        let (_, m): (Value, char) = parse_marked("{\"a\":\"plain \\ud800\"}").unwrap();
+        assert_eq!(m, SENT);
     }
 
     #[test]

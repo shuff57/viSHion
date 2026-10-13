@@ -179,10 +179,11 @@ pub async fn run<S: Store>(store: S) -> std::result::Result<(), String> {
         e(pr.read_text(&format!("{slug}/project.json.damaged")).await)?.is_none(),
         "JS writes no .damaged copy"
     );
-    // valid JSON that lenient cannot represent: an error, never replaced by the stale backup
+    // marker-lookalike text (U+10FFFE + hex digits) opens via a per-document marker, never replaced
     let unrep = "{\"name\":\"N\",\"prompt\":\"\u{10FFFE}d800\",\"order\":[\"a\"]}";
     ea(pr.write_text(&format!("{slug}/project.json"), unrep)).await?;
-    check!(matches!(pr.open_project(&slug, true, T0).await, Err(StoreError::Parse { .. })), "unrepresentable is an error");
+    let ou = e(pr.open_project(&slug, true, T0).await)?.unwrap();
+    check!(!ou.from_backup && ou.assignment.meta.prompt() == "\u{10FFFE}d800", "lookalike project opens as is");
     check!(e(pr.read_text(&format!("{slug}/project.json")).await)?.unwrap() == unrep, "unrepresentable project.json untouched");
     ea(pr.write_text(&format!("{slug}/project.json"), "{\"name\": \"Alg")).await?;
     // slug taken case-insensitively: never overwrite

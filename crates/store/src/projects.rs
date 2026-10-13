@@ -194,7 +194,7 @@ impl<S: Store> Projects<S> {
             out.push(Summary {
                 slug: name,
                 name: m.get("name").map(jsx::to_string).unwrap_or_default(),
-                pages: stat("pages").unwrap_or(m.order().len() as i64),
+                pages: stat("pages").unwrap_or(m.order_len().unwrap_or(0) as i64),
                 done: stat("done").unwrap_or(0),
                 updated,
             });

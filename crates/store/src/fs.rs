@@ -66,10 +66,16 @@ impl FsStore {
     }
 }
 
+/// A path that is not there: absent, or beneath a regular file (JS folder backend: TypeMismatchError is
+/// "missing"). 267 = ERROR_DIRECTORY, 20 = ENOTDIR.
+fn is_missing(e: &std::io::Error) -> bool {
+    matches!(e.kind(), std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory) || e.raw_os_error() == Some(if cfg!(windows) { 267 } else { 20 })
+}
+
 fn walk(dir: &Path, rel: &str, out: &mut Vec<String>) -> std::io::Result<()> {
     let rd = match std::fs::read_dir(dir) {
         Ok(r) => r,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) if is_missing(&e) => return Ok(()),
         Err(e) => return Err(e),
     };
     for e in rd {
@@ -98,7 +104,7 @@ impl Store for FsStore {
     async fn get(&self, key: &str) -> Result<Option<Vec<u8>>> {
         match std::fs::read(self.path(key)?) {
             Ok(b) => Ok(Some(b)),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) if is_missing(&e) => Ok(None),
             Err(e) => Err(e.into()),
         }
     }
@@ -144,7 +150,7 @@ impl Store for FsStore {
         let p = if d.is_empty() { self.root.clone() } else { self.path(d)? };
         let rd = match std::fs::read_dir(&p) {
             Ok(r) => r,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(vec![]),
+            Err(e) if is_missing(&e) => return Ok(vec![]),
             Err(e) => return Err(e.into()),
         };
         let mut out = vec![];
@@ -169,7 +175,7 @@ impl Store for FsStore {
         };
         match r {
             Ok(()) => Ok(()),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) if is_missing(&e) => Ok(()),
             Err(e) => Err(e.into()),
         }
     }
@@ -177,7 +183,7 @@ impl Store for FsStore {
     async fn delete(&self, key: &str) -> Result<()> {
         match std::fs::remove_file(self.path(key)?) {
             Ok(()) => Ok(()),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) if is_missing(&e) => Ok(()),
             Err(e) => Err(e.into()),
         }
     }

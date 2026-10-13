@@ -6,30 +6,99 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use std::collections::BTreeMap;
 
+/// UTF-16 code units of `t` as strings (a lone surrogate is a unit of its own, spelled with `marker`).
+fn string_units(t: &str, marker: char) -> Vec<String> {
+    let mut out = vec![];
+    let cs: Vec<char> = t.chars().collect();
+    let hex = |i: usize| cs.get(i + 1..i + 5).filter(|h| h.iter().all(char::is_ascii_hexdigit));
+    let mut i = 0;
+    while i < cs.len() {
+        let c = cs[i];
+        if c == marker {
+            if let Some(h) = hex(i) {
+                let s: String = h.iter().collect();
+                if u32::from_str_radix(&s, 16).is_ok_and(|v| (0xD800..0xE000).contains(&v)) {
+                    out.push(format!("{marker}{s}"));
+                    i += 5;
+                    continue;
+                }
+            }
+        }
+        let mut b = [0u16; 2];
+        for u in c.encode_utf16(&mut b).iter() {
+            out.push(if c.len_utf16() == 2 { format!("{marker}{u:04x}") } else { c.to_string() });
+        }
+        i += 1;
+    }
+    out
+}
+
 fn s_of<'a>(m: &'a Map<String, Value>, k: &str) -> &'a str {
     m.get(k).and_then(Value::as_str).unwrap_or("")
 }
 
+/// The lone-surrogate marker character of one document (see [`lenient::pick_marker`]). Never serialised
+/// and ignored by `==`.
+#[derive(Debug, Clone, Copy)]
+pub struct Marker(pub char);
+
+impl Default for Marker {
+    fn default() -> Self {
+        Marker(lenient::SENT)
+    }
+}
+
 /// A stored project (`<slug>/project.json`), the JS `project.meta`. Real files carry no `id`
 /// (the folder slug is the identity), so nothing here is required.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct Project {
     doc: Map<String, Value>,
+    #[serde(skip)]
+    marker: Marker,
+}
+
+impl PartialEq for Project {
+    fn eq(&self, o: &Self) -> bool {
+        self.doc == o.doc
+    }
 }
 
 impl Project {
     /// Lenient parse: lone-surrogate escapes are accepted (see [`crate::lenient`]).
+    ///
+    /// Any valid JSON document is accepted, as JS `Object.assign({defaults}, JSON.parse(text))` does: an
+    /// object is the document, `null` / numbers / booleans contribute no keys, an array or a string
+    /// contributes its index keys.
     pub fn from_json(s: &str) -> Result<Self, serde_json::Error> {
-        lenient::parse(s)
+        let (v, m): (Value, char) = lenient::parse_marked(s)?;
+        let doc = match v {
+            Value::Object(m) => m,
+            Value::Array(a) => a.into_iter().enumerate().map(|(i, v)| (i.to_string(), v)).collect(),
+            Value::String(t) => string_units(&t, m).into_iter().enumerate().map(|(i, u)| (i.to_string(), Value::String(u))).collect(),
+            _ => Map::new(),
+        };
+        Ok(Project { doc, marker: Marker(m) })
     }
     /// Compact form (what pages use).
     pub fn to_json(&self) -> Result<String, serde_json::Error> {
-        lenient::to_string(self, false)
+        lenient::to_string_with(self, false, self.marker.0)
     }
     /// 2-space pretty form, no trailing newline: byte-identical to JS `JSON.stringify(meta, null, 2)`.
     pub fn to_json_pretty(&self) -> Result<String, serde_json::Error> {
-        lenient::to_string(self, true)
+        lenient::to_string_with(self, true, self.marker.0)
+    }
+    /// The lone-surrogate marker of this document.
+    pub fn marker(&self) -> char {
+        self.marker.0
+    }
+    /// JS `meta.order.length`: array length, string length in UTF-16 units, `None` (undefined) otherwise.
+    pub fn order_len(&self) -> Option<usize> {
+        match self.doc.get("order") {
+            Some(Value::Array(a)) => Some(a.len()),
+            Some(Value::String(t)) => Some(string_units(t, self.marker.0).len()),
+            _ => None,
+        }
     }
     /// `normalize` of js/fs-projects.js: `Object.assign({defaults}, meta)`. Default keys come first in
     /// default order, then the file's other keys in file order. `now` fills `created` / `updated`.
@@ -47,11 +116,11 @@ impl Project {
         for (k, v) in &self.doc {
             doc.insert(k.clone(), v.clone());
         }
-        Project { doc }
+        Project { doc, marker: self.marker }
     }
     /// New empty document (`{}`).
     pub fn empty() -> Project {
-        Project { doc: Map::new() }
+        Project { doc: Map::new(), marker: Marker::default() }
     }
     /// Display name; empty when absent or not a string.
     pub fn name(&self) -> &str {
@@ -99,7 +168,7 @@ impl Project {
 /// by `==`. JS saves a page under that key, not under the page's own `id` field.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(transparent)]
-pub struct Page(pub Map<String, Value>, #[serde(skip)] pub Option<String>);
+pub struct Page(pub Map<String, Value>, #[serde(skip)] pub Option<String>, #[serde(skip)] pub Marker);
 
 impl PartialEq for Page {
     fn eq(&self, o: &Self) -> bool {
@@ -110,15 +179,17 @@ impl PartialEq for Page {
 impl Page {
     /// Lenient parse (lone-surrogate escapes accepted).
     pub fn from_json(s: &str) -> Result<Self, serde_json::Error> {
-        lenient::parse(s)
+        let (mut p, m): (Page, char) = lenient::parse_marked(s)?;
+        p.2 = Marker(m);
+        Ok(p)
     }
     /// Compact form, byte-identical to JS `JSON.stringify(page)`.
     pub fn to_json(&self) -> Result<String, serde_json::Error> {
-        lenient::to_string(self, false)
+        lenient::to_string_with(self, false, self.2 .0)
     }
     pub fn from_value(v: Value) -> Option<Self> {
         match v {
-            Value::Object(m) => Some(Page(m, None)),
+            Value::Object(m) => Some(Page(m, None, Marker::default())),
             _ => None,
         }
     }

@@ -142,3 +142,39 @@ fn page_with_marker_lookalike_text_opens() {
     let _ = std::fs::remove_dir_all(&dir);
     assert!(o.unreadable.is_empty(), "valid JSON page reported unreadable: {:?}", o.unreadable);
 }
+
+/// Non-array `order`: JS `order.length` is the string length (UTF-16 units) and undefined otherwise.
+#[test]
+fn list_projects_counts_string_order_like_js() {
+    let dir = tmp("ordlen");
+    let pr = Projects::new(FsStore::new(&dir));
+    block_on(pr.store.put("s/project.json", "{\"name\":\"S\",\"order\":\"ab\u{1F600}\"}".as_bytes())).unwrap();
+    block_on(pr.store.put("n/project.json", br#"{"name":"N","order":5}"#)).unwrap();
+    block_on(pr.store.put("a/project.json", br#"{"name":"A","order":[1,"x",null]}"#)).unwrap();
+    let l = block_on(pr.list_projects(1)).unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+    let n = |s: &str| l.iter().find(|r| r.slug == s).unwrap().pages;
+    assert_eq!((n("s"), n("n"), n("a")), (4, 0, 3));
+}
+
+/// A marker-lookalike document survives open + save byte-identically, lone surrogates included.
+#[test]
+fn marker_lookalike_documents_round_trip() {
+    let dir = tmp("mrt");
+    let pr = Projects::new(FsStore::new(&dir));
+    let page = "{\"id\":\"a\",\"raw\":\"x\u{10FFFE}dc00y \\ud800 z\"}";
+    let proj = "{\n  \"name\": \"Q\u{10FFFE}d800\\udc00\",\n  \"order\": [\n    \"a\"\n  ]\n}";
+    block_on(pr.store.put("q/project.json", proj.as_bytes())).unwrap();
+    block_on(pr.store.put("q/pages/a.json", page.as_bytes())).unwrap();
+    let mut o = block_on(pr.open_project("q", true, 1)).unwrap().unwrap();
+    assert!(o.unreadable.is_empty());
+    for (_, p) in o.assignment.pages.clone() {
+        block_on(pr.save_page("q", &p)).unwrap();
+    }
+    block_on(pr.save_meta("q", &mut o.assignment.meta, None)).unwrap();
+    let p2 = String::from_utf8(block_on(pr.store.get("q/pages/a.json")).unwrap().unwrap()).unwrap();
+    let j2 = String::from_utf8(block_on(pr.store.get("q/project.json")).unwrap().unwrap()).unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(p2, page);
+    assert_eq!(j2, "{\n  \"schemaVersion\": 1,\n  \"name\": \"Q\u{10FFFE}d800\\udc00\",\n  \"topic\": \"General\",\n  \"prompt\": \"\",\n  \"order\": [\n    \"a\"\n  ],\n  \"created\": 1,\n  \"updated\": 1,\n  \"ui\": {},\n  \"stats\": null\n}");
+}
