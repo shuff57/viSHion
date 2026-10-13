@@ -329,6 +329,42 @@ try {
     expect(said.trim() !== '', 'Rotate this page says that it turned: ' + JSON.stringify(said));
     await ctx.close();
   }
+  // ---- round 8 (blind critic): keyboard-only walk with a real tree
+  {
+    const { ctx, page, pump } = await open({ width: 1280, height: 800 });
+    const act = () => page.evaluate(() => document.activeElement?.dataset?.id ?? document.activeElement?.tagName);
+    const said = () => page.evaluate(() => document.getElementById('announce').textContent + document.getElementById('announce-alert').textContent);
+    const clear = () => page.evaluate(() => { document.getElementById('announce').textContent = ''; document.getElementById('announce-alert').textContent = ''; });
+    const press = async (id) => { await page.evaluate((i) => document.querySelector(`#controls [data-id="${i}"]`).focus(), id); await clear(); await page.keyboard.press('Enter'); await pump(8); };
+    // r. choosing a word opens the word panel and says nothing (Check words says it; activating a word in the text does not)
+    await press('word-p-maya-1-c:0');
+    expect(/word|check|option|choose/i.test(await said()), 'Enter on a flagged word in the text says that the word panel opened and which word it is on: ' + JSON.stringify(await said()));
+    // s. the Marks toggle changes its name and nothing says it
+    await press('boxes');
+    expect((await said()).trim() !== '', 'Marks on the page toggle says the new state: ' + JSON.stringify(await said()));
+    // t. the logo takes you home like the breadcrumb does, but focus stays on the logo and nothing is said
+    await press('brand'); const f = await act();
+    expect(f !== 'brand' || (await said()).trim() !== '', 'the viSHion logo (go home) moves focus to the new screen\'s heading or says where you are, as the breadcrumb does: focus ' + f);
+    await ctx.close();
+  }
+  {
+    // u. Settings announces internal values, not what the button says: "Text to export: raw", "Between pages: label", "Combined file: md"
+    const { ctx, page, pump } = await open({ width: 1280, height: 800 });
+    await page.evaluate(() => document.querySelector('#controls [data-id="settings"]').focus()); await page.keyboard.press('Enter'); await pump(8);
+    const bad = [];
+    for (const [id, names] of [['st-txt-raw', /original/i], ['st-sep-label', /page/i], ['st-fmt-md', /markdown/i], ['theme-auto', /device|match/i]]) {
+      await page.evaluate((i) => document.querySelector(`#controls [data-id="${i}"]`).focus(), id);
+      await page.evaluate(() => { document.getElementById('announce').textContent = ''; });
+      await page.keyboard.press('Space'); await pump(5);
+      const s = await page.evaluate(() => document.getElementById('announce').textContent);
+      if (!names.test(s)) bad.push(id + ' said ' + JSON.stringify(s));
+    }
+    expect(bad.length === 0, 'Settings choices are announced with the words on the buttons, not internal values: ' + bad.join('; '));
+    // v. the API key is a secret: JS uses type=password
+    const t = await page.evaluate(() => document.querySelector('#controls [data-id="st-key"]').getAttribute('type'));
+    expect(t === 'password', 'the API key text box is type=password as in js/ui/settings.js (it is "' + t + '", so a screen reader reads the key aloud and it sits in the tree)');
+    await ctx.close();
+  }
 } catch (e) {
   console.error(e);
   failures.push('exception: ' + (e && e.message));

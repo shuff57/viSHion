@@ -872,6 +872,50 @@ mod tests {
         assert!(tex_speech(r"x \sim \text{Binomial}(n, p)").contains("distributed"));
     }
 
+    /// Blind critic round 8: formulas a listener mishears. `#[ignore]`d so the workspace stays green; run with
+    /// `cargo test -p vishion-ui -- --ignored round8`. Failing by design.
+    #[test]
+    #[ignore = "blind critic round 8: failing by design"]
+    fn round8_function_composition_and_dot_products() {
+        let s = tex_speech(r"f \circ g");
+        assert!(!s.contains("degrees"), "composition is not degrees: {s}");
+        let s = tex_speech(r"\vec{v} \cdot \vec{w}");
+        assert!(s.contains("dot"), "a dot product is not 'times': {s}");
+        let s = tex_speech(r"\nabla \cdot \vec{F}");
+        assert!(s.contains("dot") || s.contains("divergence"), "divergence: {s}");
+    }
+
+    #[test]
+    #[ignore = "blind critic round 8: failing by design"]
+    fn round8_logs_inverses_transpose_and_evaluation_bars() {
+        assert!(tex_speech(r"\log_2 8").contains("base 2"), "{}", tex_speech(r"\log_2 8"));
+        assert!(tex_speech(r"\log_{10} 100").contains("base 10"));
+        assert!(tex_speech(r"A^T").contains("transpose"), "{}", tex_speech(r"A^T"));
+        assert!(tex_speech(r"A^{-1}").contains("inverse"), "{}", tex_speech(r"A^{-1}"));
+        assert!(tex_speech(r"\tan^{-1} x").contains("inverse"), "{}", tex_speech(r"\tan^{-1} x"));
+        let s = tex_speech(r"\vert x \vert");
+        assert!(!s.contains("vert"), "{s}");
+        let s = tex_speech(r"\frac{dy}{dx}\bigg|_{x=2}");
+        assert!(!s.contains("bigg") && !s.contains("divides"), "evaluated at: {s}");
+        let s = tex_speech(r"\left. \frac{x^2}{2} \right|_0^1");
+        assert!(!s.starts_with('.') && !s.contains("divides"), "evaluated from 0 to 1: {s}");
+        let s = tex_speech(r"\oint_C F");
+        assert!(!s.contains("from C"), "a contour integral goes around C: {s}");
+    }
+
+    #[test]
+    #[ignore = "blind critic round 8: failing by design"]
+    fn round8_arcs_underbraces_and_cardinality() {
+        for t in [r"\underbrace{a+b}_{2}", r"\overset{\frown}{AB}"] {
+            let s = tex_speech(t);
+            assert!(!s.contains("underbrace") && !s.contains("overset") && !s.contains("frown"), "{t}: {s}");
+        }
+        let s = tex_speech(r"m\widehat{AB}");
+        assert!(s.contains("arc"), "an arc over letters is an arc, not 'hat': {s}");
+        let s = tex_speech(r"|S| = 5");
+        assert!(!s.contains("absolute value"), "the size of a set: {s}");
+    }
+
     #[test]
     fn groups_and_landmarks() {
         assert_eq!(group_of("page-p1").map(|g| g.0), Some("pages"));
