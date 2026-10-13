@@ -18,6 +18,7 @@ use std::time::Duration;
 
 mod bands;
 mod dialog;
+pub mod emoji;
 mod flow;
 pub mod host;
 pub mod math;
@@ -333,6 +334,11 @@ pub struct App {
     stage: review::Stage,
     /// Pictures the screen asked for while drawing (inbox thumbnails).
     want: Vec<String>,
+    /// Colour emoji: the face (linked in natively, fetched on the web) and the pictures drawn from it.
+    emoji: emoji::EmojiCache,
+    emoji_requested: bool,
+    /// Bumped when a picture or a font arrives: the page may have moved under the selected word.
+    layout_epoch: u32,
     font_requested: bool,
     /// The fallback font is installed / was asked for / the text last checked for glyphs it needs.
     fallback_loaded: bool,
@@ -382,6 +388,15 @@ impl App {
             dialog: None,
             stage: review::Stage::default(),
             want: vec![],
+            emoji: {
+                let mut c = emoji::EmojiCache::default();
+                if let Some(b) = theme::bundled_emoji() {
+                    c.set_font(b);
+                }
+                c
+            },
+            emoji_requested: false,
+            layout_epoch: 0,
             font_requested: false,
             fallback_loaded: theme::bundled_fallback().is_some(),
             fallback_font: theme::bundled_fallback(),
@@ -528,6 +543,7 @@ impl App {
                 }
                 Event::Failed(m) => self.boot = Boot::Failed(m),
                 Event::Image { id, bytes } => {
+                    self.layout_epoch += 1;
                     let slot = bytes.and_then(|b| decode_image(&self.ctx, &id, &b)).map_or(Slot::Missing, Slot::Ready);
                     self.images.insert(id, slot);
                 }
@@ -549,6 +565,7 @@ impl App {
                     }
                 }
                 Event::PageReplaced { id, name, bytes } => {
+                    self.layout_epoch += 1;
                     if let Some(s) = &mut self.session {
                         s.page_replaced(&id, &name);
                     }
@@ -558,6 +575,7 @@ impl App {
                     self.status_err = false;
                 }
                 Event::PagesAdded { pages } => {
+                    self.layout_epoch += 1;
                     let n = pages.len();
                     let mut first = None;
                     let mut list = vec![];
@@ -581,6 +599,7 @@ impl App {
                 }
                 Event::Many(_) => {}
                 Event::Straightened { id, angle, bytes } => {
+                    self.layout_epoch += 1;
                     if let Some(b) = bytes {
                         let slot = decode_image(&self.ctx, &id, &b).map_or(Slot::Missing, Slot::Ready);
                         self.images.insert(id.clone(), slot);
@@ -635,8 +654,19 @@ impl App {
                         self.status_err = true;
                     }
                 },
-                Event::MathFont(bytes) => self.math.set_font(bytes),
+                Event::EmojiFont(bytes) => {
+                    if !bytes.is_empty() {
+                        self.layout_epoch += 1;
+                        let leaked: &'static [u8] = Box::leak(bytes.into_boxed_slice());
+                        self.emoji.set_font(leaked);
+                    }
+                }
+                Event::MathFont(bytes) => {
+                    self.layout_epoch += 1;
+                    self.math.set_font(bytes)
+                }
                 Event::FallbackFont(bytes) => {
+                    self.layout_epoch += 1;
                     if !bytes.is_empty() {
                         let leaked: &'static [u8] = Box::leak(bytes.into_boxed_slice());
                         self.fallback_font = Some(leaked);
@@ -704,6 +734,19 @@ impl App {
         self.save.pending += cmds.len() as u32;
         for c in cmds {
             self.send(c);
+        }
+    }
+
+    /// Web: ask for the colour emoji face once the open page has an emoji.
+    fn check_emoji_font(&mut self) {
+        if self.emoji.has_font() || self.emoji_requested {
+            return;
+        }
+        let Some(s) = &self.session else { return };
+        let Some(p) = s.current() else { return };
+        if emoji::has_emoji(p.raw()) {
+            self.emoji_requested = true;
+            self.send(Cmd::LoadEmojiFont);
         }
     }
 
@@ -840,6 +883,7 @@ impl App {
             let _ = id;
         }
         self.check_fallback_font(ctx);
+        self.check_emoji_font();
         if self.math.wants_font() && !self.font_requested {
             self.font_requested = true;
             self.send(Cmd::LoadMathFont);

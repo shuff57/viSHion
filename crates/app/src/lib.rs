@@ -83,6 +83,12 @@ mod web {
                                     inbox.push(Event::MathFont(bytes));
                                     return;
                                 }
+                                if matches!(cmd, Cmd::LoadEmojiFont) {
+                                    // colour emoji: a 1.4 MB COLR face, fetched only for a page that has an emoji
+                                    let bytes = fetch_bytes("twemoji-colr.ttf").await.unwrap_or_default();
+                                    inbox.push(Event::EmojiFont(bytes));
+                                    return;
+                                }
                                 if matches!(cmd, Cmd::LoadFallbackFont) {
                                     // CJK, Hangul and emoji: a 4 MB file fetched only for a page that has such text
                                     let bytes = fetch_bytes("fallback-cjk-emoji.ttf").await.unwrap_or_default();

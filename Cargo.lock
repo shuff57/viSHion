@@ -3592,12 +3592,14 @@ dependencies = [
 name = "vishion-ui"
 version = "0.1.0"
 dependencies = [
+ "ab_glyph_rasterizer",
  "eframe",
  "egui",
  "image",
  "js-sys",
  "latex-rust",
  "serde_json",
+ "ttf-parser",
  "vishion-core",
  "wasm-bindgen",
  "web-sys",

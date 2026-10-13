@@ -21,3 +21,14 @@ all emoji code points). All are SIL Open Font License 1.1 (Copyright Google LLC 
 Native links it in; the web build does not (`ui::theme::bundled_fallback`), the host fetches
 `fallback-cjk-emoji.ttf` the first time the open page has a character no bundled face can draw
 (`Cmd::LoadFallbackFont`), the same way the math font is fetched.
+
+`twemoji-colr.ttf` (1.4 MB) is Twemoji Mozilla 0.7.0 (COLR v0, 3,689 colour glyphs, ligatures for ZWJ sequences,
+flags and keycaps), the Mozilla COLR build of Twitter's Twemoji. Graphics (c) 2020 Twitter, Inc and other
+contributors, licensed CC-BY 4.0 (https://creativecommons.org/licenses/by/4.0/); the font tooling is Apache 2.0.
+`ui::emoji` rasterises its layers into small bitmaps that the transcript draws between the words, so emoji are
+in colour on native and on the web (egui itself only draws single-colour outlines). Native links the file in;
+the web build fetches it the first time the open page has an emoji (`Cmd::LoadEmojiFont`).
+
+`vishion-marks.ttf` (1 KB) is a face drawn for this app (generated with fontTools, no third-party outlines): the
+check mark and cross (U+2713, U+2717) and the ballot boxes (U+2610 to U+2612), which none of the text faces
+above have and which teachers write on student work.

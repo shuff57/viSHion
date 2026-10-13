@@ -34,6 +34,9 @@ pub enum Cmd {
     Export { slug: String, name: String, bytes: Vec<u8> },
     /// Web: fetch the STIX Two Math font once (it is not part of the wasm, plan risk "wasm size").
     LoadMathFont,
+    /// Web: fetch the colour emoji face (1.4 MB, not part of the wasm) when a page has an emoji. The native
+    /// app links it in.
+    LoadEmojiFont,
     /// Web: fetch the CJK, Hangul and emoji fallback font (4 MB, not part of the wasm) when a page has text
     /// the bundled faces cannot draw. The native app links it in.
     LoadFallbackFont,
@@ -79,6 +82,8 @@ pub enum Event {
     MathFont(Vec<u8>),
     /// The fallback font bytes (web).
     FallbackFont(Vec<u8>),
+    /// The colour emoji face (web).
+    EmojiFont(Vec<u8>),
 }
 
 /// What reading a page gave.

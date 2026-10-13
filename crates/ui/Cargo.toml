@@ -15,6 +15,9 @@ serde_json.workspace = true
 latex-rust = { version = "2.1.1", features = ["egui"] }
 # Page images are stored as JPEG; decode in pure Rust so native and wasm behave the same.
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+# Colour emoji: COLR layers from the bundled face, rasterised with the same crate egui's fonts use.
+ttf-parser = { version = "0.25", default-features = false, features = ["std", "opentype-layout"] }
+ab_glyph_rasterizer = "0.1"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 eframe = { workspace = true, features = ["x11", "wayland"] }

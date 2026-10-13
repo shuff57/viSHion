@@ -6,6 +6,7 @@
 //! the borrow of the session stays shared while egui closures run. Keys are routed by where focus is
 //! (transcript, strip, stage, tray, dialog), exactly as the JS handlers hang off those elements.
 use crate::dialog::{self, After, Dialog};
+use crate::emoji;
 use crate::flow;
 use crate::state::{self, BoxMode, Entry, Kind, PillKind, Session, View};
 use crate::theme::{self, Tokens};
@@ -38,8 +39,10 @@ pub(crate) struct Stage {
     mark_seen: Option<(Option<usize>, Option<usize>)>,
     /// Frames left in which the selected word / the reading line is kept in view. The tray (and the page's
     /// layout) settle over a frame or two after a selection, so one request is not enough.
-    sel_left: u8,
+    sel_until: f64,
     read_left: u8,
+    /// `App::layout_epoch` last seen: a picture or a font arrived and may have moved the page.
+    epoch_seen: u32,
     /// Height of the transcript's scroll area last frame: when the tray grows (its crop arrives, the options
     /// wrap) the selected word is brought back into view.
     text_h: f32,
@@ -107,6 +110,9 @@ struct Cx<'a> {
     narrow: bool,
     screen_h: f32,
     stage: &'a mut Stage,
+    /// `App::layout_epoch`: counts pictures and fonts that arrived (they move the page).
+    epoch: u32,
+    emoji: &'a mut emoji::EmojiCache,
     /// Page pictures a row asks for (visible thumbnails): loaded by the host, answered as `Event::Image`.
     want: &'a mut Vec<String>,
     /// Keep the selected word / the reading line in view this frame.
@@ -151,7 +157,7 @@ fn tw(ui: &Ui, text: &str, font: egui::FontId) -> f32 {
 }
 
 pub(crate) fn show(app: &mut App, ctx: &egui::Context, t: &Tokens) {
-    let App { ctl, session, math, images, typed, typed_for, status_msg, status_err, boot, notice, save, storage, dialog, stage, host, want, .. } = app;
+    let App { ctl, session, math, images, typed, typed_for, status_msg, status_err, boot, notice, save, storage, dialog, stage, host, want, layout_epoch, emoji: emoji_cache, .. } = app;
     let mut acts: Vec<Act> = vec![];
     if let Some(s) = session.as_mut() {
         // js renderWho: Original cannot stay set where both versions read the same
@@ -175,6 +181,8 @@ pub(crate) fn show(app: &mut App, ctx: &egui::Context, t: &Tokens) {
                 screen_h: screen.height(),
                 stage: &mut *stage,
                 want: &mut *want,
+                emoji: &mut *emoji_cache,
+                epoch: *layout_epoch,
                 scroll_sel: false,
                 scroll_read: false,
             };
@@ -1078,15 +1086,25 @@ fn review(ctx: &egui::Context, cx: &mut Cx, s: &Session, narrow: bool) {
     // (review.js `scrollIntoView({ block: 'nearest' })`). A change starts a short run of frames, since the
     // tray and the page settle over a frame or two.
     let read = s.selected.as_ref().and_then(|id| s.read_line.get(id)).copied();
+    let now = ctx.input(|i| i.time);
+    let epoch = cx.epoch;
     let st = &mut *cx.stage;
+    // the reader scrolling takes the page back: the word is no longer pinned
+    if ctx.input(|i| i.raw_scroll_delta != Vec2::ZERO) {
+        st.sel_until = 0.0;
+    }
     if s.sel_word.is_none() {
         st.sel_seen = None;
-        st.sel_left = 0;
+        st.sel_until = 0.0;
     } else if st.sel_seen != s.sel_word || st.tray_seen != s.tray_open {
         st.sel_seen = s.sel_word.clone();
         st.tray_seen = s.tray_open;
-        st.sel_left = 6;
+        st.sel_until = now + 1.5;
+    } else if st.epoch_seen != epoch {
+        // a picture or font arrived and moved things: keep the word where the reader can see it
+        st.sel_until = st.sel_until.max(now + 1.2);
     }
+    st.epoch_seen = epoch;
     if read.is_none() {
         st.read_seen = None;
         st.read_left = 0;
@@ -1094,15 +1112,16 @@ fn review(ctx: &egui::Context, cx: &mut Cx, s: &Session, narrow: bool) {
         st.read_seen = read;
         st.read_left = 6;
     }
-    cx.scroll_sel = cx.stage.sel_left > 0;
+    cx.scroll_sel = now < cx.stage.sel_until;
     cx.scroll_read = cx.stage.read_left > 0;
     review_panes(ctx, cx, s, narrow);
     let st = &mut *cx.stage;
-    for left in [&mut st.sel_left, &mut st.read_left] {
-        if *left > 0 {
-            *left -= 1;
-            ctx.request_repaint();
-        }
+    if st.read_left > 0 {
+        st.read_left -= 1;
+        ctx.request_repaint();
+    }
+    if now < st.sel_until {
+        ctx.request_repaint_after(std::time::Duration::from_millis(60));
     }
 }
 
@@ -1137,7 +1156,7 @@ fn review_panes(ctx: &egui::Context, cx: &mut Cx, s: &Session, narrow: bool) {
                 }
                 text_column(ui, cx, s, g.as_ref(), &entries);
             });
-            note_view_height(cx, out.inner_rect.height());
+            note_view_height(cx, ctx.input(|i| i.time), out.inner_rect.height());
         });
     } else {
         if s.split {
@@ -1175,7 +1194,7 @@ fn review_panes(ctx: &egui::Context, cx: &mut Cx, s: &Session, narrow: bool) {
                 let out = area.show(ui, |ui| {
                     text_column(ui, cx, s, g.as_ref(), &entries);
                 });
-                note_view_height(cx, out.inner_rect.height());
+                note_view_height(cx, ctx.input(|i| i.time), out.inner_rect.height());
                 // review.js: `pane.addEventListener('scroll', debounce(save, 600))`
                 let y = out.state.offset.y;
                 let now = ui.input(|i| i.time);
@@ -1202,9 +1221,9 @@ fn review_panes(ctx: &egui::Context, cx: &mut Cx, s: &Session, narrow: bool) {
 }
 
 /// The tray changed height (its crop arrived, the options wrapped, a window resize): keep the word in view.
-fn note_view_height(cx: &mut Cx, h: f32) {
+fn note_view_height(cx: &mut Cx, now: f64, h: f32) {
     if cx.stage.text_h > 0.0 && (cx.stage.text_h - h).abs() > 0.5 {
-        cx.stage.sel_left = cx.stage.sel_left.max(4);
+        cx.stage.sel_until = cx.stage.sel_until.max(now + 1.0);
     }
     cx.stage.text_h = h;
 }
@@ -1764,6 +1783,8 @@ fn transcript_group(ui: &mut Ui, cx: &mut Cx, block: Rect) {
 enum Atom {
     Text { g: std::sync::Arc<egui::Galley>, color: Color32, strike: bool, code: bool },
     Math { tex: String, display: bool },
+    /// A colour emoji picture (`emoji.rs`), `size` in points.
+    Emoji { tex: egui::TextureId, size: Vec2 },
     Chip { id: String, label: String, g: std::sync::Arc<egui::Galley>, kind: Kind, checked: bool, selected: bool, key: String },
 }
 
@@ -1867,34 +1888,64 @@ fn unit(ui: &mut Ui, cx: &mut Cx, s: &Session, p: &Page, line: &Line, items: &[w
         let color = if st.strike || small { t.muted } else { t.ink };
         let color = if force_ink { t.ink } else { color };
         cx.ctl.para_text(txt);
+        // the font's own row height: what an emoji's line box is
+        let nat_h = ui.painter().layout_no_wrap("Hg".to_string(), font.clone(), color).size().y;
+        enum P {
+            T(String),
+            E(egui::TextureId, Vec2),
+        }
         for (word, spaces) in split_tokens(txt) {
-            let mut pieces: Vec<String> = vec![];
-            // an overlong token (no spaces, e.g. a URL) breaks by characters so it never leaves the column
-            let g = ui.painter().layout_no_wrap(word.clone(), font.clone(), color);
-            if g.size().x > width && word.chars().count() > 1 {
-                let mut cur = String::new();
-                for c in word.chars() {
-                    let mut probe = cur.clone();
-                    probe.push(c);
-                    if !cur.is_empty() && ui.painter().layout_no_wrap(probe, font.clone(), color).size().x > width {
-                        pieces.push(std::mem::take(&mut cur));
-                    }
-                    cur.push(c);
-                }
-                if !cur.is_empty() {
-                    pieces.push(cur);
-                }
+            // colour emoji are pictures between the words; everything else is text
+            let segs: Vec<emoji::Seg> = if cx.emoji.has_font() && emoji::has_emoji(&word) {
+                emoji::segments(&word)
             } else {
-                pieces.push(word.clone());
+                vec![emoji::Seg::Text(&word)]
+            };
+            let mut parts: Vec<P> = vec![];
+            for seg in segs {
+                match seg {
+                    emoji::Seg::Emoji(c) => match cx.emoji.get(ui.ctx(), c, px) {
+                        Some((tex, size)) => parts.push(P::E(tex, size)),
+                        None => parts.push(P::T(c.to_string())),
+                    },
+                    emoji::Seg::Text(s) => {
+                        // an overlong token (no spaces, e.g. a URL) breaks by characters so it never leaves the column
+                        let g = ui.painter().layout_no_wrap(s.to_string(), font.clone(), color);
+                        if g.size().x > width && s.chars().count() > 1 {
+                            let mut cur = String::new();
+                            for c in s.chars() {
+                                let mut probe = cur.clone();
+                                probe.push(c);
+                                if !cur.is_empty() && ui.painter().layout_no_wrap(probe, font.clone(), color).size().x > width {
+                                    parts.push(P::T(std::mem::take(&mut cur)));
+                                }
+                                cur.push(c);
+                            }
+                            if !cur.is_empty() {
+                                parts.push(P::T(cur));
+                            }
+                        } else {
+                            parts.push(P::T(s.to_string()));
+                        }
+                    }
+                }
             }
-            let n = pieces.len();
-            for (k, piece) in pieces.into_iter().enumerate() {
-                let g = ui.painter().layout_no_wrap(piece, font.clone(), color);
+            let n = parts.len();
+            for (k, part) in parts.into_iter().enumerate() {
                 let last = k + 1 == n;
                 let trail = if last { spaces as f32 * space_w } else { 0.0 };
                 let breakable = !last || spaces > 0;
-                it.push(flow::Item { w: g.size().x, h: g.size().y, trail, brk: breakable || !last });
-                atoms.push(Atom::Text { g, color, strike: st.strike, code: st.code });
+                match part {
+                    P::T(piece) => {
+                        let g = ui.painter().layout_no_wrap(piece, font.clone(), color);
+                        it.push(flow::Item { w: g.size().x, h: g.size().y, trail, brk: breakable || !last });
+                        atoms.push(Atom::Text { g, color, strike: st.strike, code: st.code });
+                    }
+                    P::E(tex, size) => {
+                        it.push(flow::Item { w: size.x, h: nat_h, trail, brk: breakable || !last });
+                        atoms.push(Atom::Emoji { tex, size });
+                    }
+                }
             }
         }
     };
@@ -1991,6 +2042,12 @@ fn unit(ui: &mut Ui, cx: &mut Cx, s: &Session, p: &Page, line: &Line, items: &[w
             }
             Atom::Math { tex, display } => {
                 paint_math(ui, cx, tex, *display, px * KATEX_EM, pos2(x, top));
+            }
+            Atom::Emoji { tex, size } => {
+                // the picture's baseline sits on the text baseline of its line
+                let asc = item.h * if small { 0.795 } else { 0.756 };
+                let rect = Rect::from_min_size(pos2(x, top + asc - emoji::BASELINE * size.y), *size);
+                ui.painter().image(*tex, rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
             }
             Atom::Chip { id, label, g, kind, checked, selected, key } => {
                 let chip = Rect::from_min_size(pos2(x, origin.y + pl.line_top + (lh - item.h) / 2.0), vec2(item.w, item.h));

@@ -30,7 +30,7 @@ impl Rig {
         let (b2, i2) = (be.clone(), inbox.clone());
         let dispatch: vishion_ui::Dispatch = Box::new(move |c: Cmd| {
             // picture dialogs and font fetches are not part of the rig
-            if matches!(c, Cmd::LoadMathFont | Cmd::LoadFallbackFont | Cmd::ReplaceImage { .. } | Cmd::AddPages { .. }) {
+            if matches!(c, Cmd::LoadMathFont | Cmd::LoadFallbackFont | Cmd::LoadEmojiFont | Cmd::ReplaceImage { .. } | Cmd::AddPages { .. }) {
                 return;
             }
             i2.push(block_on(b2.handle(c, 1_700_000_000_000)));

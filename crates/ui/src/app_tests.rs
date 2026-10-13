@@ -1154,3 +1154,49 @@ fn blind3_transcript_scroll_position_is_persisted_and_restored() {
     let back = h.s().scroll_req.map(|(_, o)| o).unwrap();
     assert!((back as f64 - y).abs() < 1.0, "restored {back}, saved {y}");
 }
+
+/// Blind critic round 3, phone 390 x 844 in a real browser: the picture, the crop and the math font arrive
+/// after the word was selected and move the page; the word being decided must still be on screen, between
+/// the top bar and the tray (it was left scrolled off above the header).
+#[test]
+fn blind3_phone_word_stays_on_screen_while_pictures_arrive() {
+    let mut h = H::new("m1");
+    h.size = (390.0, 844.0);
+    h.frames(8);
+    let w = h.word_id("c:0");
+    // first the picture arrives (a tall page above the transcript), then the crop shows up in the tray
+    h.with_picture();
+    h.frames(12);
+    h.app.host.as_ref().unwrap().1.push(Event::MathFont(vec![]));
+    h.frames(12);
+    let hdr_bottom = h.app.controls().iter().filter(|c| c.region == crate::twin::HEADER).map(|c| c.at.1 + c.size.1 as i32).max().unwrap() + 9;
+    let tray_top = h.ctl("prev-word").expect("tray controls").at.1 - 12;
+    let word = h.ctl(&w).expect("word control").at.1;
+    let (top, bottom) = (word + 22 - 15, word + 22 + 15);
+    assert!(top >= hdr_bottom, "the word starts at {top}, under the {hdr_bottom}px top bar");
+    assert!(bottom <= tray_top, "the word ends at {bottom}, behind the tray that starts at {tray_top}");
+}
+
+/// Blind critic round 3: U+1F600 drew as a monochrome outline. The transcript shows emoji as colour pictures
+/// (a COLR face rasterised in `emoji.rs`), between the words, and the twin still carries them as text.
+#[test]
+fn blind3_emoji_are_drawn_in_colour_between_the_words() {
+    let mut h = H::new("m1");
+    h.sess().a.pages.get_mut("m1").unwrap().set("raw", serde_json::json!("Last line with \u{65E5}\u{672C}\u{8A9E} \u{1F600}\nand a flag \u{1F1EF}\u{1F1F5} and \u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467} here"));
+    h.sess().a.pages.get_mut("m1").unwrap().set("corrected", serde_json::json!(""));
+    h.sess().a.pages.get_mut("m1").unwrap().set("corrections", serde_json::json!([]));
+    h.frames(6);
+    assert!(h.app.emoji.has_font(), "the face is linked into the native app");
+    assert_eq!(h.app.emoji.drawn(), 3, "smile, flag and family are three pictures");
+    // the paragraph keeps the characters for assistive tech
+    let text: String = h
+        .app
+        .nodes()
+        .iter()
+        .filter_map(|n| match n {
+            Node::Para { parts, .. } => Some(parts.iter().filter_map(|p| if let Part::Text(t) = p { Some(t.as_str()) } else { None }).collect::<String>()),
+            _ => None,
+        })
+        .collect();
+    assert!(text.contains('\u{1F600}'), "{text:?}");
+}

@@ -169,6 +169,7 @@ pub const MONO: &str = "mono-400";
 pub const MONO_BOLD: &str = "mono-700";
 
 pub const FALLBACK: &str = "fallback-cjk-emoji";
+pub const MARKS: &str = "vishion-marks";
 
 /// The CJK / Hangul / emoji fallback (Noto Sans JP, SC, KR and Noto Emoji, 4 MB). Native links it in; the web
 /// build fetches it on demand (`Cmd::LoadFallbackFont`) so it is not part of the wasm.
@@ -181,12 +182,23 @@ pub fn bundled_fallback() -> Option<&'static [u8]> {
     None
 }
 
+/// The colour emoji face (Twemoji Mozilla, COLR v0, 1.4 MB). Native links it in; the web build fetches it on
+/// demand (`Cmd::LoadEmojiFont`).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn bundled_emoji() -> Option<&'static [u8]> {
+    Some(include_bytes!("../assets/fonts/twemoji-colr.ttf"))
+}
+#[cfg(target_arch = "wasm32")]
+pub fn bundled_emoji() -> Option<&'static [u8]> {
+    None
+}
+
 /// Our faces only. egui's own fonts are not linked (see crates/vendor/PATCHES.md); Hack (Latin, Greek,
 /// operators) is the monospace face, and `fallback` (when present) is the last resort for scripts the
 /// Latin faces do not have (CJK, Hangul, emoji: student writing is in any script).
 pub fn fonts(fallback: Option<&'static [u8]>) -> FontDefinitions {
     let mut f = FontDefinitions::empty();
-    let files: [(&str, &'static [u8]); 8] = [
+    let files: [(&str, &'static [u8]); 9] = [
         ("Instrument Sans", include_bytes!("../assets/fonts/instrument-sans-latin-400-normal.ttf")),
         (SANS_MEDIUM, include_bytes!("../assets/fonts/instrument-sans-latin-500-normal.ttf")),
         (SANS_SEMI, include_bytes!("../assets/fonts/instrument-sans-latin-600-normal.ttf")),
@@ -195,6 +207,9 @@ pub fn fonts(fallback: Option<&'static [u8]>) -> FontDefinitions {
         (SERIF_ITALIC, include_bytes!("../assets/fonts/source-serif-4-latin-400-italic.ttf")),
         (MONO, include_bytes!("../assets/fonts/hack-latin-400-normal.ttf")),
         (MONO_BOLD, include_bytes!("../assets/fonts/hack-latin-700-normal.ttf")),
+        // check marks and ballot boxes (U+2713, 2717, 2610 to 2612): none of the text faces has them and
+        // teachers write them, so the app draws its own
+        (MARKS, include_bytes!("../assets/fonts/vishion-marks.ttf")),
     ];
     for (name, bytes) in files {
         f.font_data.insert(name.to_string(), FontData::from_static(bytes));
@@ -204,6 +219,7 @@ pub fn fonts(fallback: Option<&'static [u8]>) -> FontDefinitions {
     }
     let with = |first: &str| -> Vec<String> {
         let mut v = if first == MONO { vec![MONO.to_string()] } else { vec![first.to_string(), MONO.to_string()] };
+        v.push(MARKS.to_string());
         if fallback.is_some() {
             v.push(FALLBACK.to_string());
         }
