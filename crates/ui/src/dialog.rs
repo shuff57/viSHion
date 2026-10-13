@@ -237,7 +237,10 @@ fn settings(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, s: &Session, drafts: &mut st
     let get_s = |k: &str, d: &str| s.settings.get(k).and_then(|v| v.as_str()).unwrap_or(d).to_string();
     let get_b = |k: &str, d: bool| s.settings.get(k).and_then(|v| v.as_bool()).unwrap_or(d);
     let max_h = (ui.ctx().screen_rect().height() - 190.0).clamp(150.0, 560.0);
+    let from = ctl.node_count();
+    let mut clip = ui.clip_rect();
     egui::ScrollArea::vertical().max_height(max_h).auto_shrink([true, true]).show(ui, |ui| {
+        clip = ui.clip_rect();
         ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
             section(ctl, ui, t, "set-appearance", "Appearance");
             label(ctl, ui, t, "settings-theme-label", "Theme");
@@ -318,6 +321,7 @@ fn settings(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, s: &Session, drafts: &mut st
             ctl.flush_scroll(ui, &[DIALOG]);
         });
     });
+    ctl.clip_since(from, clip);
     ui.add_space(4.0);
     if widgets::button(ctl, ui, t, C::new("dialog-close", "Done", DIALOG), "Done", Look::Primary, 0.0) {
         out = Some(Out::Close);
@@ -342,7 +346,10 @@ fn change_student(
     let r = ui.label(RichText::new("This page belongs to").font(theme::sans_semi(14.0)).color(t.ink));
     ctl.text("cs-label", "This page belongs to", DIALOG, r.rect);
     let names = s.other_students();
+    let from = ctl.node_count();
+    let mut clip = ui.clip_rect();
     egui::ScrollArea::vertical().max_height(220.0).auto_shrink([true, true]).show(ui, |ui| {
+        clip = ui.clip_rect();
         ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
             for (i, n) in names.iter().enumerate() {
                 let on = pick.as_deref() == Some(n.as_str()) && !*new_student;
@@ -366,6 +373,7 @@ fn change_student(
             ctl.flush_scroll(ui, &[DIALOG]);
         });
     });
+    ctl.clip_since(from, clip);
     if *new_student {
         let (slot, _) = ui.allocate_exact_size(vec2(ui.available_width(), TARGET), Sense::hover());
         let edit = egui::TextEdit::singleline(name).hint_text("Student name").font(theme::sans(14.0)).margin(vec2(12.0, 13.0)).desired_width(slot.width() - 24.0);

@@ -107,6 +107,9 @@ pub struct Ctl {
     pub(crate) dom_focus: Option<String>,
     /// A dialog was open at the end of the last frame, and where focus goes back to when it closes.
     pub(crate) dialog_was: bool,
+    /// The dialog a confirmation is stacked on (Settings under "Clear remembered fixes", as modal.js stacks
+    /// them) and the control that gets focus back when the confirmation closes.
+    pub(crate) under: Option<(crate::dialog::Dialog, &'static str)>,
     pub(crate) restore_focus: Option<String>,
     /// The control that was activated this frame (mouse, keyboard or the twin): the opener of a dialog.
     pub(crate) activated: Option<String>,
@@ -378,6 +381,41 @@ impl Ctl {
         self.nodes.push(Node::Status { id: id.into(), text: text.into(), region, pos: twin::pos_of(rect.min), at, size });
     }
 
+    /// Native: what is drawn since `from` inside a scroll area is reported where it can be seen, not where the
+    /// content is (a control far below the fold has a rectangle far outside the window, which UI Automation
+    /// clients take for visible). A node wholly outside the clip has no rectangle.
+    pub(crate) fn clip_since(&mut self, from: usize, clip: egui::Rect) {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let fix = |at: &mut (i32, i32), size: &mut (u16, u16)| {
+                let r = egui::Rect::from_min_size(egui::pos2(at.0 as f32, at.1 as f32), egui::vec2(size.0 as f32, size.1 as f32)).intersect(clip);
+                if r.width() > 0.0 && r.height() > 0.0 {
+                    *at = (r.min.x.round() as i32, r.min.y.round() as i32);
+                    *size = (r.width().round() as u16, r.height().round() as u16);
+                } else {
+                    *size = (0, 0);
+                }
+            };
+            for n in self.nodes.iter_mut().skip(from) {
+                match n {
+                    Node::Heading { at, size, .. }
+                    | Node::Status { at, size, .. }
+                    | Node::Text { at, size, .. }
+                    | Node::Para { at, size, .. }
+                    | Node::Group { at, size, .. }
+                    | Node::Image { at, size, .. } => fix(at, size),
+                    Node::Control(c) => fix(&mut c.at, &mut c.size),
+                }
+            }
+        }
+        #[cfg(target_arch = "wasm32")]
+        let _ = (from, clip);
+    }
+
+    pub(crate) fn node_count(&self) -> usize {
+        self.nodes.len()
+    }
+
     pub fn text(&mut self, id: &str, text: &str, region: u8, rect: egui::Rect) {
         let (at, size) = twin::geo(rect);
         self.nodes.push(Node::Text { id: id.into(), text: text.into(), region, pos: twin::pos_of(rect.min), at, size });
@@ -537,6 +575,14 @@ pub struct App {
     /// The control that had focus at the end of the last frame (native Tab), and the Tab presses waiting for
     /// the next frame (`true`: with Shift).
     prev_focus: Option<String>,
+    /// Native: the focus that was asked for when the frame began (still pending at its end: nothing drew it),
+    /// and the tab stops of the last frame that had no dialog open (where a closed dialog's opener stood).
+    #[cfg(not(target_arch = "wasm32"))]
+    want_at_start: Option<String>,
+    #[cfg(not(target_arch = "wasm32"))]
+    was_focus: Option<String>,
+    #[cfg(not(target_arch = "wasm32"))]
+    screen_stops: Vec<String>,
     #[cfg(not(target_arch = "wasm32"))]
     tab_queue: Vec<bool>,
     /// Escape was pressed this frame (native: taken out of egui's input, see `filter_tab`).
@@ -632,6 +678,12 @@ impl App {
             last_toast: None,
             last_toast_serial: 0,
             prev_focus: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            want_at_start: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            was_focus: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            screen_stops: vec![],
             #[cfg(not(target_arch = "wasm32"))]
             tab_queue: vec![],
             esc_pressed: false,
@@ -1173,7 +1225,15 @@ impl App {
         self.ctl.focused = None;
         self.ctl.activated = None;
         self.ctl.lines.clear();
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.want_at_start = self.ctl.want_focus.clone();
+        }
         self.ui_frame(ctx, system_dark);
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.was_focus = self.prev_focus.clone();
+        }
         self.prev_focus = self.ctl.focused.as_ref().map(|f| f.0.clone());
         // an activation or typed text whose control was not on screen this frame is dropped, not kept; what a
         // control has queued beyond the one it took this frame waits for the next frame
@@ -1197,7 +1257,19 @@ impl App {
             self.ctl.nodes.retain(|n| n.key().0 == twin::DIALOG || matches!(n, Node::Heading { level: 1, .. }));
         }
         // reading order: region, then 16px row band, then x
-        self.ctl.nodes.sort_by_key(|n| n.key());
+        // (a dialog reads and tabs in the order it was drawn, top to bottom: the footer button must not sort by
+        // its place on the screen against controls that scroll past it, nor a scrolled control by its place
+        // far below the window; the sort is stable)
+        self.ctl.nodes.sort_by_key(|n| {
+            let (r, y, x) = n.key();
+            if r == twin::DIALOG {
+                (r, 0, 0)
+            } else {
+                (r, y, x)
+            }
+        });
+        #[cfg(not(target_arch = "wasm32"))]
+        self.keep_focus_somewhere();
         #[cfg(not(target_arch = "wasm32"))]
         native::publish(ctx, &tree::of(&self.ctl.nodes), &self.ctl.widgets, &self.native_said, self.native_said_n, self.title());
         let nodes = std::mem::take(&mut self.ctl.nodes);
@@ -1467,6 +1539,40 @@ impl App {
                 cur = Some(next);
             }
         }
+    }
+
+    /// Focus never falls to the window. A control that had focus and is gone (a button of a confirmation that
+    /// was accepted, a page that was removed, a button that is unavailable while the work it started runs), or
+    /// a focus that was asked for and that nothing drew, moves to the nearest stop that is there: the one
+    /// before it in the order it had, else the one after, else the first. Otherwise a screen reader reads the
+    /// window's title and Tab starts again at the top.
+    fn keep_focus_somewhere(&mut self) {
+        let stops: Vec<String> = twin::tab_stops(&self.ctl.nodes).into_iter().map(String::from).collect();
+        let pending = self.want_at_start.take().filter(|w| self.ctl.want_focus.as_deref() == Some(w.as_str()));
+        let lost = match &pending {
+            Some(w) => Some(w.clone()),
+            None => self.was_focus.clone().filter(|f| self.ctl.focused.is_none() && !stops.contains(f)),
+        };
+        if self.dialog.is_none() {
+            self.screen_stops = stops.clone();
+        }
+        let Some(lost) = lost else { return };
+        if stops.is_empty() || stops.contains(&lost) {
+            return;
+        }
+        let before: Vec<String> = if self.screen_stops.contains(&lost) {
+            self.screen_stops.clone()
+        } else {
+            twin::tab_stops(&self.last_nodes).into_iter().map(String::from).collect()
+        };
+        let target = match before.iter().position(|s| *s == lost) {
+            Some(i) => before[..i].iter().rev().chain(before[i + 1..].iter()).find(|s| stops.contains(s)).cloned(),
+            None => None,
+        }
+        .unwrap_or_else(|| stops[0].clone());
+        self.ctl.focus = None;
+        self.ctl.want_focus = Some(target);
+        self.ctx.request_repaint();
     }
 
     fn native_exit(&mut self, ctx: &egui::Context, t: f64) {

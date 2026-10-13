@@ -363,6 +363,18 @@ fn route_keys(ctl: &Ctl, s: &Session, dialog_open: bool, acts: &mut Vec<Act>) {
     }
 }
 
+/// Close the dialog on top: back to the one it was stacked on (focus on `focus`, else on the control that
+/// opened the confirmation), or nothing.
+fn pop_dialog(ctl: &mut Ctl, dialog: &mut Option<Dialog>, focus: Option<&'static str>) {
+    match ctl.under.take() {
+        Some((d, opener)) => {
+            *dialog = Some(d);
+            ctl.want_focus = Some(focus.unwrap_or(opener).into());
+        }
+        None => *dialog = None,
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn apply(
     a: Act,
@@ -564,7 +576,7 @@ fn apply(
             if let Some(d) = dialog.as_ref() {
                 dialog::commit(s, d);
             }
-            *dialog = None;
+            pop_dialog(ctl, dialog, None);
         }
         Act::Inbox => s.view = View::Inbox,
         Act::OpenReview(id) => {
@@ -628,6 +640,7 @@ fn apply(
             }
         }
         Act::Dialog(o) => {
+            let mut back_to = None;
             match o {
                 dialog::Out::Close => {
                     if let Some(d) = dialog.as_ref() {
@@ -644,6 +657,9 @@ fn apply(
                     if let Some(d) = dialog.as_ref() {
                         dialog::commit(s, d);
                     }
+                    // stacked on Settings (modal.js): Cancel comes back to it, with focus on the button that asked
+                    ctl.under = dialog.take().map(|d| (d, "st-clear-fixes"));
+                    ctl.want_focus = Some("dialog-cancel".into());
                     *dialog = Some(Dialog::Confirm {
                         title: "Clear remembered fixes".into(),
                         text: "Forget all remembered fixes? Transcripts and your choices on pages are not affected.".into(),
@@ -669,6 +685,8 @@ fn apply(
                         s.settings.set("reference", serde_json::json!([]));
                         s.dirty.settings = true;
                         say("Forgot the remembered fixes.".into(), false);
+                        // js keeps Settings open; the button is unavailable now, so focus goes to Done
+                        back_to = Some("dialog-close");
                     }
                     After::RemovePage(id) => s.remove_page(&id),
                     After::TranscribeAgain(id) => send(Cmd::Transcribe { slug, ids: vec![id] }),
@@ -678,7 +696,7 @@ fn apply(
                     }
                 },
             }
-            *dialog = None;
+            pop_dialog(ctl, dialog, back_to);
         }
     }
     ctl.toast_serial += said_n;

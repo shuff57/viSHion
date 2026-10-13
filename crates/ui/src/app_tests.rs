@@ -2444,3 +2444,139 @@ fn native_tree_has_one_parent_per_node_and_no_cycles() {
         assert!(multi.is_empty(), "{opener:?}: nodes with several parents: {shown:?}");
     }
 }
+
+// ---- native round 10 (dialog stack, a long dialog's tab order, focus after a dialog's action)
+
+fn esc_key() -> egui::Event {
+    egui::Event::Key { key: egui::Key::Escape, physical_key: Some(egui::Key::Escape), pressed: true, repeat: false, modifiers: Default::default() }
+}
+
+fn focused(h: &H) -> Option<String> {
+    h.app.ctl.focused.as_ref().map(|f| f.0.clone())
+}
+
+/// modal.js stacks the confirmation on Settings: it opens with focus on Cancel, Cancel and Escape return to
+/// Settings with focus on "Clear remembered fixes", accepting keeps Settings open. Every update goes to a
+/// consumer, as the platform adapter does (no focus the tree lacks, whatever the order of the nodes).
+#[test]
+fn native_clear_fixes_confirmation_stacks_on_settings() {
+    for escape in [true, false] {
+        let mut h = H::new("m1");
+        h.ctx.enable_accesskit();
+        h.sess().settings.set("reference", serde_json::json!([{"wrong": "intgral", "right": "integral"}]));
+        h.act("settings");
+        h.frames(3);
+        let upd = h.out.platform_output.accesskit_update.clone().expect("update");
+        let mut tree = accesskit_consumer::Tree::new(upd, true);
+        let mut feed = |h: &mut H| {
+            for _ in 0..3 {
+                h.frames(1);
+                tree.update(h.out.platform_output.accesskit_update.clone().expect("update"));
+            }
+        };
+        h.act("st-clear-fixes");
+        feed(&mut h);
+        assert!(matches!(h.app.dialog, Some(dialog::Dialog::Confirm { .. })));
+        assert_eq!(focused(&h).as_deref(), Some("dialog-cancel"), "the confirmation opens on Cancel");
+        if escape {
+            h.events.push(esc_key());
+            h.frames(1);
+        } else {
+            h.act("dialog-cancel");
+        }
+        feed(&mut h);
+        assert!(matches!(h.app.dialog, Some(dialog::Dialog::Settings { .. })), "back on Settings");
+        assert_eq!(focused(&h).as_deref(), Some("st-clear-fixes"));
+        h.act("st-clear-fixes");
+        h.act("dialog-ok");
+        feed(&mut h);
+        assert!(matches!(h.app.dialog, Some(dialog::Dialog::Settings { .. })), "accepting keeps Settings open");
+        assert_eq!(h.s().settings.get("reference").and_then(|v| v.as_array()).map(|a| a.len()), Some(0));
+        assert_eq!(focused(&h).as_deref(), Some("dialog-close"));
+        // closing Settings still goes back to the gear
+        h.act("dialog-close");
+        feed(&mut h);
+        assert!(h.app.dialog.is_none());
+        assert_eq!(focused(&h).as_deref(), Some("settings"));
+    }
+}
+
+/// A long dialog is one lap of Tab with the footer button once, last: it is not sorted by where it is on the
+/// screen against controls that scroll past it. Controls below the fold are not reported inside the window.
+#[test]
+fn native_settings_tab_order_is_drawing_order_and_clipped_controls_have_no_rect() {
+    let mut h = H::new("m1");
+    h.size = (1280.0, 520.0);
+    h.act("settings");
+    h.frames(3);
+    let stops: Vec<String> = twin::tab_stops(h.app.nodes()).into_iter().map(String::from).collect();
+    assert_eq!(stops.iter().filter(|s| *s == "dialog-close").count(), 1);
+    assert_eq!(stops.last().map(String::as_str), Some("dialog-close"), "{stops:?}");
+    let at = |id: &str| stops.iter().position(|s| s == id).unwrap_or_else(|| panic!("{id} is a stop"));
+    let order = ["theme-auto", "st-ocr", "st-demo", "st-jmode-auto", "st-words", "st-guess", "st-fmt-md", "st-orig"];
+    for w in order.windows(2) {
+        assert!(at(w[0]) < at(w[1]), "{} before {}", w[0], w[1]);
+    }
+    // shift+tab from the first stop goes round to the footer, and no stop repeats in a lap
+    let mut seen = std::collections::HashSet::new();
+    let mut cur = Some(stops[0].clone());
+    for _ in 0..stops.len() {
+        let next = twin::next_stop(h.app.nodes(), cur.as_deref(), false);
+        assert!(seen.insert(next.clone().unwrap()), "{next:?} visited twice in one lap");
+        cur = next;
+    }
+    // the window is 520 high: Keep untouched originals is far below it
+    let r = h.ctl("st-orig").unwrap();
+    assert!(r.size.0 == 0 || r.size.1 == 0 || (r.at.1 as f32) < 520.0, "st-orig reported at y={} size {:?}", r.at.1, r.size);
+    let done = h.ctl("dialog-close").unwrap();
+    assert!(done.size.1 > 0 && (done.at.1 as f32) < 520.0);
+}
+
+/// Focus is on a named control after the control that had it is gone (Review again accepted, the last page of
+/// a student removed, Back to the overview), never on the window.
+#[test]
+fn native_focus_lands_on_a_control_when_the_focused_one_is_gone() {
+    // Review again, accepted: the strip's button disappears with the selection
+    let mut h = H::new("m1");
+    let w = h.word_id("c:0");
+    h.act(&w);
+    h.act("alt-suggested");
+    h.sess().multi_click("m2", false);
+    h.frames(2);
+    h.act("strip-review-again");
+    assert_eq!(focused(&h).as_deref(), Some("dialog-cancel"));
+    h.act("dialog-ok");
+    h.frames(3);
+    assert!(h.ctl("strip-review-again").is_none());
+    assert!(focused(&h).is_some(), "focus is on a control after Review again");
+    // Back to the overview from the crumb
+    let mut h = H::new("m1");
+    h.focus("crumb");
+    h.act("crumb");
+    h.frames(3);
+    assert!(focused(&h).is_some(), "focus is on a control on the overview");
+    // removing the pages of a student one after the other
+    let mut h = H::new("m1");
+    for _ in 0..2 {
+        if h.ctl("remove").is_none() {
+            break;
+        }
+        h.act("remove");
+        if h.app.dialog.is_some() {
+            h.act("dialog-ok");
+        }
+        h.frames(3);
+        assert!(focused(&h).is_some(), "focus is on a control after a page was removed");
+    }
+}
+
+/// A control that is unavailable while the work it started runs does not leave focus on the window.
+#[test]
+fn native_focus_survives_transcribe_again_on_an_untouched_page() {
+    let mut h = H::new("m1");
+    h.focus("transcribe-again");
+    h.act("transcribe-again");
+    h.sess().a.pages.get_mut("m1").unwrap().set("status", serde_json::json!("transcribing"));
+    h.frames(4);
+    assert!(focused(&h).is_some(), "focus is on a control while the page is read");
+}
