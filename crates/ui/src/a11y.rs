@@ -142,7 +142,17 @@ fn word_for(cmd: &str) -> Option<&'static str> {
         "neg" | "lnot" => "not",
         "bmod" | "mod" => "mod",
         "angle" => "angle",
-        "triangle" => "triangle",
+        "triangle" | "bigtriangleup" => "triangle",
+        "square" | "Box" => "square",
+        "measuredangle" => "measured angle",
+        "simeq" => "is similar or equal to",
+        "textdegree" => "degrees",
+        "nsim" => "is not similar to",
+        "ncong" => "is not congruent to",
+        "nparallel" => "is not parallel to",
+        "nmid" => "does not divide",
+        "gg" => "is much greater than",
+        "ll" => "is much less than",
         "therefore" => "therefore",
         "because" => "because",
         "partial" => "partial",
@@ -493,7 +503,30 @@ fn command(cs: &[char], p: &mut usize) -> String {
         "tilde" | "widetilde" => format!(" {} tilde ", atom(cs, p)),
         "dot" => format!(" {} dot ", atom(cs, p)),
         "vec" => format!(" vector {} ", atom(cs, p)),
-        "text" | "textbf" | "textit" | "mathrm" | "mathbf" | "mathit" | "mathbb" | "mathcal" | "operatorname" | "mbox" => {
+        "color" => {
+            // `\color{red}{x}` speaks just x; the colour is not part of the maths
+            let _ = raw_group(cs, p);
+            format!(" {} ", atom(cs, p))
+        }
+        "textcolor" => {
+            let _ = raw_group(cs, p);
+            format!(" {} ", atom(cs, p))
+        }
+        "mathbb" | "Bbb" => {
+            let g = raw_group(cs, p);
+            let w = match g.trim() {
+                "R" => "real numbers",
+                "Z" => "integers",
+                "Q" => "rationals",
+                "N" => "natural numbers",
+                "C" => "complex numbers",
+                "P" => "primes",
+                "H" => "quaternions",
+                other => other,
+            };
+            format!(" {w} ")
+        }
+        "text" | "textbf" | "textit" | "mathrm" | "mathbf" | "mathit" | "mathcal" | "operatorname" | "mbox" => {
             format!(" {} ", raw_group(cs, p))
         }
         "sum" => limits(cs, p, "the sum"),
@@ -553,6 +586,37 @@ fn bars_ahead(cs: &[char], from: usize, in_group: bool) -> usize {
     n
 }
 
+/// `\|` / `\Vert` left after `from`.
+fn norms_ahead(cs: &[char], from: usize) -> usize {
+    let (mut n, mut q) = (0, from);
+    while q + 1 < cs.len() {
+        if cs[q] == '\\' {
+            if cs[q + 1] == '|' {
+                n += 1;
+                q += 1;
+            } else if cs[q + 1..].starts_with(&['V', 'e', 'r', 't']) {
+                n += 1;
+                q += 4;
+            }
+        }
+        q += 1;
+    }
+    n
+}
+
+/// The words just spoken end in a figure (a triangle, an angle, a run of capital letters `ABC`), so a
+/// tilde after them is similarity.
+fn figure_before(out: &str) -> bool {
+    let w: Vec<&str> = out.split_whitespace().collect();
+    let last = w.iter().rev().take(4).copied().collect::<Vec<_>>();
+    if last.iter().any(|t| matches!(*t, "triangle" | "angle" | "square" | "polygon" | "quadrilateral" | "measured")) {
+        return true;
+    }
+    // single capital letters in a row, as a vertex list
+    let caps = w.iter().rev().take_while(|t| t.len() == 1 && t.chars().all(|c| c.is_ascii_uppercase())).count();
+    caps >= 3
+}
+
 fn divider(paren: i32, in_set: bool) -> &'static str {
     if in_set {
         " such that "
@@ -567,6 +631,7 @@ fn seq(cs: &[char], p: &mut usize, in_group: bool) -> String {
     let mut out = String::new();
     // `|x - 3|`: the first bar opens an absolute value and the next closes it
     let mut bar_open = false;
+    let mut norm_open = false;
     // `P(A|B)` and `\{x | x > 0\}`: a bar with no partner is a divider, not an absolute value
     let (mut paren, mut in_set) = (0i32, false);
     while *p < cs.len() {
@@ -593,6 +658,22 @@ fn seq(cs: &[char], p: &mut usize, in_group: bool) -> String {
                 paren -= 1;
                 *p += 1;
                 out.push_str(" close paren ");
+            }
+            '\\' if cs[*p + 1..].starts_with(&['s', 'i', 'm']) && !cs.get(*p + 4).is_some_and(|c| c.is_ascii_alphabetic()) => {
+                *p += 4;
+                out.push_str(if figure_before(&out) { " is similar to " } else { " is distributed as " });
+            }
+            '\\' if cs.get(*p + 1) == Some(&'|') || (cs[*p + 1..].starts_with(&['V', 'e', 'r', 't']) && !cs.get(*p + 5).is_some_and(|c| c.is_ascii_alphabetic())) => {
+                *p += if cs[*p + 1] == '|' { 2 } else { 5 };
+                if norm_open {
+                    out.push_str(" end norm ");
+                    norm_open = false;
+                } else if norms_ahead(cs, *p) > 0 {
+                    out.push_str(" norm of ");
+                    norm_open = true;
+                } else {
+                    out.push_str(" norm ");
+                }
             }
             '\\' if cs.get(*p + 1) == Some(&'{') => {
                 in_set = true;
@@ -770,6 +851,25 @@ mod tests {
         assert!(s.contains("real numbers"), "R of the reals: {s}");
         let s = tex_speech(r"n \in \mathbb{Z}");
         assert!(s.contains("integers"), "Z of the integers: {s}");
+        for (tex, want) in [
+            (r"q \in \mathbb{Q}", "rationals"),
+            (r"n \in \mathbb{N}", "natural numbers"),
+            (r"z \in \mathbb{C}", "complex numbers"),
+            (r"\mathbb{R}^2", "real numbers"),
+        ] {
+            let s = tex_speech(tex);
+            assert!(s.contains(want), "{tex}: {s}");
+        }
+        assert_eq!(tex_speech(r"\| v \|"), "norm of v end norm");
+        assert_eq!(tex_speech(r"\|x\| + \|y\|").matches("end norm").count(), 2);
+        let s = tex_speech(r"\color{red}{x} + 1");
+        assert!(!s.contains("red") && !s.contains("color") && s.contains("x"), "{s}");
+        assert!(!tex_speech(r"\textcolor{blue}{y}").contains("blue"));
+        let s = tex_speech(r"\angle A \cong \angle B");
+        assert!(s.contains("congruent") && !s.contains("distributed"), "{s}");
+        let s = tex_speech(r"ABCD \sim EFGH");
+        assert!(s.contains("similar"), "{s}");
+        assert!(tex_speech(r"x \sim \text{Binomial}(n, p)").contains("distributed"));
     }
 
     #[test]
