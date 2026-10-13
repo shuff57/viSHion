@@ -1,10 +1,10 @@
 # Blind-critic native check, round 6 (Windows): work through the word panel from the keyboard with a UI Automation
 # client attached (what Narrator or NVDA is). Press Enter on the first choice, then on the control that has focus,
-# twice more. Fails today: the second or third Enter kills the process, panic in accesskit_consumer
-# `tree.rs:35 assertion failed: self.nodes.contains_key(&self.focus)` (focus is on a choice that the next word
-# does not have, the update names a focus node it does not contain).
-#   powershell -NoProfile -STA -File crates/app/native-a11y-critic-choices.ps1 [-Exe target/release/vishion.exe]
-param([string]$Exe = (Join-Path $PSScriptRoot '..\..\target\release\vishion.exe'))
+# twice more. It used to kill the process: panic in accesskit_consumer `tree.rs:35 assertion failed:
+# self.nodes.contains_key(&self.focus)` (egui named a focus node that the tree did not contain). With -Poll the
+# client also reads FocusedElement between the presses, as a screen reader does.
+#   powershell -NoProfile -STA -File crates/app/native-a11y-critic-choices.ps1 [-Exe target/release/vishion.exe] [-Poll]
+param([string]$Exe = (Join-Path $PSScriptRoot '..\..\target\release\vishion.exe'), [switch]$Poll)
 Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes, System.Windows.Forms
 Add-Type -MemberDefinition '[DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);' -Name W -Namespace N
 $fail = @()
@@ -26,8 +26,10 @@ try {
   for ($i = 0; $i -lt 20 -and -not ((Foc) -like '*Course word*'); $i++) { [System.Windows.Forms.SendKeys]::SendWait('{TAB}'); Start-Sleep -Milliseconds 300 }
   Check ((Foc) -like '*Course word*') 'Tab reaches the first choice'
   $alive = $true
-  for ($i = 1; $i -le 4 -and $alive; $i++) {
-    [System.Windows.Forms.SendKeys]::SendWait('{ENTER}'); Start-Sleep -Milliseconds 1200
+  for ($i = 1; $i -le $(if ($Poll) { 8 } else { 4 }) -and $alive; $i++) {
+    [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
+    if ($Poll) { for ($k = 0; $k -lt 8; $k++) { Start-Sleep -Milliseconds 150; $null = Foc } } else { Start-Sleep -Milliseconds 1200 }
+    if ($Poll) { Start-Sleep -Milliseconds 400 }
     $p.Refresh(); $alive = -not $p.HasExited
     Check $alive "the window is still there after Enter $i on a choice"
   }

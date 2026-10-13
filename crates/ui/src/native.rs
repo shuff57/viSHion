@@ -122,6 +122,16 @@ pub fn publish(ctx: &egui::Context, tree: &[Tree], widgets: &HashMap<String, Id>
     let made: Vec<NodeId> = ctx.accesskit_node_builder(root, |b| b.children().to_vec()).unwrap_or_default();
     let mut used = HashSet::new();
     let mut top: Vec<NodeId> = tree.iter().map(|t| write(ctx, t, widgets, &mut used)).collect();
+    // egui keeps the focus it was given for one frame even when nothing it drew has that id (a choice of the
+    // word the panel just left): its update then names a focus node the tree does not contain, and
+    // accesskit_consumer asserts in the window thread. Focus nobody draws is let go of.
+    if let Some(f) = ctx.memory(|m| m.focused()) {
+        let n = NodeId(f.value());
+        let known = made.contains(&n) || used.contains(&n) || widgets.values().any(|w| NodeId(w.value()) == n);
+        if !known {
+            ctx.memory_mut(|m| m.surrender_focus(f));
+        }
+    }
     let left: Vec<NodeId> = made.into_iter().filter(|id| !used.contains(id)).collect();
     if !left.is_empty() {
         let spare = Id::new(("twin", "spare"));
@@ -155,7 +165,7 @@ mod tests {
     /// elsewhere or for ordinary controls.
     #[test]
     fn uia_names_carry_landmarks_and_heading_levels() {
-        let nodes = vec![Node::Heading { id: "student-name".into(), level: 1, text: "Maya R.".into(), region: 2, pos: (0, 0) }];
+        let nodes = vec![Node::Heading { id: "student-name".into(), level: 1, text: "Maya R.".into(), region: 2, pos: (0, 0), at: (0, 0), size: (0, 0) }];
         let t = crate::tree::of(&nodes);
         let h = t[0].find("student-name").unwrap();
         assert_eq!(platform_name(h, true), "Maya R., heading level 1");

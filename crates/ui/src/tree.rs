@@ -108,13 +108,22 @@ fn control_node(r: &Reg) -> Tree {
 
 fn node_of(n: &Node) -> Tree {
     match n {
-        Node::Heading { id, level, text, .. } => {
+        Node::Heading { id, level, text, at, size, .. } => {
             let mut t = Tree::new(id, Role::Heading, text);
             t.level = Some(*level);
+            t.at = rect_of(*at, *size);
             t
         }
-        Node::Status { id, text, .. } => Tree::new(id, if id.ends_with("-error") { Role::Alert } else { Role::Text }, text),
-        Node::Text { id, text, .. } => Tree::new(id, Role::Text, text),
+        Node::Status { id, text, at, size, .. } => {
+            let mut t = Tree::new(id, if id.ends_with("-error") { Role::Alert } else { Role::Text }, text);
+            t.at = rect_of(*at, *size);
+            t
+        }
+        Node::Text { id, text, at, size, .. } => {
+            let mut t = Tree::new(id, Role::Text, text);
+            t.at = rect_of(*at, *size);
+            t
+        }
         Node::Group { id, label, at, size, .. } => {
             let mut t = Tree::new(id, Role::Group, label);
             t.at = rect_of(*at, *size);
@@ -126,8 +135,9 @@ fn node_of(n: &Node) -> Tree {
             t
         }
         Node::Control(r) => control_node(r),
-        Node::Para { id, parts, .. } => {
+        Node::Para { id, parts, at, size, .. } => {
             let mut t = Tree::new(id, Role::Paragraph, "");
+            t.at = rect_of(*at, *size);
             for (i, p) in parts.iter().enumerate() {
                 t.children.push(match p {
                     Part::Text(s) => Tree::new(format!("{id}#t{i}"), Role::Text, s),
@@ -139,6 +149,13 @@ fn node_of(n: &Node) -> Tree {
                     Part::Del(s) => Tree::new(format!("{id}#d{i}"), Role::Deleted, s),
                     Part::Control(r) => control_node(r),
                 });
+            }
+            // the runs of text and the formulas are somewhere in their line: the line's rectangle is closer
+            // than none (a platform tree reads an empty rectangle as "not on screen")
+            for c in t.children.iter_mut() {
+                if c.at.is_none() {
+                    c.at = t.at;
+                }
             }
             t
         }

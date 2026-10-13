@@ -762,7 +762,7 @@ mod tests {
         assert_eq!(group_of("page-p1").map(|g| g.0), Some("pages"));
         assert_eq!(group_of("cs-new").map(|g| g.0), group_of("cs-student-0").map(|g| g.0));
         assert_eq!(group_of("done"), None);
-        let h = Node::Heading { id: "student-name".into(), level: 1, text: "Maya R.".into(), region: TEXT, pos: (0, 0) };
+        let h = Node::Heading { id: "student-name".into(), level: 1, text: "Maya R.".into(), region: TEXT, pos: (0, 0), at: (0, 0), size: (0, 0) };
         assert_eq!(landmark(TEXT, &[&h]), Some(("region", "Transcript".into())));
         assert_eq!(landmark(HEADER, &[]).map(|l| l.0), Some("banner"));
         assert_eq!(landmark(TRAY, &[]).map(|l| l.0), Some("complementary"));

@@ -47,6 +47,15 @@ try {
     Check (($named | Where-Object { $_ -eq 'Word panel, complementary landmark' }).Count -ge 1) 'the word panel landmark is named'
     Check (($named | Where-Object { $_ -match '^Maya R\., heading level 1$' }).Count -ge 1) 'the student heading says its level'
     Check ($unnamedCustom -lt 10) "almost no unnamed custom nodes ($unnamedCustom)"
+    # text is where it is drawn: Narrator's highlight and magnifier tracking follow BoundingRectangle
+    $wr = $win.Current.BoundingRectangle
+    $rectOf = { param($like) $e = $all | Where-Object { $_.Current.Name -like $like } | Select-Object -First 1; if ($e) { $e.Current.BoundingRectangle } else { $null } }
+    $h = & $rectOf 'Maya R., heading level 1'
+    $line = & $rectOf 'The 95%*'
+    Check ($h -and $h.Width -gt 0 -and $h.Height -gt 0 -and $h.Left -gt $wr.Left + 200) "the student heading has a rectangle of its own ($h)"
+    Check ($line -and $line.Width -gt 100 -and $line.Height -gt 0 -and $line.Top -gt $h.Top) "a transcript line has a rectangle below the heading ($line)"
+    $empty = @($all | Where-Object { $_.Current.Name -and $_.Current.BoundingRectangle.Width -le 0 -and $_.Current.ControlType.ProgrammaticName -in @('ControlType.Text', 'ControlType.Button', 'ControlType.Edit') })
+    Check ($empty.Count -le 2) ("named text and controls without a rectangle: $($empty.Count) " + (($empty | ForEach-Object { $_.Current.ControlType.ProgrammaticName.Replace('ControlType.','') + ':' + $_.Current.Name }) -join ' | '))
     # press Zoom in through UI Automation: the Fit button's name carries the zoom level
     $zin = $all | Where-Object { $_.Current.Name -eq 'Zoom in' -and $_.Current.ControlType.ProgrammaticName -eq 'ControlType.Button' } | Select-Object -First 1
     $fit = { $win.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition) | Where-Object { $_.Current.Name -like 'Fit the page*' } | ForEach-Object { $_.Current.Name } | Select-Object -First 1 }

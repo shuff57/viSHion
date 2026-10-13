@@ -44,14 +44,16 @@ pub enum Part {
 
 #[derive(Clone, PartialEq, Debug)]
 pub enum Node {
-    Heading { id: String, level: u8, text: String, region: u8, pos: (i32, i32) },
+    /// `at`/`size`: the rectangle in points where the text is drawn (touch exploration, screen magnifiers and
+    /// the highlight of a screen reader follow it); `size` 0 x 0 when unknown.
+    Heading { id: String, level: u8, text: String, region: u8, pos: (i32, i32), at: (i32, i32), size: (u16, u16) },
     /// A short status line (counts, save state). Only a `-error` one is a live region (`role=alert`); the
     /// rest is spoken once through `announce`, so one action is one utterance.
-    Status { id: String, text: String, region: u8, pos: (i32, i32) },
-    Text { id: String, text: String, region: u8, pos: (i32, i32) },
+    Status { id: String, text: String, region: u8, pos: (i32, i32), at: (i32, i32), size: (u16, u16) },
+    Text { id: String, text: String, region: u8, pos: (i32, i32), at: (i32, i32), size: (u16, u16) },
     /// A transcript line. `keys`: arrow keys inside it move the reading underline; `reading`: it is the
     /// line being read (web: `data-reading`, so the underline is observable without pixels).
-    Para { id: String, parts: Vec<Part>, region: u8, pos: (i32, i32), keys: bool, reading: bool },
+    Para { id: String, parts: Vec<Part>, region: u8, pos: (i32, i32), keys: bool, reading: bool, at: (i32, i32), size: (u16, u16) },
     /// A focusable region that takes keys of its own (`keys` names the set: stage, transcript, strip).
     /// `at`/`size`: its rectangle in points; the web twin is laid over the canvas there.
     Group { id: String, label: String, keys: &'static str, region: u8, pos: (i32, i32), at: (i32, i32), size: (u16, u16) },
@@ -99,6 +101,13 @@ pub fn controls(nodes: &[Node]) -> Vec<&Reg> {
         }
     }
     out
+}
+
+/// Top-left corner and size of a rectangle in points, rounded: what the twin lays over the canvas.
+pub fn geo(r: egui::Rect) -> ((i32, i32), (u16, u16)) {
+    let w = r.width().round().clamp(0.0, u16::MAX as f32) as u16;
+    let h = r.height().round().clamp(0.0, u16::MAX as f32) as u16;
+    ((r.min.x.round() as i32, r.min.y.round() as i32), (w, h))
 }
 
 /// `pos` of a rect min (row band of 16px, then x).

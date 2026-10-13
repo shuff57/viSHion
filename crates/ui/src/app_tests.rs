@@ -1825,6 +1825,43 @@ fn native_tree_updates_are_consistent_through_a_session() {
     assert!(root.children().count() >= 3, "the window has the banner, main and the panel");
 }
 
+/// Round 6 blocker: egui keeps a focus it was given for one frame even when nothing draws that widget (the
+/// choice of the word the panel left); its update then named a focus node the tree did not contain and
+/// accesskit_consumer asserted in the window thread (a UI Automation client attached, repeated Enter in the
+/// word panel).
+#[test]
+fn native_focus_on_a_widget_nobody_drew_is_let_go_of() {
+    let mut h = H::new("m1");
+    h.ctx.enable_accesskit();
+    h.frames(2);
+    let upd = h.out.platform_output.accesskit_update.clone().expect("update");
+    let mut tree = accesskit_consumer::Tree::new(upd, true);
+    let w = h.word_id("i:0");
+    h.act(&w);
+    for round in 0..6 {
+        // focus on a choice of the open word, then one that the next word does not have
+        let id = if round % 2 == 0 {
+            h.app.ctl.widgets.get("alt-written").or_else(|| h.app.ctl.widgets.values().next()).copied().unwrap_or(egui::Id::new("ghost"))
+        } else {
+            egui::Id::new(("ghost", round))
+        };
+        h.ctx.memory_mut(|m| m.request_focus(id));
+        for _ in 0..3 {
+            h.frames(1);
+            let u = h.out.platform_output.accesskit_update.clone().expect("update");
+            tree.update(u);
+        }
+        if let Some(c) = h.app.controls().iter().find(|c| c.id.starts_with("alt-")).map(|c| c.id.clone()) {
+            h.app.queue.lock().unwrap().push(format!("act:{c}"));
+        }
+    }
+    for _ in 0..3 {
+        h.frames(1);
+        let u = h.out.platform_output.accesskit_update.clone().expect("update");
+        tree.update(u);
+    }
+}
+
 /// Reading order of the tree is the visual order: banner, main (page image, transcript), word panel.
 #[test]
 fn native_tree_reading_order_and_groups() {
@@ -2124,4 +2161,103 @@ fn round5_boxes_button_names_end_with_the_instruction_in_every_state() {
         let t = crate::tree::of(h.app.nodes());
         assert_eq!(t.iter().find_map(|n| n.find("boxes")).unwrap().name, want);
     }
+}
+
+// ---- round 6 ----
+
+/// Text nodes are laid over the canvas where they are drawn (touch exploration, magnifiers and the highlight of
+/// a screen reader follow the rectangle), not stacked at the top left.
+#[test]
+fn round6_text_nodes_have_the_rectangle_they_are_drawn_in() {
+    let h = H::new("m1");
+    let mut seen = 0;
+    for n in h.app.nodes() {
+        let (id, at, size) = match n {
+            Node::Heading { id, at, size, .. } | Node::Text { id, at, size, .. } | Node::Status { id, at, size, .. } | Node::Para { id, at, size, .. } => (id, at, size),
+            _ => continue,
+        };
+        if id == "toast" {
+            continue;
+        }
+        seen += 1;
+        assert!(size.0 > 0 && size.1 > 0, "{id} has no rectangle");
+        assert!(at.0 >= 0 && at.0 + size.0 as i32 <= 1280 + 2, "{id} runs off the window: {at:?} {size:?}");
+    }
+    assert!(seen > 8, "headings, lines and counts: {seen}");
+    let t = crate::tree::of(h.app.nodes());
+    let name = t.iter().find_map(|n| n.find("student-name")).unwrap();
+    let (x0, _, x1, _) = name.at.unwrap();
+    let tx = t.iter().find_map(|n| n.find("transcript")).and_then(|n| n.at).unwrap();
+    assert!(x0 >= tx.0 - 4 && x1 <= tx.2 + 4, "the name {x0}..{x1} is in the text pane {tx:?}");
+    // the line is inside the transcript pane, and the word buttons inside the line's row
+    let line_id = h.app.nodes().iter().find_map(|n| match n { Node::Para { id, .. } if id.starts_with("line-") => Some(id.clone()), _ => None }).unwrap();
+    let line = t.iter().find_map(|n| n.find(&line_id)).unwrap();
+    let l = line.at.unwrap();
+    assert!(l.0 >= tx.0 - 4 && l.2 <= tx.2 + 8, "line {l:?} in pane {tx:?}");
+}
+
+/// Shift+Enter and Ctrl+Enter on a page thumbnail (a click that carries the modifiers) select pages as the
+/// click with the same keys does.
+#[test]
+fn round6_modifier_clicks_from_the_twin_select_pages() {
+    let mut h = H::new("m1");
+    let pages: Vec<String> = h.app.controls().iter().filter(|c| c.id.starts_with("page-")).map(|c| c.id.clone()).collect();
+    assert!(pages.len() >= 2, "{pages:?}");
+    h.app.queue.lock().unwrap().push(format!("act:{}\u{1}s", pages[0]));
+    h.frames(3);
+    h.app.queue.lock().unwrap().push(format!("act:{}\u{1}s", pages[1]));
+    h.frames(3);
+    assert_eq!(h.s().multi.len(), 2, "{:?}", h.s().multi);
+    assert!(h.app.controls().iter().any(|c| c.label == "Export 2 selected"));
+    h.act("strip-clear");
+    assert!(h.s().multi.is_empty());
+    h.app.queue.lock().unwrap().push(format!("act:{}\u{1}c", pages[1]));
+    h.frames(3);
+    assert_eq!(h.s().multi.len(), 2, "ctrl toggles the page and keeps the one that was open: {:?}", h.s().multi);
+}
+
+/// The start and the end of a transcription are spoken, and a transcript replaced in one step as well.
+#[test]
+fn round6_transcribing_again_says_that_it_started_and_finished() {
+    let mut h = H::new("m1");
+    h.frames(2);
+    let n0 = h.app.announced().len();
+    h.sess().a.pages.get_mut("m1").unwrap().set("status", serde_json::json!("transcribing"));
+    h.frames(2);
+    assert!(h.app.announced()[n0..].iter().any(|s| s.starts_with("Reading this page")), "{:?}", &h.app.announced()[n0..]);
+    let n1 = h.app.announced().len();
+    {
+        let p = h.sess().a.pages.get_mut("m1").unwrap();
+        p.set("raw", serde_json::json!("Lesson 4: Quadratics\nx = 1"));
+        p.set("status", serde_json::json!("done"));
+    }
+    h.frames(2);
+    let said = h.app.announced()[n1..].join(" | ");
+    assert!(said.contains("The page was transcribed"), "{said}");
+    // a transcript that changes under a page already done
+    let n2 = h.app.announced().len();
+    h.sess().a.pages.get_mut("m1").unwrap().set("raw", serde_json::json!("Lesson 5: Roots\nx = 2"));
+    h.frames(2);
+    assert!(h.app.announced()[n2..].iter().any(|s| s.contains("transcribed")), "{:?}", &h.app.announced()[n2..]);
+    let n3 = h.app.announced().len();
+    {
+        let p = h.sess().a.pages.get_mut("m1").unwrap();
+        p.set("status", serde_json::json!("error"));
+        p.set("error", serde_json::json!("The model did not answer."));
+    }
+    h.frames(2);
+    assert!(h.app.announced()[n3..].iter().any(|s| s.contains("could not be transcribed") && s.contains("did not answer")));
+}
+
+/// A decision hands focus to the word the panel moved to, never to the same place in the next word's list of
+/// choices (a second Enter there would pick another kind of answer unheard).
+#[test]
+fn round6_focus_after_a_decision_is_on_the_next_word_not_on_its_choices() {
+    let mut h = H::new("m1");
+    let w = h.word_id("i:0");
+    h.act(&w);
+    let alt = h.app.controls().iter().find(|c| c.id.starts_with("alt-")).expect("a choice").id.clone();
+    h.act(&alt);
+    let f = h.app.ctl.focused.as_ref().map(|f| f.0.clone()).unwrap_or_default();
+    assert!(f.starts_with("word-"), "focus is on {f:?}, not on the word the panel moved to");
 }

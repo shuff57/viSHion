@@ -46,7 +46,23 @@ pub fn install(q: Queue, ctx: egui::Context) {
         let (q, ctx) = (q.clone(), ctx.clone());
         let cb = Closure::<dyn FnMut(web_sys::Event)>::new(move |e: web_sys::Event| {
             if let Some(id) = data_id(&e) {
-                q.lock().unwrap().push(format!("{prefix}:{id}"));
+                // a click made with Shift or Ctrl held (Shift+Enter on a page thumbnail) says so
+                let mut mods = String::new();
+                if prefix == "act" {
+                    if let Some(m) = e.dyn_ref::<web_sys::MouseEvent>() {
+                        if m.ctrl_key() || m.meta_key() {
+                            mods.push('c');
+                        }
+                        if m.shift_key() {
+                            mods.push('s');
+                        }
+                    }
+                }
+                if mods.is_empty() {
+                    q.lock().unwrap().push(format!("{prefix}:{id}"));
+                } else {
+                    q.lock().unwrap().push(format!("{prefix}:{id}\u{1}{mods}"));
+                }
                 ctx.request_repaint();
             }
         });
@@ -278,6 +294,11 @@ impl Spec {
     }
 }
 
+/// A rectangle in points as the twin lays it out: left, top, width, height; none when it is not known.
+fn rect_of(at: (i32, i32), size: (u16, u16)) -> Option<(i32, i32, i32, i32)> {
+    (size.0 > 0 && size.1 > 0).then_some((at.0, at.1, size.0 as i32, size.1 as i32))
+}
+
 fn control(r: &Reg) -> Spec {
     let mut s = if r.role == "textbox" {
         let mut s = Spec::new(&r.id, "input").attr("type", "text").attr("aria-label", r.label.clone()).attr("autocomplete", "off");
@@ -310,13 +331,14 @@ fn control(r: &Reg) -> Spec {
 
 fn spec_of(n: &Node) -> Spec {
     match n {
-        Node::Heading { id, level, text, .. } => {
-            let s = Spec::new(id, match level {
+        Node::Heading { id, level, text, at, size, .. } => {
+            let mut s = Spec::new(id, match level {
                 1 => "h1",
                 2 => "h2",
                 _ => "h3",
             })
             .text(text);
+            s.rect = rect_of(*at, *size);
             // the screen's h1 takes focus when a different screen replaces it (see `restore_focus`)
             if *level == 1 {
                 s.attr("tabindex", "-1")
@@ -327,9 +349,17 @@ fn spec_of(n: &Node) -> Spec {
         // a problem the person has to act on is announced at once (role=alert), the rest politely. The
         // toast is spoken through `announce` (an element that arrives with its text is often not read).
         Node::Status { id, text, .. } if id == "toast" => Spec::new(id, "p").text(text),
-        Node::Status { id, text, .. } if id.ends_with("-error") => Spec::new(id, "div").attr("role", "alert").text(text),
+        Node::Status { id, text, at, size, .. } if id.ends_with("-error") => {
+            let mut s = Spec::new(id, "div").attr("role", "alert").text(text);
+            s.rect = rect_of(*at, *size);
+            s
+        }
         // counts and the save state are read in place; what changed is said once, through `announce`
-        Node::Status { id, text, .. } => Spec::new(id, "p").text(text),
+        Node::Status { id, text, at, size, .. } => {
+            let mut s = Spec::new(id, "p").text(text);
+            s.rect = rect_of(*at, *size);
+            s
+        }
         Node::Group { id, label, keys, at, size, .. } => {
             let mut s = Spec::new(id, "div").attr("role", "group").attr("tabindex", "0").attr("aria-label", label.clone()).attr("data-keys", *keys);
             if size.0 > 0 && size.1 > 0 {
@@ -337,7 +367,11 @@ fn spec_of(n: &Node) -> Spec {
             }
             s
         }
-        Node::Text { id, text, .. } => Spec::new(id, "p").text(text),
+        Node::Text { id, text, at, size, .. } => {
+            let mut s = Spec::new(id, "p").text(text);
+            s.rect = rect_of(*at, *size);
+            s
+        }
         Node::Image { id, label, at, size, .. } => {
             let mut s = Spec::new(id, "div").attr("role", "img").attr("aria-label", label.clone());
             if size.0 > 0 && size.1 > 0 {
@@ -345,8 +379,9 @@ fn spec_of(n: &Node) -> Spec {
             }
             s
         }
-        Node::Para { id, parts, reading, .. } => {
+        Node::Para { id, parts, reading, at, size, .. } => {
             let mut p = Spec::new(id, "p");
+            p.rect = rect_of(*at, *size);
             // always listed, so the attribute is removed again when the underline moves on
             p.attrs.push(("data-reading", if *reading { Some("1".to_string()) } else { None }));
             let mut kids = vec![];
@@ -472,7 +507,35 @@ fn structure(nodes: &[Node]) -> Vec<Spec> {
     if !main.is_empty() {
         top.push(main_spec(main, modal));
     }
+    // a landmark, a group or a list holds only positioned things: it would be a box with no size. It takes the
+    // rectangle of what it holds, as `tree::of` does for the native tree.
+    contain(&mut top);
     top
+}
+
+/// Give every container without a rectangle of its own the union of its children's, and return the union of
+/// `specs`. The positions of the children are made relative to it by `reconcile`.
+fn contain(specs: &mut [Spec]) -> Option<(i32, i32, i32, i32)> {
+    let mut all: Option<(i32, i32, i32, i32)> = None;
+    for s in specs.iter_mut() {
+        if let Some(kids) = s.children.as_mut() {
+            let inner = contain(kids);
+            if s.rect.is_none() {
+                s.rect = inner;
+            }
+        }
+        if let Some((x, y, w, h)) = s.rect {
+            all = Some(match all {
+                None => (x, y, w, h),
+                Some((ax, ay, aw, ah)) => {
+                    let (l, t) = (ax.min(x), ay.min(y));
+                    let (r, b) = ((ax + aw).max(x + w), (ay + ah).max(y + h));
+                    (l, t, r - l, b - t)
+                }
+            });
+        }
+    }
+    all
 }
 
 fn find_child(parent: &web_sys::Element, key: &str) -> Option<web_sys::Element> {
@@ -480,10 +543,13 @@ fn find_child(parent: &web_sys::Element, key: &str) -> Option<web_sys::Element> 
     (0..kids.length()).filter_map(|i| kids.item(i)).find(|k| k.get_attribute("data-id").as_deref() == Some(key))
 }
 
-fn set_style(el: &web_sys::Element, rect: Option<(i32, i32, i32, i32)>) {
+/// `origin` is the top-left of the nearest positioned ancestor (a paragraph is laid over its line and its
+/// controls are placed inside it), so every rectangle stays where the canvas draws it.
+fn set_style(el: &web_sys::Element, rect: Option<(i32, i32, i32, i32)>, origin: (i32, i32)) {
     let Some(style) = el.dyn_ref::<web_sys::HtmlElement>().map(|h| h.style()) else { return };
     match rect {
         Some((x, y, w, h)) => {
+            let (x, y) = (x - origin.0, y - origin.1);
             let want = [("position", "absolute".to_string()), ("left", format!("{x}px")), ("top", format!("{y}px")), ("width", format!("{w}px")), ("height", format!("{h}px")), ("margin", "0".to_string())];
             for (k, v) in want {
                 if style.get_property_value(k).ok().as_deref() != Some(v.as_str()) {
@@ -504,7 +570,7 @@ fn set_style(el: &web_sys::Element, rect: Option<(i32, i32, i32, i32)>) {
 /// Make `parent`'s children equal `specs`, reusing nodes by `data-id`. Stale nodes go first, then each
 /// wanted node is placed after its predecessor only when it is not already there: moving an element in
 /// the DOM drops its focus, and a focused twin must survive every re-sync.
-fn reconcile(doc: &web_sys::Document, parent: &web_sys::Element, specs: &[Spec]) {
+fn reconcile(doc: &web_sys::Document, parent: &web_sys::Element, specs: &[Spec], origin: (i32, i32)) {
     let want: Vec<&str> = specs.iter().map(|s| s.key.as_str()).collect();
     let kids = parent.children();
     let mut seen: Vec<String> = vec![];
@@ -547,7 +613,7 @@ fn reconcile(doc: &web_sys::Document, parent: &web_sys::Element, specs: &[Spec])
             }
         }
         // attributes a role change leaves behind (a button that was a checkbox) are not kept
-        set_style(&el, sp.rect);
+        set_style(&el, sp.rect, origin);
         if let Some(t) = &sp.text {
             if el.text_content().as_deref() != Some(t.as_str()) {
                 el.set_text_content(Some(t));
@@ -569,7 +635,8 @@ fn reconcile(doc: &web_sys::Document, parent: &web_sys::Element, specs: &[Spec])
             }
         }
         if let Some(kids) = &sp.children {
-            reconcile(doc, &el, kids);
+            let o = sp.rect.map_or(origin, |r| (r.0, r.1));
+            reconcile(doc, &el, kids, o);
         }
         let in_place = match &prev {
             None => el.previous_element_sibling().is_none() && el.parent_element().is_some_and(|p| p.is_same_node(Some(parent))),
@@ -682,7 +749,7 @@ fn reconcile_into(h: &web_sys::Element, doc: &web_sys::Document, nodes: &[Node])
     let was_name = was.as_ref().map(|a| a.get_attribute("aria-label").or_else(|| a.text_content()).unwrap_or_default());
     let h1_before = h1_ids(&h);
     let specs = structure(nodes);
-    reconcile(&doc, &h, &specs);
+    reconcile(&doc, &h, &specs, (0, 0));
     let Some(was) = was else { return };
     // A control that disables itself loses focus at once in current browsers (`activeElement` is the body
     // before the next frame), in older ones it keeps it: either way focus must be handed on.

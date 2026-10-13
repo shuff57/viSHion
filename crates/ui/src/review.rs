@@ -254,9 +254,9 @@ pub(crate) fn show(app: &mut App, ctx: &egui::Context, t: &Tokens) {
                 let (ir, _) = ui.allocate_exact_size(vec2(40.0, 40.0), Sense::hover());
                 widgets::paint_icon(ui, ir, if matches!(b, Boot::Failed(_)) { Icon::Warn } else { Icon::Page }, t.muted);
                 let r = ui.label(RichText::new(title).font(theme::serif_semi(32.0)).color(t.ink));
-                ctl.heading("empty-title", 1, title, TEXT, r.rect.min);
+                ctl.heading("empty-title", 1, title, TEXT, r.rect);
                 let r = ui.label(RichText::new(&body).font(theme::sans(16.0)).color(t.muted));
-                ctl.status("empty-note", &body, TEXT, r.rect.min);
+                ctl.status("empty-note", &body, TEXT, r.rect);
             });
         }
     }
@@ -452,11 +452,20 @@ fn apply(
                 // and when that word is on another page, which page the transcript now shows
                 let moved = if s.selected != from_page { format!(" {}", s.page_phrase()) } else { String::new() };
                 ctl.say(format!("{head}{moved} {}", s.next_word_phrase()));
+                // The choice that was pressed is now an option of another word (the same place in a list that
+                // means something else): Enter again would pick a different kind of answer unheard. Focus goes
+                // to the word the panel moved to, where Enter only opens it again.
+                if let Some((p, k)) = s.sel_word.clone() {
+                    ctl.want_focus = Some(format!("word-{p}-{k}"));
+                }
             }
         }
         Act::UseAll => {
             s.use_all();
             ctl.say(format!("Used all the suggestions. {}", s.next_word_phrase()));
+            if let Some((p, k)) = s.sel_word.clone() {
+                ctl.want_focus = Some(format!("word-{p}-{k}"));
+            }
         }
         Act::StepWord(d) => {
             let from = s.selected.clone();
@@ -727,7 +736,7 @@ fn header(ui: &mut Ui, cx: &mut Cx, s: &Session) {
             let icon_col = if cx.save.failed.is_some() { t.bad } else { t.ok };
             widgets::paint_icon(ui, Rect::from_center_size(pos2(sr.left() + 9.0, sr.center().y), vec2(18.0, 18.0)), icon, icon_col);
             ui.painter().galley(pos2(sr.left() + 24.0, sr.center().y - sg.size().y / 2.0), sg, save_col);
-            cx.ctl.status("save-state", &save_text, HEADER, sr.min);
+            cx.ctl.status("save-state", &save_text, HEADER, sr);
             if widgets::icon_button(cx.ctl, ui, t, C::new("settings", "Settings", HEADER), Icon::Gear, false) {
                 cx.acts.push(Act::OpenSettings);
             }
@@ -810,7 +819,7 @@ fn header(ui: &mut Ui, cx: &mut Cx, s: &Session) {
                 let a = ui.painter().layout_no_wrap(who.clone(), theme::sans_semi(14.0), t.ink);
                 let c = pos2(wr.center().x - a.size().x / 2.0, top + (19.6 - a.size().y) / 2.0);
                 ui.painter().galley(c, a, t.ink);
-                cx.ctl.text("student-pos", &format!("{who}, student {} of {}", i + 1, n), HEADER, wr.min);
+                cx.ctl.text("student-pos", &format!("{who}, student {} of {}", i + 1, n), HEADER, wr);
                 let b = ui.painter().layout_no_wrap(format!("{} of {}", i + 1, n), theme::sans(13.0), t.muted);
                 let c = pos2(wr.center().x - b.size().x / 2.0, top + 19.6 + (18.2 - b.size().y) / 2.0);
                 ui.painter().galley(c, b, t.muted);
@@ -832,7 +841,7 @@ fn header(ui: &mut Ui, cx: &mut Cx, s: &Session) {
             let icon_col = if cx.save.failed.is_some() { t.bad } else { t.ok };
             widgets::paint_icon(ui, Rect::from_center_size(pos2(sr.left() + 9.0, sr.center().y), vec2(18.0, 18.0)), icon, icon_col);
             ui.painter().galley(pos2(sr.left() + 24.0, sr.center().y - sg.size().y / 2.0), sg, save_col);
-            cx.ctl.status("save-state", &save_text, HEADER, sr.min);
+            cx.ctl.status("save-state", &save_text, HEADER, sr);
         }
         1 => {
             let split = s.split;
@@ -950,7 +959,7 @@ fn run_bar(ui: &mut Ui, cx: &mut Cx, id: &str, title: &str, sub: &str, buttons: 
             let r = css_text(ui, title, theme::sans_semi(14.0), t.ink, 14.0 * 1.4, width, false);
             ui.add_space(2.0);
             css_text(ui, sub, theme::sans(13.0), t.muted, 13.0 * 1.4, width, false);
-            cx.ctl.status(id, &format!("{title} {sub}"), TEXT, r.min);
+            cx.ctl.status(id, &format!("{title} {sub}"), TEXT, r);
         };
         let btns = |ui: &mut Ui, cx: &mut Cx, buttons: Vec<BarBtn>| {
             ui.spacing_mut().item_spacing.x = 8.0;
@@ -993,10 +1002,10 @@ fn inbox_body(ui: &mut Ui, cx: &mut Cx, s: &Session) {
     let sub = format!("{}{}", if topic.is_empty() { String::new() } else { format!("{topic}, ") }, state::plural(tally.total, "student", "students"));
     let size = if cx.narrow { 30.0 } else { 36.0 };
     let r = css_text(ui, title, theme::serif_semi(size), t.ink, size * 1.15, w, true);
-    cx.ctl.heading("inbox-title", 1, title, TEXT, r.min);
+    cx.ctl.heading("inbox-title", 1, title, TEXT, r);
     ui.add_space(8.0);
     let r = css_text(ui, &sub, theme::sans(14.0), t.muted, 14.0 * 1.4, w, false);
-    cx.ctl.text("inbox-sub", &sub, TEXT, r.min);
+    cx.ctl.text("inbox-sub", &sub, TEXT, r);
 
     if groups.is_empty() {
         ui.add_space(28.0);
@@ -1007,7 +1016,7 @@ fn inbox_body(ui: &mut Ui, cx: &mut Cx, s: &Session) {
                 widgets::paint_icon(ui, ir, Icon::Page, t.muted);
                 ui.add_space(10.0);
                 let r = css_text(ui, "No pages in this assignment", theme::sans_semi(18.0), t.ink, 18.0 * 1.4, w, false);
-                cx.ctl.heading("inbox-empty", 2, "No pages in this assignment", TEXT, r.min);
+                cx.ctl.heading("inbox-empty", 2, "No pages in this assignment", TEXT, r);
             });
         });
         return;
@@ -1081,7 +1090,7 @@ fn inbox_body(ui: &mut Ui, cx: &mut Cx, s: &Session) {
             "{} ready to read, {} need a check, {} failed, {} not done yet",
             tally.ready, tally.check, tally.failed, tally.processing
         );
-        cx.ctl.status("stackbar", &label, TEXT, rect.min);
+        cx.ctl.status("stackbar", &label, TEXT, rect);
     }
 
     // tabs: `.tabs { gap: 8px; margin-top: 16px }`, `.tab { height: 44px; padding: 0 16px; gap: 8px }`
@@ -1136,11 +1145,11 @@ fn inbox_body(ui: &mut Ui, cx: &mut Cx, s: &Session) {
                 widgets::paint_icon(ui, ir, Icon::Check, t.muted);
                 ui.add_space(10.0);
                 let r = css_text(ui, "Nothing left to check", theme::sans_semi(18.0), t.ink, 18.0 * 1.4, w, false);
-                cx.ctl.heading("inbox-nothing", 2, "Nothing left to check", TEXT, r.min);
+                cx.ctl.heading("inbox-nothing", 2, "Nothing left to check", TEXT, r);
                 ui.add_space(10.0);
                 let msg = "Every student in this filter has been read. Pick another filter to see the rest.";
                 let r = css_text(ui, msg, theme::sans(14.0), t.muted, 14.0 * 1.4, 36.0 * 8.0, false);
-                cx.ctl.text("inbox-nothing-text", msg, TEXT, r.min);
+                cx.ctl.text("inbox-nothing-text", msg, TEXT, r);
                 ui.add_space(16.0);
                 if widgets::button(cx.ctl, ui, t, C::new("show-all", "Show all students", TEXT), "Show all students", Look::Outline, 0.0) {
                     cx.acts.push(Act::Filter(state::Filter::All));
@@ -1291,7 +1300,7 @@ fn toast(ctx: &egui::Context, cx: &mut Cx, msg: &str, err: bool) {
             });
         });
     let r = area.response.rect;
-    cx.ctl.status("toast", msg, TEXT, r.min);
+    cx.ctl.status("toast", msg, TEXT, r);
 }
 
 // ------------------------------------------------------------------ review
@@ -1526,7 +1535,7 @@ fn scan(ui: &mut Ui, cx: &mut Cx, s: &Session, stacked: bool) {
             // stacked above the tools it is just a line of text (`line-height: 1.4` at 14px), not a 44px row
             let r = ui.allocate_response(vec2(tg.size().x.max(1.0), if one_row { TARGET } else { 14.0 * 1.4 }), Sense::hover());
             ui.painter().text(pos2(r.rect.left(), r.rect.center().y), egui::Align2::LEFT_CENTER, &title, theme::sans_semi(14.0), t.ink);
-            cx.ctl.heading("scan-title", 2, &title, SCAN, r.rect.min);
+            cx.ctl.heading("scan-title", 2, &title, SCAN, r.rect);
         };
         let has = cur.is_some();
         let z = s.zoom;
@@ -1653,7 +1662,9 @@ fn scan(ui: &mut Ui, cx: &mut Cx, s: &Session, stacked: bool) {
                 ui.painter().circle_filled(dc, 4.0, dot_color(t, p));
                 if cx.ctl.reg(ui, &r, C::new(&format!("page-{id}"), &label, SCAN).pressed(on).role("listitem")) {
                     let m = ui.input(|i| i.modifiers);
-                    cx.acts.push(Act::StripClick { id: id.clone(), multi: m.command || m.ctrl, shift: m.shift });
+                    // a click from the twin (Shift+Enter, Ctrl+Enter on the focused thumbnail) brings its own
+                    let (dc, ds) = cx.ctl.dom_mods(&format!("page-{id}"));
+                    cx.acts.push(Act::StripClick { id: id.clone(), multi: m.command || m.ctrl || dc, shift: m.shift || ds });
                 }
             }
             if !s.multi.is_empty() {
@@ -1888,10 +1899,10 @@ fn transcript_pane(ui: &mut Ui, cx: &mut Cx, s: &Session, g: Option<&vishion_cor
     let wrap_w = if same_row { block_w } else { avail };
     let top = ui.cursor().min;
     let name_r = css_text(ui, &g.name, theme::serif_semi(32.0), t.ink, 32.0 * 1.15, wrap_w, true);
-    cx.ctl.heading("student-name", 1, &g.name, TEXT, name_r.min);
+    cx.ctl.heading("student-name", 1, &g.name, TEXT, name_r);
     ui.add_space(6.0);
     let meta_r = css_text(ui, &meta, theme::sans(14.0), t.muted, 14.0 * 1.4, wrap_w, false);
-    cx.ctl.text("student-meta", &meta, TEXT, meta_r.min);
+    cx.ctl.text("student-meta", &meta, TEXT, meta_r);
     ui.add_space(4.0);
     let at = ui.cursor().min + vec2(-16.0, 0.0);
     let clicked = widgets::button_at(cx.ctl, ui, t, C::new("change-student", "Change student", TEXT), "Change student", Look::Ghost, at);
@@ -1908,7 +1919,7 @@ fn transcript_pane(ui: &mut Ui, cx: &mut Cx, s: &Session, g: Option<&vishion_cor
         p
     };
     let r = widgets::pill_at(ui, t, kind, &label, pill_min);
-    cx.ctl.status("student-status", &label, TEXT, r.min);
+    cx.ctl.status("student-status", &label, TEXT, r);
 
     // legend + version: `.legend-row { margin-top: 18px; gap: 10px 20px }`
     ui.add_space(18.0);
@@ -1946,7 +1957,7 @@ fn transcript_pane(ui: &mut Ui, cx: &mut Cx, s: &Session, g: Option<&vishion_cor
                         let (ir, _) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::hover());
                         widgets::paint_icon(ui, ir, Icon::Warn, t.bad);
                         let r = ui.add(egui::Label::new(RichText::new(msg).color(t.ink)).wrap());
-                        cx.ctl.status("page-error", msg, TEXT, r.rect.min);
+                        cx.ctl.status("page-error", msg, TEXT, r.rect);
                     });
                     ui.add_space(12.0);
                     if widgets::button(cx.ctl, ui, t, C::new("retry-page", "Retry this page", TEXT), "Retry this page", Look::Outline, 0.0) {
@@ -1994,11 +2005,11 @@ fn state_block(ui: &mut Ui, cx: &mut Cx, title: &str, text: &str, button: Option
     let tg = ui.painter().layout_no_wrap(title.to_string(), theme::sans_semi(18.0), t.ink);
     let dy = ((h3_h - tg.size().y) / 2.0 + 0.2).round();
     ui.painter().galley(pos2(cxm - tg.size().x / 2.0, y + dy), tg.clone(), t.ink);
-    cx.ctl.heading("state-title", 2, title, TEXT, pos2(cxm - tg.size().x / 2.0, y));
+    cx.ctl.heading("state-title", 2, title, TEXT, Rect::from_min_size(pos2(cxm - tg.size().x / 2.0, y), vec2(tg.size().x, h3_h)));
     y += h3_h + 10.0;
     let ny = ((14.0 * 1.4 - ui.painter().layout_no_wrap("Hg".into(), theme::sans(14.0), t.muted).size().y) / 2.0 + 0.2).round();
     ui.painter().galley(pos2(cxm, y + ny), pg, t.muted);
-    cx.ctl.text("state-text", text, TEXT, pos2(cxm - max_p / 2.0, y));
+    cx.ctl.text("state-text", text, TEXT, Rect::from_min_size(pos2(cxm - max_p / 2.0, y), vec2(max_p, rows * 14.0 * 1.4)));
     y += rows * 14.0 * 1.4 + 10.0;
     if let Some((id, label, act)) = button {
         let bw = tw(ui, label, theme::sans_semi(14.0)) + widgets::BTN_PAD;
@@ -2040,8 +2051,8 @@ fn legend_row(ui: &mut Ui, cx: &mut Cx, s: &Session) {
     let row_h = if one_row { TARGET.max(legend_h) } else { legend_h };
     let (rect, _) = ui.allocate_exact_size(vec2(avail, row_h), Sense::hover());
     // what the three swatches mean (the JS tree has them as text)
-    cx.ctl.text("legend", "Spelling to check, Couldn’t read, You checked it", TEXT, rect.min);
     let mut y = rect.top() + if one_row { (row_h - legend_h) / 2.0 } else { 0.0 };
+    cx.ctl.text("legend", "Spelling to check, Couldn’t read, You checked it", TEXT, Rect::from_min_size(pos2(rect.left(), y), vec2(legend_w, legend_h)));
     for row in &rows {
         let mut x = rect.left();
         for &i in row {
@@ -2093,7 +2104,7 @@ fn plain_text(ui: &mut Ui, cx: &mut Cx, s: &Session, p: &Page) {
     // `.tx-text.plain { white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/1.65 mono }`
     let w = ui.available_width();
     let r = css_text(ui, &text, egui::FontId::new(13.0, egui::FontFamily::Monospace), t.ink, 13.0 * 1.65, w, true);
-    cx.ctl.text(&format!("plain-{}", p.id()), &text, TEXT, r.min);
+    cx.ctl.text(&format!("plain-{}", p.id()), &text, TEXT, r);
     transcript_group(ui, cx, r);
 }
 
@@ -2203,7 +2214,7 @@ fn unit(ui: &mut Ui, cx: &mut Cx, s: &Session, p: &Page, line: &Line, items: &[w
                 ui.scroll_to_rect(rect, None);
             }
         }
-        cx.ctl.end_para(&id, TEXT, rect.min, true, reading);
+        cx.ctl.end_para(&id, TEXT, rect, true, reading);
         return rect;
     }
 
@@ -2436,7 +2447,7 @@ fn unit(ui: &mut Ui, cx: &mut Cx, s: &Session, p: &Page, line: &Line, items: &[w
             ui.painter().rect_filled(Rect::from_min_max(pos2(origin.x + seg.1, y), pos2(origin.x + seg.2.max(seg.1 + 1.0), y + 3.0)), 1.0, t.accent);
         }
     }
-    cx.ctl.end_para(&id, TEXT, rect.min, true, reading);
+    cx.ctl.end_para(&id, TEXT, rect, true, reading);
     rect
 }
 
@@ -2607,7 +2618,7 @@ fn foot(ui: &mut Ui, cx: &mut Cx, s: &Session, p: &Page, has_words: bool) {
                     FootItem::Text(id, x) => {
                         let r = ui.add(egui::Label::new(RichText::new(&x).font(theme::sans(13.0)).color(t.muted)).wrap());
                         // the token stat and the hint are part of the page for someone who cannot see it
-                        cx.ctl.text(id, &x, TEXT, r.rect.min);
+                        cx.ctl.text(id, &x, TEXT, r.rect);
                     }
                     FootItem::Btn { id, label, look, act } => {
                         if widgets::button_sized(cx.ctl, ui, t, C::new(id, label, TEXT), label, look, 13.0) {
@@ -2658,7 +2669,7 @@ fn tray(ui: &mut Ui, cx: &mut Cx, s: &Session, entries: &[Entry]) {
         let head_title = |ui: &mut Ui, cx: &mut Cx| {
             let r = ui.allocate_response(vec2(title_w.max(1.0), TARGET), Sense::hover());
             ui.painter().text(pos2(r.rect.left(), r.rect.center().y), egui::Align2::LEFT_CENTER, title, theme::sans_semi(16.0), t.ink);
-            cx.ctl.heading("tray-title", 2, title, TRAY, r.rect.min);
+            cx.ctl.heading("tray-title", 2, title, TRAY, r.rect);
         };
         let head_ctl = |ui: &mut Ui, cx: &mut Cx| {
             ui.spacing_mut().item_spacing.x = 8.0;
@@ -2677,7 +2688,7 @@ fn tray(ui: &mut Ui, cx: &mut Cx, s: &Session, entries: &[Entry]) {
                 let cr = ui.allocate_response(vec2(56.0, TARGET), Sense::hover());
                 ui.painter().text(cr.rect.center(), egui::Align2::CENTER_CENTER, &count, theme::sans(13.0), t.muted);
                 // the position the sighted reader sees, read out between the two step buttons
-                cx.ctl.status("tray-count", &format!("Word {count}"), TRAY, cr.rect.min);
+                cx.ctl.status("tray-count", &format!("Word {count}"), TRAY, cr.rect);
                 if widgets::icon_button(cx.ctl, ui, t, C::new("next-word", "Next word to check", TRAY), Icon::Right, false) {
                     cx.acts.push(Act::StepWord(1));
                 }
@@ -2708,7 +2719,7 @@ fn tray(ui: &mut Ui, cx: &mut Cx, s: &Session, entries: &[Entry]) {
         ui.add_space(2.0);
         let note = s.note(&cur);
         let r = css_text(ui, &note, theme::sans(14.0), t.muted, 14.0 * 1.4, ui.available_width(), false);
-        cx.ctl.text("tray-note", &note, TRAY, r.min);
+        cx.ctl.text("tray-note", &note, TRAY, r);
         ui.add_space(14.0);
 
         let crop = page.and_then(|p| crop_for(p, &cur, cx.images));
@@ -2793,7 +2804,7 @@ fn alternatives(ui: &mut Ui, cx: &mut Cx, s: &Session, cur: &Entry) {
         if has {
             let msg = "The percentages are the model’s own estimate, not a measured probability.";
             let r = ui.add(egui::Label::new(RichText::new(msg).font(theme::sans(13.0)).color(t.muted)).wrap());
-            cx.ctl.text("guess-hint", msg, TRAY, r.rect.min);
+            cx.ctl.text("guess-hint", msg, TRAY, r.rect);
         } else {
             let guessed = page.is_some_and(|p| jsx_truthy(p.get("guessed")));
             let label = if guessed { "Look again for likely words" } else { "Suggest likely words" };

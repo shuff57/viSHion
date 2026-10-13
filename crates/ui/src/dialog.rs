@@ -125,7 +125,7 @@ pub fn commit(s: &mut Session, d: &Dialog) {
 
 fn heading(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, text: &str) {
     let r = ui.label(RichText::new(text).font(theme::serif_semi(22.0)).color(t.ink));
-    ctl.heading("dialog-title", 2, text, DIALOG, r.rect.min);
+    ctl.heading("dialog-title", 2, text, DIALOG, r.rect);
 }
 
 /// Draw the dialog over a scrim. Returns what the user decided this frame.
@@ -156,7 +156,7 @@ pub fn show(ctx: &egui::Context, ctl: &mut Ctl, t: &Tokens, s: &Session, d: &mut
                     Dialog::Confirm { title, text, ok, danger, then } => {
                         heading(ctl, ui, t, title);
                         let r = ui.label(RichText::new(text.as_str()).font(theme::sans(14.0)).color(t.ink));
-                        ctl.text("dialog-text", text, DIALOG, r.rect.min);
+                        ctl.text("dialog-text", text, DIALOG, r.rect);
                         ui.add_space(6.0);
                         ui.horizontal(|ui| {
                             if widgets::button(ctl, ui, t, C::new("dialog-cancel", "Cancel", DIALOG), "Cancel", Look::Outline, 0.0) {
@@ -178,17 +178,17 @@ pub fn show(ctx: &egui::Context, ctl: &mut Ctl, t: &Tokens, s: &Session, d: &mut
 fn section(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, id: &'static str, text: &str) {
     ui.add_space(6.0);
     let r = ui.label(RichText::new(text).font(theme::serif_semi(17.0)).color(t.ink));
-    ctl.heading(id, 3, text, DIALOG, r.rect.min);
+    ctl.heading(id, 3, text, DIALOG, r.rect);
 }
 
 fn label(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, id: &'static str, text: &str) {
     let r = ui.label(RichText::new(text).font(theme::sans_semi(14.0)).color(t.ink));
-    ctl.text(id, text, DIALOG, r.rect.min);
+    ctl.text(id, text, DIALOG, r.rect);
 }
 
 fn hint(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, id: &'static str, text: &str) {
     let r = ui.label(RichText::new(text).font(theme::sans(13.0)).color(t.muted));
-    ctl.text(id, text, DIALOG, r.rect.min);
+    ctl.text(id, text, DIALOG, r.rect);
 }
 
 /// A row of choices where one is on (`aria-pressed`): returns the value picked.
@@ -339,7 +339,7 @@ fn change_student(
     let mut out = None;
     heading(ctl, ui, t, "Change student");
     let r = ui.label(RichText::new("This page belongs to").font(theme::sans_semi(14.0)).color(t.ink));
-    ctl.text("cs-label", "This page belongs to", DIALOG, r.rect.min);
+    ctl.text("cs-label", "This page belongs to", DIALOG, r.rect);
     let names = s.other_students();
     egui::ScrollArea::vertical().max_height(220.0).auto_shrink([true, true]).show(ui, |ui| {
         ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
@@ -391,7 +391,7 @@ fn change_student(
     if *error {
         let m = "Choose a student, or type a name.";
         let r = ui.label(RichText::new(m).font(theme::sans(13.0)).color(t.bad));
-        ctl.status("cs-error", m, DIALOG, r.rect.min);
+        ctl.status("cs-error", m, DIALOG, r.rect);
     }
     ui.add_space(4.0);
     ui.horizontal(|ui| {

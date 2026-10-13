@@ -131,6 +131,30 @@ try {
     expect(small.length === 0, 'every control is at least 44 x 44 CSS px' + (small.length ? ': ' + small : ''));
     const off = rects.filter(r => r.x < -1 || r.x + r.w > 1281 || r.w > 1281).map(r => r.id);
     expect(off.length === 0, 'no control is placed outside the viewport horizontally' + (off.length ? ': ' + off : ''));
+    // ---- text nodes too: headings, lines, counts, math and landmarks are laid over where they are drawn (touch
+    // exploration, magnifier tracking and the highlight of a screen reader follow the rectangle)
+    const geo = await page.evaluate(() => {
+      const box = (e) => { const r = e.getBoundingClientRect(); return { id: e.dataset.id, x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) }; };
+      const q = (s) => [...document.querySelectorAll(s)].map(box);
+      const g = (i) => { const e = document.querySelector('#controls [data-id="' + i + '"]'); return e ? box(e) : null; };
+      return {
+        text: q('#controls h1, #controls h2, #controls h3, #controls p, #controls [role=alert]').filter((b) => b.id !== 'toast'),
+        landmarks: q('#controls [role=banner], #controls [role=main], #controls [role=complementary], #controls [role=region]'),
+        h1: g('student-name'), pane: g('transcript'), lines: q('#controls p[data-id^="line-"]'), tray: g('region-3'),
+      };
+    });
+    const flat = geo.text.filter((b) => b.w <= 0 || b.h <= 0 || b.x < -1 || b.x + b.w > 1282).map((b) => `${b.id} ${b.w}x${b.h}@${b.x},${b.y}`);
+    expect(flat.length === 0, 'every heading, line and count has a rectangle inside the window' + (flat.length ? ': ' + flat.slice(0, 6) : ''));
+    const stacked = geo.text.filter((b) => b.x === 0 && b.w > 1200).map((b) => b.id);
+    expect(stacked.length === 0, 'text is not stacked full width at the left edge' + (stacked.length ? ': ' + stacked.slice(0, 6) : ''));
+    expect(geo.landmarks.length >= 4 && geo.landmarks.every((b) => b.w > 0 && b.h > 0), 'landmarks and regions have the rectangle of what they hold: ' + JSON.stringify(geo.landmarks.map((b) => b.id + ':' + b.w + 'x' + b.h)));
+    expect(geo.h1 && geo.pane && geo.h1.x >= geo.pane.x - 4 && geo.h1.x + geo.h1.w <= geo.pane.x + geo.pane.w + 4, 'the h1 is inside the transcript pane where it is drawn: ' + JSON.stringify([geo.h1, geo.pane]));
+    expect(geo.lines.length > 0 && geo.lines.every((b) => b.x >= geo.pane.x - 4 && b.x + b.w <= geo.pane.x + geo.pane.w + 8), 'every transcript line is inside the transcript pane');
+    // lines do not overlap one another (the highlight of one is not drawn over its neighbour)
+    const sorted = [...geo.lines].sort((p, c) => p.y - c.y);
+    const overlap = sorted.filter((b, i) => i > 0 && b.y < sorted[i - 1].y + sorted[i - 1].h - 3).map((b) => b.id);
+    expect(overlap.length === 0, 'transcript lines do not overlap' + (overlap.length ? ': ' + overlap.slice(0, 4) : ''));
+
     // alignment end to end: a real mouse click at the centre of the twin's rectangle reaches the widget there
     const zin = rects.find(r => r.id === 'zoom-in');
     await page.mouse.click(zin.x + zin.w / 2, zin.y + zin.h / 2);
@@ -246,7 +270,9 @@ try {
     const pageBefore = await page.evaluate(() => document.querySelector('#controls [data-id^="page-"][aria-pressed="true"]')?.dataset.id);
     await page.evaluate(() => document.querySelector('#controls [data-id="word-p-maya-1-i:0"]').focus());
     await page.keyboard.press('Enter');
-    expect(await a.wait(async () => await a.has('typed-word')), 'the illegible word opens its text box');
+    // the text box is on the page whichever word the panel has open: wait for the panel to be on THIS word (its note
+    // says the model could not read it), or text typed before the pick is applied lands on the word that was open
+    expect(await a.wait(async () => /could not read this word/.test((await a.text('tray-note')) || '') && await a.has('typed-word')), 'the illegible word opens its text box');
     await page.evaluate(() => document.querySelector('#controls [data-id="typed-word"]').focus());
     await page.keyboard.type('mean');
     expect(await val() === 'mean', 'typing shows in the twin box');

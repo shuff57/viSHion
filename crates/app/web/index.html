@@ -19,8 +19,15 @@
   #controls p, #controls h1, #controls h2, #controls h3, #controls ul { margin: 0; padding: 0; list-style: none; }
   /* live regions: always in the document (one that appears together with its text is often not spoken) */
   .live { position: absolute; left: 0; top: 0; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  /* what is on the page before the first frame, and instead of it when the app cannot start: plain text, so a
+     screen reader has something to say while the 1.8 MB download runs (the JS app is DOM and has its text at once) */
+  #boot { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px;
+          padding: 24px; text-align: center; font: 18px/1.4 system-ui, sans-serif; color: #1B2230; }
+  #boot p { margin: 0; max-width: 40em; }
+  #boot .detail { font-size: 14px; opacity: .8; }
+  @media (prefers-color-scheme: dark) { #boot { color: #E6EAF2; } }
   /* Windows contrast themes: the page behind the canvas takes the system colours */
-  @media (forced-colors: active) { html, body { background: Canvas; } }
+  @media (forced-colors: active) { html, body { background: Canvas; } #boot { color: CanvasText; } }
 </style>
 </head>
 <body>
@@ -28,6 +35,7 @@
 <div id="controls"></div>
 <div id="announce" class="live" role="status" aria-live="polite" aria-atomic="true"></div>
 <div id="announce-alert" class="live" role="alert" aria-live="assertive" aria-atomic="true"></div>
+<div id="boot"><p id="boot-status" role="status">Loading viSHion&hellip;</p><div id="boot-error" role="alert"></div></div>
 <noscript>viSHion needs JavaScript and WebAssembly.</noscript>
 <script type="module">
 import init, { start } from './vishion_app.js';
@@ -35,9 +43,26 @@ try {
   await init();
   await start('c');
   window.__ready = true;
+  document.getElementById('boot')?.remove();
 } catch (e) {
   window.__error = String(e);
   console.error(e);
+  // say why, in text: without WebGL (a remote desktop, a blocklisted GPU, a locked-down browser) the canvas
+  // cannot be created and the page would be blank for everyone, not only for a screen reader
+  const msg = /webgl/i.test(window.__error)
+    ? 'viSHion could not start: this browser has no WebGL, which it draws with. Turn on hardware acceleration in the browser settings, or open viSHion in another browser.'
+    : 'viSHion could not start. Reload the page; if it happens again, try another browser.';
+  const st = document.getElementById('boot-status');
+  if (st) st.textContent = '';
+  const box = document.getElementById('boot-error');
+  if (box) {
+    const p = document.createElement('p');
+    p.textContent = msg;
+    const d = document.createElement('p');
+    d.className = 'detail';
+    d.textContent = window.__error;
+    box.append(p, d);
+  }
 }
 </script>
 </body>

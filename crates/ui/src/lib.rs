@@ -83,6 +83,10 @@ pub struct Ctl {
     /// Activations from the twin, oldest first. A control takes one per frame, so several quick activations
     /// of the same button (key repeat, a script) are each applied instead of coalescing into one.
     act: Vec<String>,
+    /// The modifier keys (ctrl or command, shift) that were down for a pending activation from the twin: a
+    /// click on a DOM button carries them, as a click on the canvas carries egui's (Shift+Enter on a page
+    /// thumbnail selects a range, as Shift+click does).
+    act_mods: HashMap<String, (bool, bool)>,
     /// Ids that took an activation this frame (the rest of their queue waits for the next frame).
     consumed: HashSet<String>,
     focus: Option<String>,
@@ -358,16 +362,19 @@ impl Ctl {
         self.say_nodes.push((id, lead.to_string()));
     }
 
-    pub fn heading(&mut self, id: &str, level: u8, text: &str, region: u8, min: egui::Pos2) {
-        self.nodes.push(Node::Heading { id: id.into(), level, text: text.into(), region, pos: twin::pos_of(min) });
+    pub fn heading(&mut self, id: &str, level: u8, text: &str, region: u8, rect: egui::Rect) {
+        let (at, size) = twin::geo(rect);
+        self.nodes.push(Node::Heading { id: id.into(), level, text: text.into(), region, pos: twin::pos_of(rect.min), at, size });
     }
 
-    pub fn status(&mut self, id: &str, text: &str, region: u8, min: egui::Pos2) {
-        self.nodes.push(Node::Status { id: id.into(), text: text.into(), region, pos: twin::pos_of(min) });
+    pub fn status(&mut self, id: &str, text: &str, region: u8, rect: egui::Rect) {
+        let (at, size) = twin::geo(rect);
+        self.nodes.push(Node::Status { id: id.into(), text: text.into(), region, pos: twin::pos_of(rect.min), at, size });
     }
 
-    pub fn text(&mut self, id: &str, text: &str, region: u8, min: egui::Pos2) {
-        self.nodes.push(Node::Text { id: id.into(), text: text.into(), region, pos: twin::pos_of(min) });
+    pub fn text(&mut self, id: &str, text: &str, region: u8, rect: egui::Rect) {
+        let (at, size) = twin::geo(rect);
+        self.nodes.push(Node::Text { id: id.into(), text: text.into(), region, pos: twin::pos_of(rect.min), at, size });
     }
 
     /// Start a paragraph: controls registered until `end_para` are inline in it.
@@ -412,10 +419,16 @@ impl Ctl {
         }
     }
 
-    pub fn end_para(&mut self, id: &str, region: u8, min: egui::Pos2, keys: bool, reading: bool) {
+    pub fn end_para(&mut self, id: &str, region: u8, rect: egui::Rect, keys: bool, reading: bool) {
         if let Some(parts) = self.para.take() {
-            self.nodes.push(Node::Para { id: id.into(), parts, region, pos: twin::pos_of(min), keys, reading });
+            let (at, size) = twin::geo(rect);
+            self.nodes.push(Node::Para { id: id.into(), parts, region, pos: twin::pos_of(rect.min), keys, reading, at, size });
         }
+    }
+
+    /// Modifier keys (ctrl or command, shift) that came with the activation this control took from the twin.
+    pub(crate) fn dom_mods(&self, id: &str) -> (bool, bool) {
+        self.act_mods.get(id).copied().unwrap_or((false, false))
     }
 
     /// Is the focus on a control or group whose id starts with `prefix`?
@@ -431,7 +444,14 @@ impl Ctl {
         let msgs: Vec<String> = std::mem::take(&mut *q.lock().unwrap());
         for m in msgs {
             if let Some(id) = m.strip_prefix("act:") {
-                self.act.push(id.into());
+                // "act:<id>" or "act:<id>\u{1}<c|s|cs>" with the modifiers that were held
+                match id.split_once('\u{1}') {
+                    Some((id, mods)) => {
+                        self.act_mods.insert(id.into(), (mods.contains('c'), mods.contains('s')));
+                        self.act.push(id.into());
+                    }
+                    None => self.act.push(id.into()),
+                }
             } else if let Some(id) = m.strip_prefix("focus:") {
                 self.focus = Some(id.into());
                 self.focus_fresh = true;
@@ -514,6 +534,9 @@ pub struct App {
     #[cfg(not(target_arch = "wasm32"))]
     tab_queue: Vec<bool>,
     last_save: Option<String>,
+    /// Per page: its status and a hash of its transcript as last seen, so the start and the end of a
+    /// transcription (and a transcript replaced in one step) are spoken (the JS app has a status pill).
+    run_seen: HashMap<String, (String, u64)>,
     said_log: Vec<String>,
     /// The last utterance and how many there were (native: the live region of the accessibility tree).
     #[cfg(not(target_arch = "wasm32"))]
@@ -604,6 +627,7 @@ impl App {
             #[cfg(not(target_arch = "wasm32"))]
             tab_queue: vec![],
             last_save: None,
+            run_seen: HashMap::new(),
             said_log: vec![],
             #[cfg(not(target_arch = "wasm32"))]
             native_said: String::new(),
@@ -1140,6 +1164,10 @@ impl App {
         // control has queued beyond the one it took this frame waits for the next frame
         let consumed = std::mem::take(&mut self.ctl.consumed);
         self.ctl.act.retain(|id| consumed.contains(id));
+        {
+            let pending = &self.ctl.act;
+            self.ctl.act_mods.retain(|id, _| pending.contains(id));
+        }
         if !self.ctl.act.is_empty() {
             ctx.request_repaint();
         }
@@ -1223,6 +1251,7 @@ impl App {
         if let Some(n) = web::take_notice() {
             self.ctl.said.push((n, false));
         }
+        self.announce_runs();
         self.ctl.say_wait = std::mem::take(&mut self.ctl.say_nodes);
         if !self.ctl.say_wait.is_empty() {
             self.ctx.request_repaint();
@@ -1264,6 +1293,41 @@ impl App {
             if self.said_log.len() > 40 {
                 self.said_log.remove(0);
             }
+        }
+    }
+
+    /// Say when the open page starts being read, when its transcript arrives (or is replaced) and when it
+    /// fails. Without this "Transcribe this page again" replaces the text in silence.
+    fn announce_runs(&mut self) {
+        let Some(s) = &self.session else { return };
+        let mut news: Vec<(String, bool)> = vec![];
+        let mut seen: HashMap<String, (String, u64)> = HashMap::new();
+        for p in s.pages() {
+            let status = p.status().to_string();
+            let hash = if status == "transcribing" {
+                0
+            } else {
+                p.raw().bytes().fold(0xcbf29ce484222325u64, |h, b| (h ^ b as u64).wrapping_mul(0x100000001b3))
+            };
+            if s.selected.as_deref() == Some(p.id()) {
+                if let Some((was, was_hash)) = self.run_seen.get(p.id()) {
+                    if status == "transcribing" && was != "transcribing" {
+                        news.push(("Reading this page. The text appears as it is read.".into(), false));
+                    } else if status == "error" && was != "error" {
+                        let why = p.s("error");
+                        let why = if why.is_empty() { "" } else { why };
+                        news.push((format!("This page could not be transcribed. {why}").trim().to_string(), true));
+                    } else if status == "done" && (was == "transcribing" || *was_hash != hash) {
+                        let label = s.group().map(|g| s.pill(&g).1).unwrap_or_default();
+                        news.push((format!("The page was transcribed. {label}."), false));
+                    }
+                }
+            }
+            seen.insert(p.id().to_string(), (status, hash));
+        }
+        self.run_seen = seen;
+        for n in news {
+            self.ctl.said.push(n);
         }
     }
 
