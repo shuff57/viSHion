@@ -211,9 +211,29 @@ impl Backend {
         }
     }
 
+    /// `settings.straighten !== false`: new pictures are levelled when they are picked.
+    async fn straighten_on(&self) -> bool {
+        match self.projects.load_settings().await {
+            Ok(Some(m)) => Settings::load(&Value::Object(m)).get("straighten").and_then(Value::as_bool) != Some(false),
+            _ => true,
+        }
+    }
+
+    /// `prepare`, then `deskew` when the setting asks for it (upload.js `doReplace`, add.js).
+    async fn prepare_picture(&self, bytes: &[u8]) -> std::result::Result<Vec<u8>, String> {
+        let jpg = pictures::prepare(bytes)?;
+        if !self.straighten_on().await {
+            return Ok(jpg);
+        }
+        Ok(match pictures::deskew(&jpg) {
+            Ok((Some(level), _)) => level,
+            _ => jpg,
+        })
+    }
+
     /// `doReplace` of js/ui/upload.js: the picture is checked, stored, and the page told to reset itself.
     pub async fn replace_with(&self, slug: &str, id: &str, f: Picked) -> Event {
-        match pictures::prepare(&f.bytes) {
+        match self.prepare_picture(&f.bytes).await {
             Ok(jpg) => match self.projects.save_image(slug, id, &jpg).await {
                 Ok(()) => Event::PageReplaced { id: id.to_string(), name: f.name, bytes: jpg },
                 Err(e) => Event::Notice { text: format!("Could not save that picture: {e}"), error: true },
@@ -228,7 +248,7 @@ impl Backend {
         let mut pages: Vec<(Page, Vec<u8>)> = vec![];
         let mut skipped: Vec<String> = vec![];
         for (n, f) in files.into_iter().enumerate() {
-            match pictures::prepare(&f.bytes) {
+            match self.prepare_picture(&f.bytes).await {
                 Ok(jpg) => {
                     let id = uid(now, n as u64);
                     if self.projects.save_image(slug, &id, &jpg).await.is_err() {
@@ -299,9 +319,16 @@ impl Backend {
                 let files = pick_pictures(true).await;
                 self.add_with(&slug, &student, files, now).await
             }
-            Cmd::Straighten { .. } => Event::Notice {
-                text: "Straightening needs the imaging port, which arrives with phase 5. The page is unchanged.".into(),
-                error: false,
+            Cmd::Straighten { slug, id } => match self.projects.load_image(&slug, &id).await {
+                Ok(Some(b)) => match pictures::deskew(&b) {
+                    Ok((Some(jpg), angle)) => match self.projects.save_image(&slug, &id, &jpg).await {
+                        Ok(()) => Event::Straightened { id, angle, bytes: Some(jpg) },
+                        Err(e) => Event::SaveFailed(e.to_string()),
+                    },
+                    Ok((None, _)) => Event::Straightened { id, angle: 0.0, bytes: None },
+                    Err(_) => Event::Notice { text: "Could not straighten this page.".into(), error: true },
+                },
+                _ => Event::Notice { text: "The image of this page is missing.".into(), error: true },
             },
             Cmd::Transcribe { ids, .. } => {
                 let demo = self.demo_mode().await;

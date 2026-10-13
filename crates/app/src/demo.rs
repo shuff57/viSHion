@@ -278,11 +278,11 @@ mod tests {
     }
 
     #[test]
-    fn straighten_is_honest_and_transcribe_reads_in_demo_mode() {
+    fn straighten_levels_and_transcribe_reads_in_demo_mode() {
         let (store, slug) = block_on(seed(1)).unwrap();
         let be = Backend::new_demo(store, "Demo");
         let s = block_on(be.handle(Cmd::Straighten { slug: slug.clone(), id: "p-maya-1".into() }, 0));
-        assert!(matches!(s, Event::Notice { ref text, error: false } if text.contains("unchanged")));
+        assert!(matches!(s, Event::Straightened { angle, bytes: None, .. } if angle == 0.0), "{s:?}");
         // demo mode answers with the sample text, one event per page, by position in the run
         let Event::Many(evs) = block_on(be.handle(Cmd::Transcribe { slug: slug.clone(), ids: vec!["p-omar-1".into(), "p-ben-1".into()] }, 0)) else {
             panic!("expected one event per page")

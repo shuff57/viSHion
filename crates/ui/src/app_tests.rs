@@ -1079,17 +1079,12 @@ fn critic_word_stays_above_the_tray_when_the_crop_arrives() {
     h.frames(10);
     h.with_picture();
     h.frames(10);
-    let tray_top = h
-        .app
-        .nodes()
-        .iter()
-        .find_map(|n| match n {
-            Node::Heading { id, pos, .. } if id == "tray-title" => Some(pos.0 * 16),
-            _ => None,
-        })
-        .expect("tray title");
+    // the tray's first row (previous, next, close) starts 12 below its top edge
+    let tray_top = h.ctl("prev-word").expect("tray controls").at.1 - 12;
     let word = h.ctl(&w).expect("word control");
-    assert!(word.pos.0 * 16 + 22 <= tray_top, "the word ends at {} but the tray starts at {tray_top}", word.pos.0 * 16 + 22);
+    // the target is 44 high, centred on the painted word (29.7 high)
+    let chip_bottom = word.at.1 + 22 + 15;
+    assert!(chip_bottom <= tray_top, "the word ends at {chip_bottom} but the tray starts at {tray_top}");
 }
 
 fn blind_node_y(h: &H, id: &str) -> Option<i32> {

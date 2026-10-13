@@ -47,6 +47,11 @@ pub fn harden_web_dom(canvas_id: &str) {
 /// Messages from the DOM twin to egui: `act:<id>`, `focus:<id>`, `blur:<id>`, `text:<id>\u{1}<value>`.
 pub type Queue = Arc<Mutex<Vec<String>>>;
 
+/// A number as JS prints it in a sentence (`4` not `4.0`, `0.5`).
+fn jsx_num(v: f64) -> String {
+    vishion_core::jsx::num_str(v)
+}
+
 /// Milliseconds since the Unix epoch (egui time is relative; this is for `updated`/`at` fields).
 pub fn now_ms() -> i64 {
     #[cfg(target_arch = "wasm32")]
@@ -547,6 +552,27 @@ impl App {
                     }
                 }
                 Event::Many(_) => {}
+                Event::Straightened { id, angle, bytes } => {
+                    if let Some(b) = bytes {
+                        let slot = decode_image(&self.ctx, &id, &b).map_or(Slot::Missing, Slot::Ready);
+                        self.images.insert(id.clone(), slot);
+                    }
+                    let bands: Vec<bands::Band> = match self.images.get(&id) {
+                        Some(Slot::Ready(im)) => im.bands.clone(),
+                        _ => vec![],
+                    };
+                    let n = self.session.as_mut().map_or(0, |s| s.set_boxes_from_ink(&id, &bands));
+                    let tilt = angle.abs();
+                    let msg = if angle != 0.0 {
+                        format!("Straightened by {}°{}", jsx_num(tilt), if n > 0 { " and redrew the line boxes." } else { "." })
+                    } else if n > 0 {
+                        "The page was already level. Line boxes redrawn.".to_string()
+                    } else {
+                        "The page was already level.".to_string()
+                    };
+                    self.status_msg = Some(msg);
+                    self.status_err = false;
+                }
                 Event::Transcribed { id, outcome } => {
                     use host::ReadOutcome::*;
                     match outcome {

@@ -160,6 +160,18 @@ mod tests {
         assert_eq!(r.page("p-ben-1").status(), "done");
     }
 
+    /// Straighten is not a stub: a level page answers "already level" and the line boxes are redone from the
+    /// picture on screen.
+    #[test]
+    fn straighten_answers_and_redoes_the_line_boxes() {
+        let mut r = Rig::demo();
+        r.frames(10);
+        r.act("level");
+        let toast = r.texts().into_iter().map(|(t, _, _)| t).find(|t| t.contains("already level"));
+        assert!(toast.is_some(), "a toast says what happened: {:?}", r.texts().into_iter().map(|t| t.0).collect::<Vec<_>>());
+        assert_eq!(r.page("p-maya-1").status(), "done");
+    }
+
     /// The review screen opens unscrolled at 1280 x 800, as the JS app does: the name and the status pill
     /// are on screen and the word being decided sits just above the tray.
     #[test]

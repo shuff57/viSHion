@@ -808,10 +808,21 @@ fn review_panes(ctx: &egui::Context, cx: &mut Cx, s: &Session, narrow: bool) {
             .frame(egui::Frame::none().fill(t.surface).inner_margin(Margin { left: if s.split { 1.0 } else { 0.0 }, ..Margin::ZERO }))
             .show(ctx, |ui| {
                 if tray_on {
+                    // a short window: the tray scrolls inside what is left after 150 for the transcript, so
+                    // the word being decided always has room above it
+                    let cap = (ui.available_height() - 150.0).max(120.0);
                     egui::TopBottomPanel::bottom("tray")
                         .resizable(false)
                         .frame(egui::Frame::none().fill(t.sunken))
-                        .show_inside(ui, |ui| tray(ui, cx, s, &entries));
+                        .show_inside(ui, |ui| {
+                            let out = egui::ScrollArea::vertical()
+                                .id_source("tray-scroll")
+                                .max_height(cap)
+                                .min_scrolled_height(cx.stage.tray_h.min(cap))
+                                .auto_shrink([false, true])
+                                .show(ui, |ui| tray(ui, cx, s, &entries));
+                            cx.stage.tray_h = out.content_size.y;
+                        });
                 }
                 let out = egui::ScrollArea::vertical().auto_shrink([false, false]).id_source("text-scroll").show(ui, |ui| {
                     text_column(ui, cx, s, g.as_ref(), &entries);
@@ -1779,28 +1790,42 @@ fn tray(ui: &mut Ui, cx: &mut Cx, s: &Session, entries: &[Entry]) {
     egui::Frame::none().inner_margin(Margin { left: side, right: side, top: 12.0, bottom: 24.0 }).show(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.spacing_mut().item_spacing = vec2(8.0, 6.0);
-        // head: title on the left, controls on the right (wrapping on a phone)
-        ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing = vec2(8.0, 2.0);
-            let title = if all_done { "All words checked" } else { "Check this word" };
-            let r = ui.allocate_response(vec2(tw(ui, title, theme::sans_semi(16.0)) + 12.0, TARGET), Sense::hover());
+        // `.tray-head { justify-content: space-between; gap: 4px 12px }`: the title at the left and the controls
+        // (`.tray-ctl`: use all, the nav, close; gap 8) at the right, or on rows of their own on a phone
+        ui.spacing_mut().item_spacing = vec2(8.0, 0.0);
+        let title = if all_done { "All words checked" } else { "Check this word" };
+        let title_w = tw(ui, title, theme::sans_semi(16.0));
+        let use_all = (unresolved >= 2).then(|| format!("Use all {unresolved} suggestions"));
+        let use_all_w = use_all.as_ref().map_or(0.0, |l| tw(ui, l, theme::sans_semi(14.0)) + 36.0);
+        let end_w = if all_done { tw(ui, "Done", theme::sans_semi(14.0)) + 36.0 } else { TARGET };
+        let nav_w = TARGET + 2.0 + 56.0 + 2.0 + TARGET;
+        let ctl_w = use_all_w + if use_all.is_some() { 8.0 } else { 0.0 } + nav_w + 8.0 + end_w;
+        let one_row = title_w + 12.0 + ctl_w <= ui.available_width();
+        let head_title = |ui: &mut Ui, cx: &mut Cx| {
+            let r = ui.allocate_response(vec2(title_w.max(1.0), TARGET), Sense::hover());
             ui.painter().text(pos2(r.rect.left(), r.rect.center().y), egui::Align2::LEFT_CENTER, title, theme::sans_semi(16.0), t.ink);
             cx.ctl.heading("tray-title", 2, title, TRAY, r.rect.min);
-            if unresolved >= 2 {
-                let l = format!("Use all {unresolved} suggestions");
-                if widgets::button(cx.ctl, ui, t, C::new("use-all", &l, TRAY), &l, Look::Outline, 0.0) {
+        };
+        let head_ctl = |ui: &mut Ui, cx: &mut Cx| {
+            ui.spacing_mut().item_spacing.x = 8.0;
+            if let Some(l) = &use_all {
+                if widgets::button(cx.ctl, ui, t, C::new("use-all", l, TRAY), l, Look::Outline, 0.0) {
                     cx.acts.push(Act::UseAll);
                 }
             }
-            if widgets::icon_button(cx.ctl, ui, t, C::new("prev-word", "Previous word to check", TRAY), Icon::Left, false) {
-                cx.acts.push(Act::StepWord(-1));
-            }
-            let count = format!("{} of {}", idx + 1, n);
-            let cr = ui.allocate_response(vec2(tw(ui, &count, theme::sans(13.0)) + 4.0, TARGET), Sense::hover());
-            ui.painter().text(cr.rect.center(), egui::Align2::CENTER_CENTER, &count, theme::sans(13.0), t.muted);
-            if widgets::icon_button(cx.ctl, ui, t, C::new("next-word", "Next word to check", TRAY), Icon::Right, false) {
-                cx.acts.push(Act::StepWord(1));
-            }
+            // `.nav { gap: 2px }` and `.count { min-width: 56px }`
+            ui.allocate_ui_with_layout(vec2(nav_w, TARGET), Layout::left_to_right(Align::Center), |ui| {
+                ui.spacing_mut().item_spacing.x = 2.0;
+                if widgets::icon_button(cx.ctl, ui, t, C::new("prev-word", "Previous word to check", TRAY), Icon::Left, false) {
+                    cx.acts.push(Act::StepWord(-1));
+                }
+                let count = format!("{} of {}", idx + 1, n);
+                let cr = ui.allocate_response(vec2(56.0, TARGET), Sense::hover());
+                ui.painter().text(cr.rect.center(), egui::Align2::CENTER_CENTER, &count, theme::sans(13.0), t.muted);
+                if widgets::icon_button(cx.ctl, ui, t, C::new("next-word", "Next word to check", TRAY), Icon::Right, false) {
+                    cx.acts.push(Act::StepWord(1));
+                }
+            });
             if all_done {
                 if widgets::button(cx.ctl, ui, t, C::new("tray-done", "Done", TRAY), "Done", Look::Primary, 0.0) {
                     cx.acts.push(Act::Tray(false));
@@ -1808,11 +1833,27 @@ fn tray(ui: &mut Ui, cx: &mut Cx, s: &Session, entries: &[Entry]) {
             } else if widgets::icon_button(cx.ctl, ui, t, C::new("tray-close", "Close the word panel", TRAY), Icon::Close, false) {
                 cx.acts.push(Act::Tray(false));
             }
-        });
+        };
+        if one_row {
+            ui.horizontal(|ui| {
+                head_title(ui, cx);
+                ui.add_space((ui.available_width() - ctl_w).max(0.0));
+                head_ctl(ui, cx);
+            });
+        } else {
+            ui.horizontal(|ui| head_title(ui, cx));
+            ui.add_space(4.0);
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing.y = 2.0;
+                head_ctl(ui, cx);
+            });
+        }
+        // `.tray-note { margin-top: 2px }`, then `.tray-body { margin-top: 14px }`
+        ui.add_space(2.0);
         let note = s.note(&cur);
-        let r = ui.add(egui::Label::new(RichText::new(&note).font(theme::sans(14.0)).color(t.muted)).wrap());
-        cx.ctl.text("tray-note", &note, TRAY, r.rect.min);
-        ui.add_space(8.0);
+        let r = css_text(ui, &note, theme::sans(14.0), t.muted, 14.0 * 1.4, ui.available_width(), false);
+        cx.ctl.text("tray-note", &note, TRAY, r.min);
+        ui.add_space(14.0);
 
         let crop = page.and_then(|p| crop_for(p, &cur, cx.images));
         // `.tray-body { display: flex; flex-wrap: wrap; gap: 20px }`: the crop is `0 1 280px`, the options
@@ -1830,7 +1871,7 @@ fn tray(ui: &mut Ui, cx: &mut Cx, s: &Session, entries: &[Entry]) {
                     ui.painter().rect_filled(r, 6.0, t.paper);
                     let im = Rect::from_center_size(r.center(), size.min(vec2(col_w, 120.0)));
                     ui.painter().image(tex, im, uv, Color32::WHITE);
-                    ui.label(RichText::new("This line, as the student wrote it").font(theme::sans(13.0)).color(t.muted));
+                    css_text(ui, "This line, as the student wrote it", theme::sans(13.0), t.muted, 13.0 * 1.4, col_w, false);
                 });
             }
             ui.allocate_ui_with_layout(vec2(alts_w, 0.0), Layout::top_down(Align::Min), |ui| {

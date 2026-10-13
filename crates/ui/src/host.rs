@@ -68,6 +68,9 @@ pub enum Event {
     PagesAdded { pages: Vec<(Page, Vec<u8>)> },
     /// The answer to `Transcribe` for one page.
     Transcribed { id: String, outcome: ReadOutcome },
+    /// The answer to `Straighten`: the angle that was removed (0 = the page was already level) and the new
+    /// picture when it changed. The line boxes are redone from the picture now on screen.
+    Straightened { id: String, angle: f64, bytes: Option<Vec<u8>> },
     /// The answer to `Guess`: `Err` is a message for the toast, the page is unchanged.
     Guessed { id: String, result: Result<serde_json::Map<String, serde_json::Value>, String> },
     /// Several events from one command, applied in order.

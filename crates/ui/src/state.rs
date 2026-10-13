@@ -876,6 +876,17 @@ impl Session {
         self.sync_tray();
     }
 
+    /// `levelPage` tail: `boxes = computeBoxes(image, raw)` for a transcribed page, `[]` otherwise. Returns the
+    /// number of boxes.
+    pub fn set_boxes_from_ink(&mut self, id: &str, bands: &[Band]) -> usize {
+        let Some(p) = self.a.pages.get_mut(id) else { return 0 };
+        let boxes = if p.status() == "done" && !p.raw().is_empty() { compute_boxes(p.raw(), bands) } else { vec![] };
+        let n = boxes.len();
+        p.set("boxes", Value::Array(boxes));
+        self.dirty.pages.insert(id.to_string());
+        n
+    }
+
     /// The page could not be read: status error with the message (`queue.js` catch).
     pub fn page_failed(&mut self, id: &str, msg: &str) {
         let Some(p) = self.a.pages.get_mut(id) else { return };
