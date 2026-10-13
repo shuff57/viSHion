@@ -13,6 +13,8 @@ struct H {
     out: egui::FullOutput,
     /// Text copied during any frame since the last `act` (clipboard output is per frame).
     copied: String,
+    /// Screen size in points (1280 x 800 unless a test asks for a phone).
+    size: (f32, f32),
 }
 
 impl H {
@@ -25,7 +27,7 @@ impl H {
         s.select(select);
         s.take_dirty();
         app.open_session(s, "Saved to your folder");
-        let mut h = H { app, ctx, sent, t: 0.0, out: Default::default(), copied: String::new() };
+        let mut h = H { app, ctx, sent, t: 0.0, out: Default::default(), copied: String::new(), size: (1280.0, 800.0) };
         h.frames(3);
         h
     }
@@ -34,7 +36,7 @@ impl H {
         for _ in 0..n {
             self.t += 0.1;
             let input = egui::RawInput {
-                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 800.0))),
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(self.size.0, self.size.1))),
                 time: Some(self.t),
                 ..Default::default()
             };
@@ -216,4 +218,118 @@ fn empty_store_and_failure_have_a_screen() {
     inbox.push(Event::Failed("boom".into()));
     let _ = ctx.run(input, |c| app.step(c, false));
     assert!(app.nodes().iter().any(|n| matches!(n, Node::Status { text, .. } if text == "boom")));
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Blind critic (phase 4 review screen): behaviour of js/ui/review.js + header.js that the screen lacks.
+// Each test names the JS behaviour it is checked against and is expected to FAIL until fixed.
+// ---------------------------------------------------------------------------------------------------------
+
+impl H {
+    fn key(&mut self, k: egui::Key) {
+        self.t += 0.1;
+        let ev = |pressed| egui::Event::Key { key: k, physical_key: None, pressed, repeat: false, modifiers: Default::default() };
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(self.size.0, self.size.1))),
+            time: Some(self.t),
+            events: vec![ev(true), ev(false)],
+            ..Default::default()
+        };
+        let app = &mut self.app;
+        self.out = self.ctx.run(input, |c| app.step(c, false));
+        self.frames(2);
+    }
+
+    fn has(&self, label: &str) -> bool {
+        self.app.controls().iter().any(|c| c.label.contains(label))
+    }
+}
+
+/// review.js: `.tray` keydown Escape -> close() (the panel closes, focus returns to a word).
+#[test]
+fn critic_escape_in_the_tray_closes_it() {
+    let mut h = H::new("m1");
+    assert!(h.s().tray_open);
+    h.app.queue.lock().unwrap().push("focus:alt-suggested".into());
+    h.frames(2);
+    h.key(egui::Key::Escape);
+    assert!(!h.s().tray_open, "Escape with focus in the tray should close it, as js/ui/review.js does");
+}
+
+/// review.js: any click inside `.w` also calls setReadLine(line), so choosing a word underlines its line.
+#[test]
+fn critic_activating_a_flagged_word_moves_the_reading_underline_to_its_line() {
+    let mut h = H::new("m1");
+    let w = h.word_id("i:0"); // [illegible] is on transcript line 1
+    h.act(&w);
+    assert_eq!(h.s().read_line.get("m1").copied(), Some(1), "review.js sets the read line when a flagged word is clicked");
+}
+
+/// review.js renderWho(): `if (same && textVersion === 'original') textVersion = 'corrected'` on every render.
+#[test]
+fn critic_original_flag_is_reset_on_a_page_where_both_versions_read_the_same() {
+    let mut h = H::new("m1");
+    let w = h.word_id("c:0");
+    h.act(&w);
+    h.act("alt-suggested");
+    h.act("ver-original");
+    assert!(h.s().original);
+    h.act("page-m2"); // nothing corrected on m2: Original is disabled there
+    let note = h
+        .app
+        .nodes()
+        .iter()
+        .find_map(|n| match n {
+            Node::Text { id, text, .. } if id == "tray-note" => Some(text.clone()),
+            _ => None,
+        })
+        .expect("tray note");
+    assert!(!note.contains("Showing the original"), "Corrected is the pressed toggle, yet the tray says: {note}");
+}
+
+/// design/Main.dc.html + header.js: brand, back to the assignment, Settings.
+#[test]
+fn critic_header_has_back_to_assignment_and_settings() {
+    let h = H::new("m1");
+    assert!(h.has("Settings"), "no Settings control in the header: {:?}", h.app.controls().iter().map(|c| &c.label).collect::<Vec<_>>());
+    assert!(
+        h.app.controls().iter().any(|c| c.region == crate::twin::HEADER && c.label.contains("Unit 5")),
+        "the assignment name is not a control: header.js `crumb` navigates back to the inbox"
+    );
+}
+
+/// review.js scan pane tools: zoom, level, rotate, replace, remove; strip: Add page.
+#[test]
+fn critic_page_pane_tools_exist() {
+    let h = H::new("m1");
+    for l in ["Zoom in", "Zoom out", "Rotate page", "Replace this page", "Remove this page", "Straighten", "Add a page for"] {
+        assert!(h.has(l), "page pane lacks {l:?}");
+    }
+}
+
+/// review.js: Change student; Show plain text; Transcribe this page again.
+#[test]
+fn critic_transcript_tools_exist() {
+    let h = H::new("m1");
+    for l in ["Change student", "plain text", "again"] {
+        assert!(h.has(l), "transcript pane lacks {l:?}");
+    }
+}
+
+/// design flex-wrap + review.css: on a phone the header wraps and everything stays inside the screen,
+/// and the page image is still reachable (scan pane stacks above the transcript).
+#[test]
+fn critic_phone_width_keeps_every_control_on_screen_and_keeps_the_page() {
+    let mut h = H::new("m1");
+    h.size = (390.0, 844.0);
+    h.frames(3);
+    let off: Vec<_> = h
+        .app
+        .controls()
+        .into_iter()
+        .filter(|c| c.pos.1 < 0 || c.pos.1 + c.size.0 as i32 > 390)
+        .map(|c| (c.id.clone(), c.pos.1, c.size.0))
+        .collect();
+    assert!(off.is_empty(), "controls outside a 390pt screen: {off:?}");
+    assert!(h.app.controls().iter().any(|c| c.id == "page-m1"), "no page strip / image at phone width");
 }
