@@ -58,7 +58,7 @@
   /* what a selection or a find-in-page holds of a formula: its TeX, transparent text laid over it (the typeset
      MathML is for the eye: a selection reads its symbols one per line) */
   #controls p.tx .tx-math math { user-select: none; }
-  #controls p.tx .tx-hit { position: absolute; left: 0; top: 0; bottom: 0; right: 0; overflow: hidden; white-space: nowrap; color: transparent;
+  #controls p.tx .tx-hit { position: absolute; left: 0; top: 0; bottom: 0; right: 0; overflow: hidden; white-space: nowrap; color: transparent; forced-color-adjust: none;
     font: 10px/1.2 "Hack", ui-monospace, Consolas, monospace; user-select: text; pointer-events: none; }
   /* the end of a line: a break in the text a selection gives, no height */
   #controls p.tx .tx-nl { display: block; height: 0; overflow: hidden; white-space: pre; }

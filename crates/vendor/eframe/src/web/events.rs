@@ -620,6 +620,13 @@ fn install_wheel(runner_ref: &WebRunner, target: &EventTarget) -> Result<(), JsV
 
         let modifiers = modifiers_from_wheel_event(&event);
 
+        // viSHion: a wheel event handed on from the DOM transcript (a finger drag, with no mouse) carries the
+        // place it happened at; egui scrolls the area under the pointer, and a touch-only device has none.
+        if !event.is_trusted() {
+            let pos = pos_from_mouse_event(runner.canvas(), &event, runner.egui_ctx());
+            runner.input.raw.events.push(egui::Event::PointerMoved(pos));
+        }
+
         if modifiers.ctrl && !runner.input.raw.modifiers.ctrl {
             // The browser is saying the ctrl key is down, but it isn't _really_.
             // This happens on pinch-to-zoom on a Mac trackpad.
