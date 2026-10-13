@@ -156,7 +156,14 @@ fn word_for(cmd: &str) -> Option<&'static str> {
         "angle" => "angle",
         "triangle" | "bigtriangleup" => "triangle",
         "square" | "Box" => "square",
-        "measuredangle" => "measured angle",
+        "measuredangle" => "the measure of angle",
+        "oplus" => "direct sum",
+        "otimes" => "tensor product",
+        "vdots" => "vertical dots",
+        "ominus" => "circled minus",
+        "oslash" => "circled slash",
+        "ddots" => "diagonal dots",
+        "prime" => "prime",
         "simeq" => "is similar or equal to",
         "textdegree" => "degrees",
         "nsim" => "is not similar to",
@@ -298,6 +305,8 @@ fn power(arg: &str) -> String {
         "3" => " cubed ".into(),
         "degrees" => " degrees ".into(),
         "prime" => " prime ".into(),
+        "prime prime" => " double prime ".into(),
+        "prime prime prime" => " triple prime ".into(),
         a if needs_end(a) => format!(" to the power of {a} end of power "),
         a => format!(" to the power of {a} "),
     }
@@ -340,7 +349,7 @@ fn limits(cs: &[char], p: &mut usize, head: &str) -> String {
             out.push_str(&format!(" as {l}"));
         } else if head.contains("contour") {
             out.push_str(&format!(" around {l}"));
-        } else if head.contains("double") || head.contains("triple") {
+        } else if head.contains("double") || head.contains("triple") || (head == "the integral" && hi.is_none() && is_region(&l)) {
             out.push_str(&format!(" over {l}"));
         } else {
             out.push_str(&format!(" from {l}"));
@@ -351,6 +360,16 @@ fn limits(cs: &[char], p: &mut usize, head: &str) -> String {
     }
     out.push_str(" of ");
     out
+}
+
+/// A region or curve under an integral sign: one capital letter (`\int_C`, `\int_D`) or a Greek curve name.
+fn is_region(l: &str) -> bool {
+    let w: Vec<&str> = l.split_whitespace().collect();
+    match w.as_slice() {
+        [t] => (t.len() == 1 && t.chars().all(|c| c.is_ascii_uppercase())) || matches!(*t, "gamma" | "sigma" | "omega"),
+        ["capital", _] => true,
+        _ => false,
+    }
 }
 
 /// The two arguments of `\frac` or `\binom`; the flag says the fraction sits inside another one.
@@ -642,6 +661,16 @@ fn command(cs: &[char], p: &mut usize) -> String {
             let dir = if name == "xrightarrow" { "arrow" } else { "arrow back" };
             format!(" {dir} labeled {a} end arrow ")
         }
+        "exists" if cs.get(*p) == Some(&'!') => {
+            *p += 1;
+            " there exists exactly one ".into()
+        }
+        "overleftrightarrow" => format!(" line {} ", atom(cs, p)),
+        "ddot" => format!(" {} double dot ", atom(cs, p)),
+        "dddot" => format!(" {} triple dot ", atom(cs, p)),
+        "underline" | "underbar" | "boldsymbol" | "bm" | "mathsf" | "mathtt" | "mathfrak" | "mathscr" | "mathbbm" => {
+            format!(" {} ", atom(cs, p))
+        }
         "overrightarrow" | "overleftarrow" | "overrightarrow*" => format!(" vector {} ", atom(cs, p)),
         "equiv" if { let rest: String = cs[*p..].iter().collect(); rest.contains("\\pmod") || rest.contains("\\pod") } => " is congruent to ".into(),
         "pmod" | "pod" => format!(" mod {} ", atom(cs, p)),
@@ -680,11 +709,16 @@ fn bars_ahead(cs: &[char], from: usize, in_group: bool) -> usize {
 /// `|_{x=2}` and `|_0^1` after a bar with nothing open: the bar says where an expression is evaluated.
 /// `p` is just past the bar; it moves past the scripts only when the bar is one.
 fn evaluation_bar(cs: &[char], p: &mut usize) -> Option<String> {
+    evaluation_after(cs, p, false)
+}
+
+/// `need_sub`: after `\right)` or `\right]` a lone `^` is a power ("cubed"); only a subscript evaluates.
+fn evaluation_after(cs: &[char], p: &mut usize, need_sub: bool) -> Option<String> {
     let mut q = *p;
     while q < cs.len() && cs[q].is_whitespace() {
         q += 1;
     }
-    if !matches!(cs.get(q), Some('_') | Some('^')) {
+    if !(cs.get(q) == Some(&'_') || (!need_sub && cs.get(q) == Some(&'^'))) {
         return None;
     }
     let (mut lo, mut hi) = (None, None);
@@ -1047,7 +1081,7 @@ fn seq(cs: &[char], p: &mut usize, in_group: bool) -> String {
             ']' if after_word(cs, *p, "\\right") => {
                 *p += 1;
                 out.push_str(" close bracket ");
-                if let Some(s) = evaluation_bar(cs, p) {
+                if let Some(s) = evaluation_after(cs, p, true) {
                     out.push_str(&s);
                 }
             }
@@ -1062,10 +1096,15 @@ fn seq(cs: &[char], p: &mut usize, in_group: bool) -> String {
                 *p += 1;
                 out.push_str(" close paren ");
                 if right {
-                    if let Some(s) = evaluation_bar(cs, p) {
+                    if let Some(s) = evaluation_after(cs, p, true) {
                         out.push_str(&s);
                     }
                 }
+            }
+            '\\' if cs[*p + 1..].starts_with(&['o', 'd', 'o', 't']) && !cs.get(*p + 5).is_some_and(|c| c.is_ascii_alphabetic()) => {
+                *p += 5;
+                // a circle with its centre (`\odot O`) at the start; between two things the Hadamard product
+                out.push_str(if out.trim().is_empty() { " circle " } else { " circle dot " });
             }
             '\\' if cs[*p + 1..].starts_with(&['s', 'i', 'm']) && !cs.get(*p + 4).is_some_and(|c| c.is_ascii_alphabetic()) => {
                 *p += 4;
@@ -1107,6 +1146,12 @@ fn seq(cs: &[char], p: &mut usize, in_group: bool) -> String {
                 out.push_str(&atom(cs, p));
                 out.push(' ');
             }
+            '^' if out.trim().is_empty() => {
+                // a leading superscript is a mass number: `{}^{14}C` is "14 C"
+                *p += 1;
+                let a = atom(cs, p);
+                out.push_str(&format!(" {} ", a.trim()));
+            }
             '^' => {
                 *p += 1;
                 let a = atom(cs, p);
@@ -1140,7 +1185,24 @@ fn seq(cs: &[char], p: &mut usize, in_group: bool) -> String {
             '_' => {
                 *p += 1;
                 let a = atom(cs, p);
-                out.push_str(&sub(a.trim()));
+                // `{}_nC_r` (or `_nC_r`): a count of choices, "n choose r"
+                let mut q = *p;
+                while q < cs.len() && cs[q].is_whitespace() {
+                    q += 1;
+                }
+                if out.trim().is_empty() && matches!(cs.get(q), Some('C') | Some('P')) && cs.get(q + 1) == Some(&'_') {
+                    let letter = cs[q];
+                    let mut r = q + 2;
+                    let b = atom(cs, &mut r);
+                    *p = r;
+                    if letter == 'C' {
+                        out.push_str(&format!(" {} choose {} ", a.trim(), b.trim()));
+                    } else {
+                        out.push_str(&format!(" {} permute {} ", a.trim(), b.trim()));
+                    }
+                } else {
+                    out.push_str(&sub(a.trim()));
+                }
             }
             '\\' => out.push_str(&command(cs, p)),
             c if c.is_whitespace() => {
@@ -1312,6 +1374,13 @@ mod tests {
         let s = tex_speech(r"ABCD \sim EFGH");
         assert!(s.contains("similar"), "{s}");
         assert!(tex_speech(r"x \sim \text{Binomial}(n, p)").contains("distributed"));
+        // more shapes from the S5 corpus
+        assert!(tex_speech(r"\triangle ABC \cong \triangle DEF").contains("congruent"));
+        assert!(tex_speech(r"\mathbb{R}^n").contains("real numbers"));
+        assert_eq!(tex_speech(r"\|\vec{v}\|"), "norm of vector v end norm");
+        assert!(!tex_speech(r"\textcolor{red}{x^2}").contains("red"));
+        assert!(tex_speech(r"f: \mathbb{R} \to \mathbb{R}").contains("real numbers to real numbers"));
+        assert!(tex_speech(r"\mathbb{Z}^+").contains("positive integers"));
     }
 
     /// Blind critic round 8: formulas a listener mishears. `#[ignore]`d so the workspace stays green; run with
@@ -1433,9 +1502,7 @@ mod tests {
     }
 
     // blind-critic round 10: spoken-math misreads found by reading ~150 invented expressions.
-    // Ignored so the workspace stays green: cargo test -p vishion-ui critic_round10 -- --ignored
     #[test]
-    #[ignore = "open a11y gap: spoken math"]
     fn critic_round10_spoken_math_gaps() {
         let cases: [(&str, &str); 14] = [
             (r"\left(\frac{1}{2}\right)^3", "evaluated at"),
@@ -1459,5 +1526,20 @@ mod tests {
             .map(|(t, _)| format!("{t} => {}", tex_speech(t)))
             .collect();
         assert!(found.is_empty(), "misreads:\n{}", found.join("\n"));
+        assert_eq!(tex_speech(r"\left(\frac{1}{2}\right)^3"), "open paren the fraction 1 over 2 end fraction close paren cubed");
+        assert_eq!(tex_speech(r"\left[a+b\right]^2"), "open bracket a plus b close bracket squared");
+        assert_eq!(tex_speech(r"\left(x\right)_0^1"), "open paren x close paren evaluated from 0 to 1");
+        assert_eq!(tex_speech(r"\int_C f\,ds"), "the integral over C of f d s");
+        assert_eq!(tex_speech(r"\int_a^b f"), "the integral from a to b of f");
+        assert_eq!(tex_speech(r"\exists! x"), "there exists exactly one x");
+        assert_eq!(tex_speech(r"\exists x"), "there is some x");
+        assert_eq!(tex_speech(r"y^{\prime\prime}"), "y double prime");
+        assert_eq!(tex_speech(r"{}_nC_r"), "n choose r");
+        assert_eq!(tex_speech(r"{}^{14}C"), "14 C");
+        assert_eq!(tex_speech(r"\measuredangle ABC"), "the measure of angle A B C");
+        assert_eq!(tex_speech(r"\odot O"), "circle O");
+        assert_eq!(tex_speech(r"\overleftrightarrow{AB}"), "line A B");
+        assert_eq!(tex_speech(r"\ddot{x}"), "x double dot");
+        assert_eq!(tex_speech(r"\underline{x}"), "x");
     }
 }
