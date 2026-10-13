@@ -90,6 +90,9 @@ pub struct Ctl {
     /// Ids that took an activation this frame (the rest of their queue waits for the next frame).
     consumed: HashSet<String>,
     focus: Option<String>,
+    /// A transcript line to bring into view (`reveal:<line id>` from the page: a formula that scrolls sideways
+    /// took keyboard focus).
+    pub(crate) reveal: Option<String>,
     /// Native: the control that had the keyboard focus last (see `track_focus`).
     restore_kb: Option<String>,
     /// Text typed into a twin textbox, by id (consumed by the widget that owns it).
@@ -599,6 +602,8 @@ impl Ctl {
             } else if let Some(id) = m.strip_prefix("focus:") {
                 self.focus = Some(id.into());
                 self.focus_fresh = true;
+            } else if let Some(id) = m.strip_prefix("reveal:") {
+                self.reveal = Some(id.into());
             } else if let Some(id) = m.strip_prefix("blur:") {
                 if self.focus.as_deref() == Some(id) {
                     self.focus = None;

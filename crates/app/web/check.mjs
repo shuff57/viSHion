@@ -345,7 +345,7 @@ try {
     // reading order: the flagged words sit in the sentence, read where they stand, with no hole where they were
     const sentence = (id) => p7.evaluate((i) => {
       const p = document.querySelector(`#controls [data-id="${i}"]`);
-      return p ? [...p.childNodes].map(n => n.tagName === 'BUTTON' ? '[' + (n.getAttribute('aria-label') || n.textContent) + ']' : n.textContent).join('') : null;
+      return p ? [...p.childNodes].filter(n => n.className !== 'tx-nl').map(n => n.tagName === 'BUTTON' ? '[' + (n.getAttribute('aria-label') || n.textContent) + ']' : n.textContent).join('') : null;
     }, id);
     const l0 = await sentence('line-p-maya-1-0');
     expect(l0 === 'The 95% [Spelling to check: confidance. Show options.] interval for the average commute time is (18.4, 24.1) minutes.', 'twin line 0 reads the word inside the sentence: ' + l0);

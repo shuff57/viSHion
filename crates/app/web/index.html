@@ -36,6 +36,10 @@
     font: 22px/1.7 "Source Serif 4", Georgia, "Times New Roman", serif; color: var(--ink, #1B2230);
     overflow-wrap: anywhere; user-select: text;
   }
+  /* a word on the last row of a line reaches 44px (8px past its text box each way, 9 with the room for rounding):
+     the line has room for it under its text, so nothing of the line overflows into the next one. The screen
+     spaces lines without this room (`web::measure` takes it off), so the layout is the JS app's. */
+  #controls p.tx:has(.w) { padding-bottom: 9px; padding-bottom: max(1px, calc(9px - (1lh - 1.35em) / 2)); }
   #controls p.tx.margin { font: 16px/1.5 "Instrument Sans", system-ui, sans-serif; color: var(--muted, #5A6478); }
   #controls p.tx.plain { white-space: pre-wrap; padding: 0; font: 13px/1.65 "Hack", ui-monospace, Consolas, monospace; cursor: auto; }
   #controls p.tx[data-reading] { text-decoration: underline 3px var(--accent, #2F5BEA); text-underline-offset: 7px; text-decoration-skip-ink: none; }
@@ -46,15 +50,27 @@
   #controls p.tx del { color: var(--muted, #5A6478); }
   #controls p.tx.display { text-align: center; }
   #controls p.tx .tx-math { font-size: 1.21em; }
-  #controls p.tx .tx-math.disp { display: block; margin: 22px 0; }
-  #controls p.tx .tx-tex { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; user-select: none; }
+  /* a formula wider than the column (400% zoom, a narrow window) scrolls inside its own box instead of being cut
+     off by the clip (WCAG 1.4.10); `data-wide` is set by the page when it measures. A formula that fits is
+     inline math, laid out as before. */
+  #controls p.tx .tx-math.disp { display: block; margin: 22px 0; max-width: 100%; overflow-x: auto; overflow-y: hidden; }
+  #controls p.tx .tx-math[data-wide] { display: inline-block; max-width: 100%; overflow-x: auto; overflow-y: hidden; vertical-align: middle; }
+  /* what a selection or a copy gives for a formula is its TeX ($...$, one line); the typeset MathML is for the eye */
+  #controls p.tx .tx-math math { user-select: none; }
+  #controls p.tx .tx-tex { position: absolute; left: 0; top: 0; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; user-select: text; }
+  /* the end of a line: a break in the text a selection gives, no height */
+  #controls p.tx .tx-nl { display: block; height: 0; overflow: hidden; white-space: pre; }
   #controls p.tx .tx-math.src, #controls p.tx .katex-error { font: 0.85em "Hack", ui-monospace, Consolas, monospace; color: var(--bad, #B3261E); }
   #controls p.tx math { font-family: "STIX Two Math", "Cambria Math", math; }
   /* flagged words (css/components.css `.w`): the painted word is 4px of padding round the text as in the JS app; the
      button itself reaches 8px further up and down (44px high, the same margin takes it back: the line is not taller) */
   #controls p.tx .w {
     position: relative; isolation: isolate; display: inline-block; margin: -8px 0; padding: 8px 4px; border: 0; background: transparent;
-    font: inherit; color: inherit; line-height: 1.35; cursor: pointer; text-align: inherit; white-space: nowrap; outline: none;
+    font: inherit; color: inherit; line-height: 1.35; cursor: pointer; text-align: inherit; outline: none;
+    /* one box as long as it fits the column (shrink-to-fit); a word longer than the column breaks instead of being cut off */
+    max-width: 100%; overflow-wrap: anywhere;
+    /* a 44px target on lines closer than 44px overlaps the next line's box: the word wins there */
+    z-index: 1;
   }
   #controls p.tx .w::before { content: ""; position: absolute; inset: 8px 0; z-index: -1; border-radius: 4px; }
   #controls p.tx .w.suggest::before { background: var(--warn, #FFE8A3); }

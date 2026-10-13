@@ -13,7 +13,7 @@ const { port, stop } = await serve(+(process.env.PORT || 8791));
 let browser;
 
 async function open(viewport, query = 'demo=1&theme=light&tray=0') {
-  const ctx = await browser.newContext({ viewport, bypassCSP: true });
+  const ctx = await browser.newContext({ viewport, bypassCSP: true, permissions: ['clipboard-read', 'clipboard-write'] });
   const page = await ctx.newPage();
   await page.goto(`http://127.0.0.1:${port}/?${query}`, { waitUntil: 'load' });
   for (let i = 0; i < 300 && !(await page.evaluate(() => window.__ready === true || !!window.__error)); i++) await page.waitForTimeout(100);
@@ -146,6 +146,88 @@ try {
     await page.waitForTimeout(300);
     const reading = await page.evaluate(() => document.querySelector('#controls p.tx[data-reading]')?.dataset.id || null);
     expect(reading === ln.id, 'a click on a line underlines it: ' + reading + ' / ' + ln.id);
+    await ctx.close();
+  }
+
+  // 5. WCAG 1.4.12 sheet (line-height 1.5, letter 0.12em, word 0.16em): a word's 44px reach stays inside its line,
+  //    so it does not run into the next line's box
+  {
+    const { ctx, page, pump } = await open({ width: 1280, height: 800 });
+    await page.addStyleTag({ content: '#controls p.tx { line-height: 1.5 !important; letter-spacing: 0.12em !important; word-spacing: 0.16em !important; }' });
+    await pump(10);
+    await page.waitForTimeout(500);
+    await pump(3);
+    const ls = await lines(page);
+    expect(ls.every((l) => l.fits), 'with the text spacing sheet no line overflows its box (a word on a wrapped row stays inside): ' + ls.filter((l) => !l.fits).map((l) => l.id));
+    const over = await page.evaluate(() => {
+      const out = [];
+      for (const b of document.querySelectorAll('#controls p.tx button.w')) {
+        const r = b.getBoundingClientRect();
+        const mid = document.elementFromPoint(r.x + r.width / 2, r.y + r.height - 3);
+        // (another word on the row below may lie over it; text of another line may not)
+        if (mid && mid !== b && !mid.matches('button.w') && mid.closest('p') !== b.closest('p')) out.push(b.dataset.id + ' -> ' + (mid && (mid.dataset.id || mid.tagName)));
+      }
+      return out;
+    });
+    expect(over.length === 0, 'the foot of a word is not taken by the text of the next line: ' + over);
+    await ctx.close();
+  }
+
+  // 6. Copy: the selection comes out of the page as the text of the transcript, lines apart, formulas as TeX
+  {
+    const { ctx, page, pump } = await open({ width: 1280, height: 800 });
+    await page.bringToFront();
+    await page.evaluate(() => navigator.clipboard.writeText('SEED'));
+    await page.evaluate(() => getSelection().selectAllChildren(document.querySelector('#controls .tx-clip')));
+    await page.keyboard.press('Control+c');
+    await page.waitForTimeout(300);
+    const clip = await page.evaluate(() => navigator.clipboard.readText());
+    expect(clip !== 'SEED' && /confidance interval/.test(clip), 'Ctrl+C copies the selected transcript: ' + JSON.stringify(clip.slice(0, 40)));
+    const rows = clip.split(/\r?\n/);
+    expect(clip.includes('$\\bar{x} \\pm 1.96') && clip.includes('\\frac{s}{\\sqrt{n}}'), 'a formula is copied as its TeX: ' + JSON.stringify(clip.slice(70, 150)));
+    expect(!/samples,about|mean\.probably/.test(clip) && rows.filter((l) => l.length <= 1).length < 2, 'lines are kept apart and no symbol is a line of its own');
+    expect(rows.filter((l) => /^\$/.test(l)).length === 2, 'each formula is a line of its own: ' + JSON.stringify(rows.map((l) => l.slice(0, 12))));
+    // copying with nothing selected in the transcript is still the canvas's: no throw, clipboard untouched
+    await page.evaluate(() => { getSelection().removeAllRanges(); return navigator.clipboard.writeText('SEED2'); });
+    await page.keyboard.press('Control+c');
+    await page.waitForTimeout(200);
+    expect(await page.evaluate(() => navigator.clipboard.readText()) === 'SEED2', 'nothing selected: the clipboard is left alone');
+    await pump(2);
+    await ctx.close();
+  }
+
+  // 7. 400% zoom (320px): a formula wider than the column is a box that scrolls, all of it reachable
+  {
+    const { ctx, page } = await open({ width: 320, height: 1100 });
+    await page.waitForTimeout(500);
+    const r = await page.evaluate(() => [...document.querySelectorAll('#controls p.tx .tx-math')].map((m) => {
+      const p = m.closest('p');
+      const before = m.scrollLeft;
+      m.scrollLeft = 10000;
+      const out = { id: p.dataset.id, need: m.scrollWidth, box: m.clientWidth, line: p.clientWidth, pw: p.scrollWidth, moved: m.scrollLeft - before, over: getComputedStyle(m).overflowX };
+      m.scrollLeft = 0;
+      return out;
+    }));
+    expect(r.length >= 2 && r.every((m) => m.pw <= m.line + 1 && m.box <= m.line + 1), 'no formula makes its line wider than the column: ' + JSON.stringify(r));
+    expect(r.every((m) => m.need <= m.box + 1 || (m.over === 'auto' && m.moved > 0)), 'a formula wider than the column scrolls sideways to its end: ' + JSON.stringify(r.map((m) => [m.need, m.box, m.moved])));
+    // a long unbroken word does not run out of the column either
+    const long = await page.evaluate(() => [...document.querySelectorAll('#controls p.tx')].filter((p) => p.scrollWidth > p.clientWidth + 1).map((p) => p.dataset.id));
+    expect(long.length === 0, 'no line is wider than the column at 320px: ' + long);
+    await ctx.close();
+  }
+
+  // 8. A triple click selects the line without underlining it first; a single click still underlines
+  {
+    const { ctx, page, pump } = await open({ width: 1280, height: 800 });
+    const at = await page.evaluate(() => { const r = document.querySelectorAll('#controls p.tx')[3].getBoundingClientRect(); return [r.left + 50, r.top + 12]; });
+    const reading = () => page.evaluate(() => document.querySelector('#controls p.tx[data-reading]')?.dataset.id || null);
+    await page.mouse.click(at[0], at[1], { clickCount: 3 });
+    let seen = [];
+    for (let i = 0; i < 12; i++) { seen.push(await reading()); await pump(1); }
+    await page.waitForTimeout(400);
+    seen.push(await reading());
+    expect(seen.every((s) => s === null), 'a triple click never underlines the line: ' + JSON.stringify([...new Set(seen)]));
+    expect(/^It does not mean/.test(await page.evaluate(() => getSelection().toString())), 'and it selects it');
     await ctx.close();
   }
 } catch (e) {

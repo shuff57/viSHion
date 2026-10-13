@@ -7,6 +7,12 @@ Copy of the crates.io 0.28.1 release with one line changed in `src/web/mod.rs` (
 broke the build once `--cfg=web_sys_unstable_apis` is on. That cfg is what enables the web copy path
 (`navigator.clipboard.writeText`); without it, copy/cut do nothing on the web build.
 
+Two more changes in `src/web/events.rs`: the document `copy` listener returns early (no `stop_propagation`, no
+`preventDefault`) when the page's DOM transcript (`.tx-clip`) holds a non-empty selection, so the browser copies
+it (the listener used to swallow every copy, and Ctrl+C on selected transcript text did nothing); and the
+`wheel` listener returns early on `ctrl_key` (browser page zoom, WCAG 1.4.4, and a trackpad pinch) instead of
+turning it into an egui zoom and calling `preventDefault`.
+
 Wired in with `[patch.crates-io]` in the root `Cargo.toml`. Remove both when eframe is upgraded.
 
 ## latex-rust 2.1.1

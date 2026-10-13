@@ -2571,6 +2571,10 @@ fn dom_unit(ui: &mut Ui, cx: &mut Cx, s: &Session, p: &Page, line: &Line, items:
     let h = cx.ctl.dom_h.get(&id).copied().unwrap_or_else(|| dom_estimate(line, width, px, pitch));
     let (rect, _) = ui.allocate_exact_size(vec2(width, h), Sense::hover());
     cx.ctl.lines.push((id.clone(), rect));
+    if cx.ctl.reveal.as_deref() == Some(id.as_str()) {
+        cx.ctl.reveal = None;
+        ui.scroll_to_rect(rect, None);
+    }
     // a click on the text (not on a word, which is a button of its own) moves the reading underline
     if cx.ctl.take_act(&id) {
         cx.acts.push(Act::ReadLine(line.index));

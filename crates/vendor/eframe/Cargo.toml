@@ -308,6 +308,7 @@ features = [
     "ResizeObserverEntry",
     "ResizeObserverOptions",
     "ResizeObserverSize",
+    "Selection",
     "Storage",
     "Touch",
     "TouchEvent",

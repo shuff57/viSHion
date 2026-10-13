@@ -134,7 +134,9 @@ try {
     // ---- text nodes too: headings, lines, counts, math and landmarks are laid over where they are drawn (touch
     // exploration, magnifier tracking and the highlight of a screen reader follow the rectangle)
     const geo = await page.evaluate(() => {
-      const box = (e) => { const r = e.getBoundingClientRect(); return { id: e.dataset.id, x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) }; };
+      const box = (e) => { const r = e.getBoundingClientRect(); // a line with words has room under it for their 44px reach (padding-bottom over 1px): the lines are spaced without it
+      const reach = Math.max(0, (parseFloat(getComputedStyle(e).paddingBottom) || 0) - 1);
+      return { id: e.dataset.id, x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height - reach) }; };
       const q = (s) => [...document.querySelectorAll(s)].map(box);
       const g = (i) => { const e = document.querySelector('#controls [data-id="' + i + '"]'); return e ? box(e) : null; };
       return {

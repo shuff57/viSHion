@@ -312,6 +312,10 @@ fn install_copy_cut_paste(runner_ref: &WebRunner, target: &EventTarget) -> Resul
 
     #[cfg(web_sys_unstable_apis)]
     runner_ref.add_event_listener(target, "copy", |event: web_sys::ClipboardEvent, runner| {
+        // viSHion: text selected in the page's own DOM (the transcript) is the browser's to copy.
+        if dom_selection_in_page() {
+            return;
+        }
         if runner.input.raw.focused {
             runner.input.raw.events.push(egui::Event::Copy);
 
@@ -583,8 +587,28 @@ fn install_touchcancel(runner_ref: &WebRunner, target: &EventTarget) -> Result<(
     Ok(())
 }
 
+/// viSHion: true when the document has a non-empty text selection that starts or ends in the page's DOM
+/// transcript (`.tx-clip`), not in an input.
+fn dom_selection_in_page() -> bool {
+    use wasm_bindgen::JsCast as _;
+    let Some(sel) = web_sys::window().and_then(|w| w.get_selection().ok().flatten()) else { return false };
+    if sel.is_collapsed() {
+        return false;
+    }
+    let inside = |n: Option<web_sys::Node>| {
+        n.and_then(|n| if n.node_type() == web_sys::Node::ELEMENT_NODE { n.dyn_into::<web_sys::Element>().ok() } else { n.parent_element() })
+            .is_some_and(|e| e.closest(".tx-clip").ok().flatten().is_some())
+    };
+    inside(sel.anchor_node()) || inside(sel.focus_node())
+}
+
 fn install_wheel(runner_ref: &WebRunner, target: &EventTarget) -> Result<(), JsValue> {
     runner_ref.add_event_listener(target, "wheel", |event: web_sys::WheelEvent, runner| {
+        // viSHion: ctrl+wheel (and a trackpad pinch, which Chrome sends as ctrl+wheel) is the browser's page
+        // zoom (WCAG 1.4.4), as in the JS app: it is not taken from the person.
+        if event.ctrl_key() {
+            return;
+        }
         let unit = match event.delta_mode() {
             web_sys::WheelEvent::DOM_DELTA_PIXEL => egui::MouseWheelUnit::Point,
             web_sys::WheelEvent::DOM_DELTA_LINE => egui::MouseWheelUnit::Line,

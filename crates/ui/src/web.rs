@@ -68,6 +68,22 @@ pub fn install(q: Queue, ctx: egui::Context) {
                         }
                     }
                 }
+                if mods.is_empty() && prefix == "act" && id.starts_with("line-") && e.type_() == "click" {
+                    // A click on the text of a line underlines it, but the first click of a double or triple click
+                    // (which selects a word or the line to copy it) must not: it is acted on once the multi-click
+                    // window has passed and no selection came of it.
+                    let (q, ctx, msg) = (q.clone(), ctx.clone(), format!("{prefix}:{id}"));
+                    let f = Closure::once_into_js(move || {
+                        if !has_selection() {
+                            q.lock().unwrap().push(msg);
+                            ctx.request_repaint();
+                        }
+                    });
+                    if let Some(w) = web_sys::window() {
+                        let _ = w.set_timeout_with_callback_and_timeout_and_arguments_0(f.unchecked_ref(), 280);
+                    }
+                    return;
+                }
                 if mods.is_empty() {
                     q.lock().unwrap().push(format!("{prefix}:{id}"));
                 } else {
@@ -97,6 +113,25 @@ pub fn install(q: Queue, ctx: egui::Context) {
         cb.forget();
     }
     listen("focusin", "focus");
+    // a formula that scrolls sideways takes keyboard focus: the screen brings its line into view (the twin is
+    // `overflow: clip`, so the browser cannot)
+    {
+        let (q, ctx) = (q.clone(), ctx.clone());
+        let cb = Closure::<dyn FnMut(web_sys::Event)>::new(move |e: web_sys::Event| {
+            let line = e
+                .target()
+                .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
+                .filter(|el| el.class_list().contains("tx-math"))
+                .and_then(|el| el.closest("p[data-line]").ok().flatten())
+                .and_then(|p| p.get_attribute("data-id"));
+            if let Some(id) = line {
+                q.lock().unwrap().push(format!("reveal:{id}"));
+                ctx.request_repaint();
+            }
+        });
+        let _ = h.add_event_listener_with_callback("focusin", cb.as_ref().unchecked_ref());
+        cb.forget();
+    }
     listen("focusout", "blur");
     // text typed into a twin textbox goes to the egui buffer; Enter in it presses its `data-enter` control
     let (q2, c2) = (q.clone(), ctx.clone());
@@ -223,7 +258,12 @@ fn forward_scroll(h: &web_sys::Element) {
     let in_text = |e: &web_sys::Event| e.target().and_then(|t| t.dyn_into::<web_sys::Element>().ok()).is_some_and(|el| el.closest(".tx-clip").ok().flatten().is_some());
     let s1 = send.clone();
     let on_wheel = Closure::<dyn FnMut(web_sys::WheelEvent)>::new(move |e: web_sys::WheelEvent| {
-        if !in_text(&e) {
+        if !in_text(&e) || e.ctrl_key() {
+            // ctrl+wheel (and a trackpad pinch, which Chrome sends as ctrl+wheel) is the browser's page zoom
+            return;
+        }
+        // a formula wider than its column scrolls sideways by itself
+        if e.delta_x().abs() > e.delta_y().abs() && scrolls_sideways(&e) {
             return;
         }
         e.prevent_default();
@@ -244,6 +284,10 @@ fn forward_scroll(h: &web_sys::Element) {
         }
         let Some(t) = e.touches().get(0) else { return };
         if let Some((px, py)) = last.get() {
+            if (px - t.client_x()).abs() > (py - t.client_y()).abs() && scrolls_sideways(&e) {
+                last.set(Some((t.client_x(), t.client_y())));
+                return;
+            }
             if e.cancelable() {
                 e.prevent_default();
             }
@@ -253,6 +297,14 @@ fn forward_scroll(h: &web_sys::Element) {
     });
     let _ = h.add_event_listener_with_callback("touchmove", on_move.as_ref().unchecked_ref());
     on_move.forget();
+}
+
+/// The event is over a formula that is wider than its box (it scrolls sideways).
+fn scrolls_sideways(e: &web_sys::Event) -> bool {
+    e.target()
+        .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
+        .and_then(|el| el.closest(".tx-math").ok().flatten())
+        .is_some_and(|m| m.scroll_width() > m.client_width())
 }
 
 thread_local! {
@@ -486,6 +538,9 @@ fn dom_para(id: &str, parts: &[Part], flags: &[u16], reading: bool, margin: bool
             }
         });
     }
+    // The end of a line, for the text a selection or a copy gives: the lines are separate, absolutely placed
+    // boxes, which the browser joins without a break ("samples,about").
+    kids.push(Spec::new(&format!("{id}#nl"), "span").attr("class", "tx-nl").attr("aria-hidden", "true").text("\n"));
     p.children = Some(kids);
     p
 }
@@ -1220,6 +1275,8 @@ pub fn mark_preferences(reduced_motion: bool, high_contrast: bool) {
 struct Measure {
     h: HashMap<String, f32>,
     chips: HashMap<String, [f32; 4]>,
+    /// a formula changed between inline and a scrolling box while measuring: the numbers are stale
+    relaid: bool,
 }
 
 thread_local! {
@@ -1252,7 +1309,40 @@ pub fn measure() -> bool {
         let Some(p) = list.item(i).and_then(|n| n.dyn_into::<web_sys::Element>().ok()) else { continue };
         let Some(id) = p.get_attribute("data-id") else { continue };
         let r = p.get_bounding_client_rect();
-        now.h.insert(id, (r.height() / k) as f32);
+        // a line with words has room under it for the 44px reach of a word on its last row (index.html,
+        // `p.tx:has(.w)`); the screen is spaced by the line without it, so that room lies over the next line
+        let reach = web_sys::window()
+            .and_then(|w| w.get_computed_style(&p).ok().flatten())
+            .and_then(|cs| cs.get_property_value("padding-bottom").ok())
+            .and_then(|v| v.trim_end_matches("px").parse::<f64>().ok())
+            .map_or(0.0, |pb| (pb - 1.0).max(0.0));
+        now.h.insert(id, (r.height() / k - reach) as f32);
+        // a formula wider than the line is a box of the column's width that scrolls (WCAG 1.4.10: it is not
+        // cut off); one that fits is left as inline math is laid out
+        if let Ok(ms) = p.query_selector_all(".tx-math") {
+            let avail = p.client_width() as f64;
+            // inline math is as wide as its content however narrow the column (its own box says the column's
+            // width), so the line's overflow is what tells; once it is a box, it fills the column while the
+            // content needs all of it
+            let overflow = p.scroll_width() as f64 > avail + 0.5;
+            for j in 0..ms.length() {
+                let Some(m) = ms.item(j).and_then(|n| n.dyn_into::<web_sys::Element>().ok()) else { continue };
+                if m.query_selector("math").ok().flatten().is_none() {
+                    continue;
+                }
+                let has = m.has_attribute("data-wide");
+                let wide = if has { avail > 0.0 && m.client_width() as f64 >= avail - 1.0 } else { overflow };
+                if wide != has {
+                    let _ = if wide { m.set_attribute("data-wide", "") } else { m.remove_attribute("data-wide") };
+                    now.relaid = true;
+                }
+                // a box that scrolls is reached with the keyboard (WCAG 2.1.1) and says what it is
+                let scrolls = m.scroll_width() > m.client_width() + 1;
+                if scrolls != m.has_attribute("tabindex") {
+                    let _ = if scrolls { m.set_attribute("tabindex", "0") } else { m.remove_attribute("tabindex") };
+                }
+            }
+        }
         if let Ok(ws) = p.query_selector_all("button.w") {
             for j in 0..ws.length() {
                 let Some(b) = ws.item(j).and_then(|n| n.dyn_into::<web_sys::Element>().ok()) else { continue };
@@ -1266,7 +1356,7 @@ pub fn measure() -> bool {
         let old = m.borrow();
         let same_h = old.h.len() == now.h.len() && now.h.iter().all(|(k, v)| old.h.get(k).is_some_and(|o| (o - v).abs() <= 0.5));
         let same_c = old.chips.len() == now.chips.len() && now.chips.iter().all(|(k, v)| old.chips.get(k).is_some_and(|o| o.iter().zip(v).all(|(a, b)| (a - b).abs() <= 0.5)));
-        !(same_h && same_c)
+        now.relaid || !(same_h && same_c)
     });
     if changed {
         MEASURED.with(|m| *m.borrow_mut() = now);
@@ -1342,7 +1432,9 @@ fn render_math(el: &web_sys::Element, tex: &str, display: bool) {
                     }
                     if let Some(src) = document().and_then(|d| d.create_element("span").ok()) {
                         let _ = src.set_attribute("class", "tx-tex");
-                        src.set_text_content(Some(tex));
+                        // what a selection or a copy gives for the formula: its TeX, in the dollars it is written in
+                        let d = if display { "$$" } else { "$" };
+                        src.set_text_content(Some(&format!("{d}{tex}{d}")));
                         let _ = el.append_child(&src);
                     }
                 }

@@ -1,5 +1,5 @@
 // Blind-critic checks on the DOM transcript (round 1): what a person who selects, copies, zooms to 400% or pinch
-// zooms over the text gets. Failing by design until the product catches up.
+// zooms over the text gets. Passing since the DOM transcript got copy, line breaks, TeX for formulas, scrolling formulas and ctrl+wheel (A11Y.md).
 // Usage: node crates/app/web/transcript-dom-critic.mjs   (run build.mjs first)
 import { chromium } from 'playwright-core';
 import { serve } from './serve.mjs';
