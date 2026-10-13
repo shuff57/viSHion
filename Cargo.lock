@@ -1679,6 +1679,8 @@ dependencies = [
  "moxcms",
  "num-traits",
  "png",
+ "zune-core",
+ "zune-jpeg",
 ]
 
 [[package]]
@@ -1828,6 +1830,16 @@ name = "khronos_api"
 version = "3.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e2db585e1d738fc771bf08a151420d3ed193d9d895a36df7f6f8a9456b911ddc"
+
+[[package]]
+name = "latex-rust"
+version = "2.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f8094b939c8af51f9c7d08256ffa607b743e24d466d9a0ccc602dc748c911e54"
+dependencies = [
+ "egui",
+ "ttf-parser",
+]
 
 [[package]]
 name = "libc"
@@ -3316,13 +3328,17 @@ name = "vishion-app"
 version = "0.1.0"
 dependencies = [
  "eframe",
+ "image",
+ "js-sys",
  "log",
+ "serde_json",
  "vishion-core",
  "vishion-net",
  "vishion-store",
  "vishion-ui",
  "wasm-bindgen",
  "wasm-bindgen-futures",
+ "web-sys",
 ]
 
 [[package]]
@@ -3374,6 +3390,10 @@ version = "0.1.0"
 dependencies = [
  "eframe",
  "egui",
+ "image",
+ "js-sys",
+ "latex-rust",
+ "serde_json",
  "vishion-core",
  "wasm-bindgen",
  "web-sys",
@@ -4482,6 +4502,21 @@ name = "zmij"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"
+
+[[package]]
+name = "zune-core"
+version = "0.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d56377fd46368984a170bc5aac5567e52ca5da874caa60bea39fcbca78fb658b"
+
+[[package]]
+name = "zune-jpeg"
+version = "0.5.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "27bc9d5b815bc103f142aa054f561d9187d191692ec7c2d1e2b4737f8dbd7296"
+dependencies = [
+ "zune-core",
+]
 
 [[package]]
 name = "zvariant"

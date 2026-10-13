@@ -19,8 +19,13 @@ vishion-core.workspace = true
 vishion-store.workspace = true
 vishion-net.workspace = true
 eframe.workspace = true
+serde_json.workspace = true
+# Synthetic page images for the demo assignment (JPEG, like stored pages).
+image = { version = "0.25", default-features = false, features = ["jpeg"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+web-sys = { version = "0.3", features = ["Window", "Location"] }
 log = "0.4"

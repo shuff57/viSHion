@@ -62,6 +62,18 @@ jobs:
           CHROME: /usr/bin/google-chrome
         run: node check.mjs
 
+      # The native binary needs a GL context: software Mesa under Xvfb. Not yet proven on a hosted runner.
+      - name: Native vs web parity (same demo assignment, same controls, 44pt targets)
+        continue-on-error: true
+        working-directory: crates/app/web
+        env:
+          CHROME: /usr/bin/google-chrome
+          LIBGL_ALWAYS_SOFTWARE: "1"
+        run: |
+          sudo apt-get update && sudo apt-get install -y xvfb libgl1-mesa-dri libxkbcommon-x11-0
+          cargo build -p vishion-app --locked
+          xvfb-run -a node parity.mjs
+
       - name: Store oracle (JS writes -> Rust reads, rewrites -> JS reloads deep-equal; IDB + folder)
         working-directory: tools/store-oracle
         env:

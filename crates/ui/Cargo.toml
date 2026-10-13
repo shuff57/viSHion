@@ -10,10 +10,16 @@ publish.workspace = true
 vishion-core.workspace = true
 eframe.workspace = true
 egui.workspace = true
+serde_json.workspace = true
+# Typeset math (plan rule 6: pinned to egui 0.28). Isolated behind `ui::math` so it can be swapped.
+latex-rust = { version = "2.1.1", features = ["egui"] }
+# Page images are stored as JPEG; decode in pure Rust so native and wasm behave the same.
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 eframe = { workspace = true, features = ["x11", "wayland"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"
-web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlElement", "Node", "Event", "EventTarget", "HtmlCollection", "KeyboardEvent"] }
+js-sys = "0.3"
+web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlElement", "HtmlInputElement", "Node", "Event", "EventTarget", "HtmlCollection", "KeyboardEvent"] }

@@ -1,14 +1,37 @@
-//! viSHion UI. Phase 0 is a shell that proves the plumbing: egui on native and wasm, plus the `ctl()`
-//! control layer (plan rule 3). Every interactive widget goes through `App::ctl`, which
-//! (1) reports activation from egui OR from its hidden-DOM twin, (2) registers role/label for the twin,
-//! (3) draws a focus ring when the twin has DOM focus. Twins are keyed by id and sorted by screen position (S8).
-use egui::{Color32, Response, RichText, Stroke, Ui, Vec2};
-use std::collections::HashSet;
+//! viSHion UI: the review screen (design/Main.dc.html) in egui, one codebase for native and web.
+//!
+//! Layers, each in its own module:
+//! * `state`      review flows over `vishion-core` (pure, unit-tested natively)
+//! * `transcript` marked text to drawable runs (pure)
+//! * `math`       latex-rust isolation with the red-source fallback
+//! * `theme`      design tokens (light + dark) and the bundled fonts
+//! * `twin`       the hidden-DOM twin as data; `web` reconciles it into `#controls`
+//! * `host`       commands and events: the UI never touches storage
+//! * `widgets`, `review` drawing
+//!
+//! Every interactive widget goes through `Ctl::reg` (plan rule 3): it reports activation from egui OR from
+//! its twin, records role/label/size for the twin, and draws the focus ring.
+use egui::{Stroke, Ui};
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+pub mod host;
+pub mod math;
+mod review;
+pub mod state;
+pub mod theme;
+pub mod transcript;
+pub mod twin;
+mod widgets;
+
 #[cfg(target_arch = "wasm32")]
 mod web;
+#[cfg(test)]
+mod app_tests;
+
+pub use host::{Cmd, Dispatch, Event, Inbox};
+pub use twin::{Node, Part, Reg};
 
 /// Web only: call once after eframe started; makes the canvas a non-tabbable, AT-hidden surface and names
 /// eframe's IME input. See `web.rs` for the keyboard model.
@@ -17,87 +40,144 @@ pub fn harden_web_dom(canvas_id: &str) {
     web::harden(canvas_id);
 }
 
-const INK: Color32 = Color32::from_rgb(0x1B, 0x22, 0x30);
-
-/// Messages from the DOM twin to egui: `act:<id>`, `focus:<id>`, `blur:<id>`.
+/// Messages from the DOM twin to egui: `act:<id>`, `focus:<id>`, `blur:<id>`, `text:<id>\u{1}<value>`.
 pub type Queue = Arc<Mutex<Vec<String>>>;
 
-#[derive(Clone, PartialEq, Debug)]
-pub struct Reg {
-    pub id: String,
-    pub role: &'static str,
-    pub label: String,
-    pub pressed: Option<bool>,
-    pub pos: (i32, i32),
+/// Milliseconds since the Unix epoch (egui time is relative; this is for `updated`/`at` fields).
+pub fn now_ms() -> i64 {
+    #[cfg(target_arch = "wasm32")]
+    {
+        js_sys::Date::now() as i64
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
+    }
 }
 
-pub struct App {
-    #[allow(dead_code)]
-    ctx: egui::Context,
-    queue: Queue,
+/// The control layer: activation, twin focus and the node list of this frame.
+#[derive(Default)]
+pub struct Ctl {
     act: HashSet<String>,
     focus: Option<String>,
-    regs: Vec<Reg>,
-    last_regs: Vec<Reg>,
-    count: u32,
-    exit_after: Option<Duration>,
+    /// Text typed into a twin textbox, by id (consumed by the widget that owns it).
+    typed: HashMap<String, String>,
+    nodes: Vec<Node>,
+    para: Option<Vec<Part>>,
+    ring: egui::Color32,
 }
 
-impl App {
-    pub fn new(ctx: egui::Context) -> Self {
-        let queue: Queue = Arc::default();
-        #[cfg(target_arch = "wasm32")]
-        web::install(queue.clone(), ctx.clone());
-        Self {
-            ctx,
-            queue,
-            act: HashSet::new(),
-            focus: None,
-            regs: vec![],
-            last_regs: vec![],
-            count: 0,
-            exit_after: None,
-        }
-    }
+/// What a control is, for the twin.
+pub struct C<'a> {
+    pub id: &'a str,
+    pub label: &'a str,
+    pub pressed: Option<bool>,
+    pub region: u8,
+    pub disabled: bool,
+}
 
-    /// Close the window after `d` (used by the native smoke test; `vishion --exit-after-ms N`).
-    pub fn exit_after(mut self, d: Duration) -> Self {
-        self.exit_after = Some(d);
+impl<'a> C<'a> {
+    pub fn new(id: &'a str, label: &'a str, region: u8) -> Self {
+        C { id, label, pressed: None, region, disabled: false }
+    }
+    pub fn pressed(mut self, on: bool) -> Self {
+        self.pressed = Some(on);
         self
     }
-
-    /// Controls registered in the last frame, in reading order. Exposed for tests.
-    pub fn controls(&self) -> &[Reg] {
-        &self.last_regs
+    pub fn disabled(mut self, d: bool) -> Self {
+        self.disabled = d;
+        self
     }
+}
 
-    /// The single funnel for interactive widgets.
-    fn ctl(
-        &mut self,
-        ui: &Ui,
-        r: &Response,
-        id: &str,
-        role: &'static str,
-        label: &str,
-        pressed: Option<bool>,
-    ) -> bool {
-        self.regs.push(Reg {
-            id: id.into(),
-            role,
-            label: label.into(),
-            pressed,
-            pos: (r.rect.min.y as i32 / 16, r.rect.min.x as i32),
+impl Ctl {
+    /// The single funnel for interactive widgets. Returns true when activated from the canvas or the twin.
+    pub fn reg(&mut self, ui: &Ui, r: &egui::Response, c: C) -> bool {
+        self.push(Reg {
+            id: c.id.into(),
+            role: "button",
+            label: c.label.into(),
+            pressed: c.pressed,
+            value: None,
+            disabled: c.disabled,
+            region: c.region,
+            pos: twin::pos_of(r.rect.min),
+            size: (r.rect.width().round() as u16, r.rect.height().round() as u16),
         });
-        if self.focus.as_deref() == Some(id) {
-            ui.painter()
-                .rect_stroke(r.rect.expand(2.0), 6.0, Stroke::new(2.0, INK));
+        if self.focus.as_deref() == Some(c.id) || r.has_focus() {
+            ui.painter().rect_stroke(r.rect.expand(2.0), 6.0, Stroke::new(2.0, self.ring));
         }
-        let from_dom = self.act.remove(id);
-        r.clicked() || from_dom
+        let from_dom = self.act.remove(c.id);
+        !c.disabled && (r.clicked() || from_dom)
     }
 
-    fn drain_queue(&mut self) {
-        let msgs: Vec<String> = std::mem::take(&mut *self.queue.lock().unwrap());
+    /// Register a textbox. `value` is what the canvas widget currently holds; text typed into the twin
+    /// is returned once (the caller writes it into its buffer).
+    pub fn reg_text(&mut self, ui: &Ui, r: &egui::Response, c: C, value: &str) -> Option<String> {
+        self.push(Reg {
+            id: c.id.into(),
+            role: "textbox",
+            label: c.label.into(),
+            pressed: None,
+            value: Some(value.into()),
+            disabled: c.disabled,
+            region: c.region,
+            pos: twin::pos_of(r.rect.min),
+            size: (r.rect.width().round() as u16, r.rect.height().round() as u16),
+        });
+        if self.focus.as_deref() == Some(c.id) || r.has_focus() {
+            ui.painter().rect_stroke(r.rect.expand(2.0), 6.0, Stroke::new(2.0, self.ring));
+        }
+        self.typed.remove(c.id)
+    }
+
+    fn push(&mut self, reg: Reg) {
+        match &mut self.para {
+            Some(parts) => parts.push(Part::Control(reg)),
+            None => self.nodes.push(Node::Control(reg)),
+        }
+    }
+
+    pub fn heading(&mut self, id: &str, level: u8, text: &str, region: u8, min: egui::Pos2) {
+        self.nodes.push(Node::Heading { id: id.into(), level, text: text.into(), region, pos: twin::pos_of(min) });
+    }
+
+    pub fn status(&mut self, id: &str, text: &str, region: u8, min: egui::Pos2) {
+        self.nodes.push(Node::Status { id: id.into(), text: text.into(), region, pos: twin::pos_of(min) });
+    }
+
+    pub fn text(&mut self, id: &str, text: &str, region: u8, min: egui::Pos2) {
+        self.nodes.push(Node::Text { id: id.into(), text: text.into(), region, pos: twin::pos_of(min) });
+    }
+
+    /// Start a paragraph: controls registered until `end_para` are inline in it.
+    pub fn begin_para(&mut self) {
+        self.para = Some(vec![]);
+    }
+
+    pub fn para_text(&mut self, s: &str) {
+        if let Some(p) = &mut self.para {
+            match p.last_mut() {
+                Some(Part::Text(t)) => t.push_str(s),
+                _ => p.push(Part::Text(s.into())),
+            }
+        }
+    }
+
+    pub fn para_math(&mut self, tex: &str) {
+        if let Some(p) = &mut self.para {
+            p.push(Part::Math(tex.into()));
+        }
+    }
+
+    pub fn end_para(&mut self, id: &str, region: u8, min: egui::Pos2) {
+        if let Some(parts) = self.para.take() {
+            self.nodes.push(Node::Para { id: id.into(), parts, region, pos: twin::pos_of(min) });
+        }
+    }
+
+    fn drain(&mut self, q: &Queue) {
+        let msgs: Vec<String> = std::mem::take(&mut *q.lock().unwrap());
         for m in msgs {
             if let Some(id) = m.strip_prefix("act:") {
                 self.act.insert(id.into());
@@ -107,50 +187,327 @@ impl App {
                 if self.focus.as_deref() == Some(id) {
                     self.focus = None;
                 }
+            } else if let Some(rest) = m.strip_prefix("text:") {
+                if let Some((id, v)) = rest.split_once('\u{1}') {
+                    self.typed.insert(id.into(), v.into());
+                }
             }
-        }
-    }
-
-    fn ui(&mut self, ui: &mut Ui) {
-        ui.add_space(16.0);
-        ui.heading("viSHion");
-        ui.label(format!("core v{}", vishion_core::version()));
-        ui.add_space(12.0);
-        let r = ui.add_sized(
-            [160.0, 44.0],
-            egui::Button::new(RichText::new(format!("Count: {}", self.count)).strong())
-                .min_size(Vec2::new(0.0, 44.0)),
-        );
-        if self.ctl(
-            ui,
-            &r,
-            "count",
-            "button",
-            &format!("Count: {}", self.count),
-            None,
-        ) {
-            self.count += 1;
         }
     }
 }
 
-impl eframe::App for App {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        self.drain_queue();
-        self.regs.clear();
-        egui::CentralPanel::default().show(ctx, |ui| self.ui(ui));
+/// A page image on the GPU: the full texture for the page pane and a small one for the strip.
+pub(crate) struct Img {
+    pub full: egui::TextureHandle,
+    pub thumb: egui::TextureHandle,
+    /// Pixel size of the full image.
+    pub size: (u32, u32),
+}
 
-        // reading order = visual order (16px row bands, then x), so Tab matches what a sighted user sees
-        self.regs.sort_by_key(|r| r.pos);
-        if self.regs != self.last_regs {
+pub(crate) enum Slot {
+    Loading,
+    Missing,
+    Ready(Img),
+}
+
+/// Save indicator state (`S.d.save`).
+#[derive(Default)]
+pub(crate) struct SaveState {
+    pub pending: u32,
+    pub failed: Option<String>,
+    pub ever: bool,
+}
+
+pub(crate) enum Boot {
+    Loading,
+    Empty,
+    Failed(String),
+    Ready,
+}
+
+pub struct App {
+    ctx: egui::Context,
+    queue: Queue,
+    ctl: Ctl,
+    last_nodes: Vec<Node>,
+    host: Option<(Dispatch, Inbox)>,
+    boot: Boot,
+    session: Option<state::Session>,
+    storage: String,
+    notice: Option<String>,
+    save: SaveState,
+    images: HashMap<String, Slot>,
+    math: math::MathCache,
+    typed: String,
+    typed_for: Option<(String, String)>,
+    status_msg: Option<String>,
+    theme_name: String,
+    theme_override: Option<String>,
+    dark_applied: Option<bool>,
+    exit_after: Option<Duration>,
+    #[cfg(not(target_arch = "wasm32"))]
+    screenshot: Option<(std::path::PathBuf, f64)>,
+    #[cfg(not(target_arch = "wasm32"))]
+    dump_controls: bool,
+    #[cfg(not(target_arch = "wasm32"))]
+    closing: bool,
+}
+
+impl App {
+    /// An app without a host: shows the empty state. Used by tests and previews.
+    pub fn new(ctx: egui::Context) -> Self {
+        let queue: Queue = Arc::default();
+        #[cfg(target_arch = "wasm32")]
+        web::install(queue.clone(), ctx.clone());
+        theme::install(&ctx);
+        App {
+            ctx,
+            queue,
+            ctl: Ctl::default(),
+            last_nodes: vec![],
+            host: None,
+            boot: Boot::Loading,
+            session: None,
+            storage: String::new(),
+            notice: None,
+            save: SaveState::default(),
+            images: HashMap::new(),
+            math: math::MathCache::new(),
+            typed: String::new(),
+            typed_for: None,
+            status_msg: None,
+            theme_name: "auto".into(),
+            theme_override: None,
+            dark_applied: None,
+            exit_after: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            screenshot: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            dump_controls: false,
+            #[cfg(not(target_arch = "wasm32"))]
+            closing: false,
+        }
+    }
+
+    /// Connect the storage host. `dispatch` carries `Cmd`s out; the host pushes `Event`s into `inbox`.
+    pub fn with_host(mut self, dispatch: Dispatch, inbox: Inbox) -> Self {
+        self.host = Some((dispatch, inbox));
+        self
+    }
+
+    /// Force a theme (`"light"` or `"dark"`) over `settings.theme`.
+    pub fn theme(mut self, name: &str) -> Self {
+        self.theme_override = Some(name.into());
+        self
+    }
+
+    /// Close the window after `d` (native smoke test; `vishion --exit-after-ms N`).
+    pub fn exit_after(mut self, d: Duration) -> Self {
+        self.exit_after = Some(d);
+        self
+    }
+
+    /// Native: after `settle` seconds of egui time, write the frame to `path` (PNG), then close.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn screenshot_to(mut self, path: std::path::PathBuf, settle: f64) -> Self {
+        self.screenshot = Some((path, settle));
+        self
+    }
+
+    /// Native: print the control list as JSON lines when the app closes (parity check against the twin).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn dump_controls(mut self, on: bool) -> Self {
+        self.dump_controls = on;
+        self
+    }
+
+    /// Controls of the last frame in reading order, including those inline in transcript paragraphs.
+    pub fn controls(&self) -> Vec<&Reg> {
+        twin::controls(&self.last_nodes)
+    }
+
+    /// The whole twin of the last frame.
+    pub fn nodes(&self) -> &[Node] {
+        &self.last_nodes
+    }
+
+    pub fn session(&self) -> Option<&state::Session> {
+        self.session.as_ref()
+    }
+
+    /// Hand a session to the app directly (tests; the host path is `Event::Opened`).
+    pub fn open_session(&mut self, s: state::Session, storage: &str) {
+        self.session = Some(s);
+        self.storage = storage.into();
+        self.boot = Boot::Ready;
+    }
+
+    fn send(&self, c: Cmd) {
+        if let Some((d, _)) = &self.host {
+            d(c);
+        }
+    }
+
+    fn handle_events(&mut self) {
+        let evs = match &self.host {
+            Some((_, inbox)) => inbox.drain(),
+            None => vec![],
+        };
+        for e in evs {
+            match e {
+                Event::Opened { slug, assignment, settings, storage, unreadable, notice } => {
+                    self.storage = storage;
+                    let mut msg = notice;
+                    if !unreadable.is_empty() {
+                        let n = format!(
+                            "{} could not be read and was left untouched.",
+                            state::plural(unreadable.len(), "page", "pages")
+                        );
+                        msg = Some(msg.map_or(n.clone(), |m| format!("{m} {n}")));
+                    }
+                    self.notice = msg;
+                    self.images.clear();
+                    self.session = Some(state::Session::new(slug, *assignment, *settings, now_ms()));
+                    self.boot = Boot::Ready;
+                }
+                Event::Empty { storage } => {
+                    self.storage = storage;
+                    self.boot = Boot::Empty;
+                }
+                Event::Failed(m) => self.boot = Boot::Failed(m),
+                Event::Image { id, bytes } => {
+                    let slot = bytes.and_then(|b| decode_image(&self.ctx, &id, &b)).map_or(Slot::Missing, Slot::Ready);
+                    self.images.insert(id, slot);
+                }
+                Event::Saved => {
+                    self.save.pending = self.save.pending.saturating_sub(1);
+                    self.save.ever = true;
+                    if self.save.pending == 0 {
+                        self.save.failed = None;
+                    }
+                }
+                Event::SaveFailed(m) => {
+                    self.save.pending = self.save.pending.saturating_sub(1);
+                    self.save.failed = Some(m);
+                }
+            }
+        }
+    }
+
+    /// Ask for the images of the current student's pages that are not loaded yet.
+    fn want_images(&mut self) {
+        let Some(s) = &self.session else { return };
+        let Some(g) = s.group() else { return };
+        let mut ids = g.pages.clone();
+        // the selected page first
+        if let Some(cur) = &s.selected {
+            ids.sort_by_key(|i| i != cur);
+        }
+        let slug = s.slug.clone();
+        for id in ids {
+            if !self.images.contains_key(&id) {
+                self.images.insert(id.clone(), Slot::Loading);
+                self.send(Cmd::LoadImage { slug: slug.clone(), id });
+            }
+        }
+    }
+
+    fn flush_dirty(&mut self) {
+        let Some(s) = &mut self.session else { return };
+        if !s.dirty.any() {
+            return;
+        }
+        let d = s.take_dirty();
+        let slug = s.slug.clone();
+        let mut cmds = vec![];
+        for id in d.pages {
+            if let Some(p) = s.a.pages.get(&id) {
+                cmds.push(Cmd::SavePage { slug: slug.clone(), page: p.clone() });
+            }
+        }
+        if d.meta {
+            cmds.push(Cmd::SaveMeta { slug: slug.clone(), meta: s.a.meta.clone() });
+        }
+        if d.settings {
+            cmds.push(Cmd::SaveSettings { settings: s.settings.clone() });
+        }
+        self.save.pending += cmds.len() as u32;
+        for c in cmds {
+            self.send(c);
+        }
+    }
+
+    fn ui_frame(&mut self, ctx: &egui::Context, system_dark: bool) {
+        // theme
+        let name = self
+            .theme_override
+            .clone()
+            .or_else(|| self.session.as_ref().and_then(|s| s.settings.get("theme").and_then(|v| v.as_str().map(String::from))))
+            .unwrap_or_else(|| self.theme_name.clone());
+        self.theme_name = name;
+        let t = theme::pick(&self.theme_name, system_dark);
+        if self.dark_applied != Some(t.dark) {
+            theme::apply(ctx, t);
+            self.dark_applied = Some(t.dark);
+        }
+        self.ctl.ring = t.ink;
+        self.ctl.nodes.clear();
+        self.ctl.para = None;
+        review::show(self, ctx, t);
+    }
+}
+
+fn decode_image(ctx: &egui::Context, id: &str, bytes: &[u8]) -> Option<Img> {
+    let im = image::load_from_memory(bytes).ok()?;
+    let im = if im.width().max(im.height()) > 3000 { im.thumbnail(3000, 3000) } else { im };
+    let size = (im.width(), im.height());
+    let rgba = im.to_rgba8();
+    let ci = egui::ColorImage::from_rgba_unmultiplied([size.0 as usize, size.1 as usize], rgba.as_raw());
+    let full = ctx.load_texture(format!("page-{id}"), ci, egui::TextureOptions::LINEAR);
+    let th = im.thumbnail(132, 168).to_rgba8();
+    let ti = egui::ColorImage::from_rgba_unmultiplied([th.width() as usize, th.height() as usize], th.as_raw());
+    let thumb = ctx.load_texture(format!("thumb-{id}"), ti, egui::TextureOptions::LINEAR);
+    Some(Img { full, thumb, size })
+}
+
+impl eframe::App for App {
+    fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        let system_dark = frame.info().system_theme.map_or(false, |t| t == eframe::Theme::Dark);
+        self.step(ctx, system_dark);
+    }
+}
+
+impl App {
+    /// One frame: twin and host input, the screen, the twin output, saves, image requests, exit rules.
+    fn step(&mut self, ctx: &egui::Context, system_dark: bool) {
+        self.ctl.drain(&self.queue);
+        self.handle_events();
+        self.ui_frame(ctx, system_dark);
+        // an activation or typed text whose control was not on screen this frame is dropped, not kept
+        self.ctl.act.clear();
+        self.ctl.typed.clear();
+
+        // reading order: region, then 16px row band, then x
+        self.ctl.nodes.sort_by_key(|n| n.key());
+        let nodes = std::mem::take(&mut self.ctl.nodes);
+        if nodes != self.last_nodes {
             #[cfg(target_arch = "wasm32")]
-            web::sync(&self.regs);
-            self.last_regs = self.regs.clone();
+            web::sync(&nodes);
+            self.last_nodes = nodes;
         }
 
+        self.want_images();
+        self.flush_dirty();
+
+        let t = ctx.input(|i| i.time);
+        #[cfg(not(target_arch = "wasm32"))]
+        self.native_exit(ctx, t);
         if let Some(d) = self.exit_after {
             // egui time (not std Instant, which panics on wasm32)
-            if ctx.input(|i| i.time) >= d.as_secs_f64() {
+            if t >= d.as_secs_f64() {
+                #[cfg(not(target_arch = "wasm32"))]
+                self.finish(ctx);
+                #[cfg(target_arch = "wasm32")]
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             } else {
                 ctx.request_repaint_after(Duration::from_millis(50));
@@ -159,26 +516,40 @@ impl eframe::App for App {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn dom_activation_increments_and_registers_control() {
-        let ctx = egui::Context::default();
-        let mut app = App::new(ctx.clone());
-        app.queue.lock().unwrap().push("act:count".into());
-        let frame_run = |app: &mut App| {
-            let _ = ctx.run(Default::default(), |c| {
-                app.drain_queue();
-                app.regs.clear();
-                egui::CentralPanel::default().show(c, |ui| app.ui(ui));
-                app.last_regs = app.regs.clone();
+#[cfg(not(target_arch = "wasm32"))]
+impl App {
+    fn native_exit(&mut self, ctx: &egui::Context, t: f64) {
+        if let Some((path, settle)) = self.screenshot.clone() {
+            let shot = ctx.input(|i| {
+                i.events.iter().find_map(|e| match e {
+                    egui::Event::Screenshot { image, .. } => Some(image.clone()),
+                    _ => None,
+                })
             });
-        };
-        frame_run(&mut app);
-        assert_eq!(app.count, 1);
-        assert_eq!(app.controls().len(), 1);
-        assert_eq!(app.controls()[0].id, "count");
+            if let Some(img) = shot {
+                let _ = image::save_buffer(&path, img.as_raw(), img.width() as u32, img.height() as u32, image::ColorType::Rgba8);
+                self.finish(ctx);
+            } else if t >= settle {
+                let ready = !self.images.values().any(|s| matches!(s, Slot::Loading)) && !matches!(self.boot, Boot::Loading);
+                if ready {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot);
+                }
+                ctx.request_repaint_after(Duration::from_millis(100));
+            } else {
+                ctx.request_repaint_after(Duration::from_millis(50));
+            }
+        }
+    }
+
+    fn finish(&mut self, ctx: &egui::Context) {
+        if std::mem::replace(&mut self.closing, true) {
+            return;
+        }
+        if self.dump_controls {
+            for c in self.controls() {
+                println!("{}", serde_json::json!({"id": c.id, "role": c.role, "label": c.label, "pressed": c.pressed, "size": [c.size.0, c.size.1]}));
+            }
+        }
+        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
     }
 }

@@ -6,7 +6,10 @@
 <title>viSHion</title>
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <style>
-  html, body { margin: 0; height: 100%; }
+  /* paint the page in the app's own background before the first frame (tokens: --bg light/dark) */
+  :root { color-scheme: light dark; }
+  html, body { margin: 0; height: 100%; background: #EEF1F5; }
+  @media (prefers-color-scheme: dark) { html, body { background: #0F131C; } }
   canvas { width: 100%; height: 100%; display: block; }
   /* hidden-DOM control layer (a11y twin): visually hidden until a twin has keyboard focus */
   .sr { position: absolute; left: 0; top: 0; width: 1px; height: 1px; overflow: hidden; opacity: 0; }
