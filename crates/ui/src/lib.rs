@@ -108,6 +108,8 @@ pub struct Ctl {
     /// A dialog was open at the end of the last frame, and where focus goes back to when it closes.
     pub(crate) dialog_was: bool,
     pub(crate) restore_focus: Option<String>,
+    /// The control that was activated this frame (mouse, keyboard or the twin): the opener of a dialog.
+    pub(crate) activated: Option<String>,
     /// The last input was the keyboard, so a focused non-text region shows its ring (`:focus-visible`: a mouse
     /// click on the transcript focuses it without a ring; the first arrow key brings the ring up).
     pub(crate) kbd: bool,
@@ -256,7 +258,11 @@ impl Ctl {
             }
             None => false,
         };
-        !c.disabled && (r.clicked() || from_dom)
+        let hit = !c.disabled && (r.clicked() || from_dom);
+        if hit {
+            self.activated = Some(c.id.to_string());
+        }
+        hit
     }
 
     /// Register a textbox. `value` is what the canvas widget currently holds; text typed into the twin
@@ -1162,6 +1168,7 @@ impl App {
         #[cfg(not(target_arch = "wasm32"))]
         self.run_tabs();
         self.ctl.focused = None;
+        self.ctl.activated = None;
         self.ctl.lines.clear();
         self.ui_frame(ctx, system_dark);
         self.prev_focus = self.ctl.focused.as_ref().map(|f| f.0.clone());
@@ -1401,7 +1408,27 @@ impl App {
     /// walk its widgets in drawing order) and `step` moves focus along the twin's reading order instead.
     fn filter_tab(&mut self, raw: &mut egui::RawInput) {
         let mut tabs = vec![];
+        // A modal dialog keeps the arrow keys inside it: egui's own arrow navigation looks for the nearest widget
+        // in that direction among everything it drew, including the screen behind the dialog (focus then landed
+        // on an unnamed widget out of the dialog). Arrows step along the dialog's tab order instead, except in a
+        // text box, where they move the caret.
+        let in_text = self.prev_focus.as_deref().is_some_and(|f| {
+            self.last_nodes.iter().any(|n| matches!(n, Node::Control(c) if c.id == f && c.role == "textbox"))
+        });
+        let arrows = self.ctl.dialog_was && !in_text;
         raw.events.retain(|e| match e {
+            egui::Event::Key { key, pressed, modifiers, .. }
+                if arrows
+                    && matches!(key, egui::Key::ArrowUp | egui::Key::ArrowDown | egui::Key::ArrowLeft | egui::Key::ArrowRight)
+                    && !modifiers.ctrl
+                    && !modifiers.alt
+                    && !modifiers.command =>
+            {
+                if *pressed {
+                    tabs.push(matches!(key, egui::Key::ArrowUp | egui::Key::ArrowLeft));
+                }
+                false
+            }
             egui::Event::Key { key: egui::Key::Tab, pressed, modifiers, .. } if !modifiers.ctrl && !modifiers.alt && !modifiers.command => {
                 if *pressed {
                     tabs.push(modifiers.shift);

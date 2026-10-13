@@ -2302,3 +2302,42 @@ fn native_dialog_opened_from_the_keyboard_keeps_focus_in_the_tree() {
         }
     }
 }
+
+/// Native, round 8: arrow keys inside a modal dialog stay inside it (egui looked for the nearest widget in that
+/// direction among all it drew, so ArrowLeft/ArrowUp from the first control landed on an unnamed widget behind
+/// the dialog), and a dialog opened with the mouse hands focus back to the button that opened it.
+#[test]
+fn native_arrow_keys_stay_in_the_dialog() {
+    for opener in ["settings", "remove", "change-student"] {
+        let mut h = H::new("m1");
+        h.act(opener);
+        h.frames(3);
+        // egui's own focus (what AccessKit reports to the client) is a widget of the dialog, not one behind it
+        let inside = |h: &H| {
+            let f = h.ctx.memory(|m| m.focused());
+            h.app.ctl.widgets.iter().any(|(id, w)| Some(*w) == f && h.ctl(id).is_some_and(|c| c.region == crate::twin::DIALOG))
+        };
+        for k in [egui::Key::ArrowLeft, egui::Key::ArrowUp, egui::Key::ArrowRight, egui::Key::ArrowDown, egui::Key::ArrowLeft] {
+            for pressed in [true, false] {
+                h.events.push(egui::Event::Key { key: k, physical_key: Some(k), pressed, repeat: false, modifiers: Default::default() });
+                h.frames(1);
+            }
+            h.frames(3);
+            assert!(inside(&h), "{opener}: {k:?} leaves focus in the dialog, got {:?}", h.ctx.memory(|m| m.focused()));
+        }
+    }
+}
+
+#[test]
+fn native_dialog_opened_with_the_mouse_returns_focus_to_its_opener() {
+    for opener in ["settings", "remove", "change-student"] {
+        let mut h = H::new("m1");
+        let c = h.ctl(opener).expect("opener").clone();
+        h.click(egui::pos2(c.at.0 as f32 + c.size.0 as f32 / 2.0, c.at.1 as f32 + c.size.1 as f32 / 2.0));
+        assert!(h.app.dialog.is_some(), "{opener}: dialog open");
+        h.key(egui::Key::Escape);
+        h.frames(3);
+        assert!(h.app.dialog.is_none(), "{opener}: closed");
+        assert_eq!(h.app.prev_focus.as_deref(), Some(opener), "{opener}: focus back on the opener");
+    }
+}

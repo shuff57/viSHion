@@ -294,7 +294,8 @@ pub(crate) fn show(app: &mut App, ctx: &egui::Context, t: &Tokens) {
         // focus goes into a dialog when it opens and back to what opened it when it closes
         let open_now = dialog.is_some();
         if open_now && !dialog_was {
-            ctl.restore_focus = ctl.focused.as_ref().map(|(id, _)| id.clone()).or_else(|| ctl.focus.clone());
+            // (a mouse click does not give a button egui focus: the control that was activated is the opener)
+            ctl.restore_focus = ctl.activated.take().or_else(|| ctl.focused.as_ref().map(|(id, _)| id.clone())).or_else(|| ctl.focus.clone());
             if let Some(d) = dialog.as_ref() {
                 ctl.want_focus = Some(d.first_focus(s));
             }
