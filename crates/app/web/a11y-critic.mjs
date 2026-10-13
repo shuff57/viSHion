@@ -255,6 +255,80 @@ try {
     expect(said.trim() !== '', 'Transcribe this page again says it started or finished (the transcript was replaced in silence): ' + JSON.stringify(said));
     await ctx.close();
   }
+  // ---- round 7 (blind critic): gaps found with a real browser tree, Tab walks and the native window
+  {
+    // l. Settings: every control below the fold is reachable with Tab and keeps focus. Today the first focus on a control that is
+    // off screen in the dialog is lost to <body> (the dialog scrolls, the twin reorders), so Tab skips the whole lower half of
+    // Settings (How to suggest, Course words, Suggest likely words, Remember my fixes, Export defaults, Keep originals), and
+    // Done sits in the middle of the DOM because it is drawn at the foot of the window.
+    const { ctx, page, pump } = await open({ width: 1280, height: 800 });
+    await page.mouse.click(640, 3);
+    for (let i = 0; i < 40; i++) { await page.keyboard.press('Tab'); await pump(2); if ((await page.evaluate(() => document.activeElement?.dataset?.id)) === 'settings') break; }
+    await page.keyboard.press('Enter'); await pump(8);
+    const seen = [];
+    for (let i = 0; i < 40; i++) { await page.keyboard.press('Tab'); await page.waitForTimeout(120); await pump(2); seen.push(await page.evaluate(() => document.activeElement?.dataset?.id || document.activeElement?.tagName)); }
+    const want = ['st-jmode-auto', 'st-words', 'st-guess', 'st-remember', 'st-fmt-docx', 'st-sep-label', 'st-txt-corrected', 'st-orig'];
+    const miss = want.filter((w) => !seen.includes(w));
+    expect(miss.length === 0, 'Settings: Tab reaches every control, below the fold included' + (miss.length ? '; never focused: ' + miss + '; sequence: ' + seen.slice(0, 20) : ''));
+    expect(seen.filter((x) => x === 'BODY').length === 0, 'Settings: focus never falls to <body> while Tab walks the dialog (' + seen.filter((x) => x === 'BODY').length + ' times)');
+    const order = await page.evaluate(() => [...document.querySelectorAll('[role=dialog] button, [role=dialog] input')].map((e) => e.dataset.id));
+    expect(order[order.length - 1] === 'dialog-close', 'Settings: Done is the last control of the dialog in the tree, as in JS (it is at index ' + order.indexOf('dialog-close') + ' of ' + order.length + ')');
+    await ctx.close();
+  }
+  {
+    // m. Show plain text rebuilds the footer: focus fell to <body> and nothing said that the view changed (JS rebuilds it too, and has the same gap)
+    const { ctx, page, pump } = await open({ width: 1280, height: 800 });
+    await page.evaluate(() => document.querySelector('#controls [data-id="text-view"]').focus()); await pump(3);
+    await page.keyboard.press('Enter'); await pump(8);
+    const r = await page.evaluate(() => ({ a: document.activeElement?.dataset?.id || document.activeElement?.tagName, s: document.getElementById('announce').textContent }));
+    expect(r.a !== 'BODY', 'Show plain text keeps focus on a control (A11Y.md: a control that disappears hands focus on): ' + r.a);
+    expect(/plain|formatted/i.test(r.s), 'Show plain text says which view it switched to: ' + JSON.stringify(r.s));
+    await ctx.close();
+  }
+  {
+    // n. zoom is silent: Zoom in, + and - on the stage change the level and nothing says it (the level is only in another button's name)
+    const { ctx, page, pump } = await open({ width: 1280, height: 800 });
+    await page.evaluate(() => document.querySelector('#controls [data-id="stage"]').focus()); await pump(3);
+    await page.keyboard.press('+'); await pump(6);
+    const said = await page.evaluate(() => document.getElementById('announce').textContent);
+    expect(/%|zoom/i.test(said), 'pressing + on the page image says the new zoom level: ' + JSON.stringify(said));
+    await ctx.close();
+  }
+  {
+    // o. Check words opens the word panel and says nothing; focus lands on the neighbouring button, not the panel
+    const { ctx, page, pump } = await open({ width: 1280, height: 800 });
+    await page.evaluate(() => document.querySelector('#controls [data-id="word-p-maya-1-c:0"]').focus()); await pump(3);
+    await page.keyboard.press('Enter'); await pump(6);
+    await page.evaluate(() => document.querySelector('#controls [data-id="tray-close"]').focus()); await pump(3);
+    await page.keyboard.press('Enter'); await pump(8);
+    await page.evaluate(() => document.getElementById('announce').textContent = '');
+    await page.evaluate(() => document.querySelector('#controls [data-id="tray-open"]')?.focus()); await pump(3);
+    await page.keyboard.press('Enter'); await pump(8);
+    const r = await page.evaluate(() => ({ a: document.activeElement?.dataset?.id || document.activeElement?.tagName, s: document.getElementById('announce').textContent, tray: !!document.querySelector('#controls [data-id="tray-close"]') }));
+    expect(r.tray && /word|panel|check/i.test(r.s), 'Check words says that the word panel opened and which word it is on: ' + JSON.stringify(r.s) + ', focus ' + r.a);
+    await ctx.close();
+  }
+  {
+    // p. WCAG 1.4.12: a user stylesheet that raises text spacing and size changes every DOM page (the JS app) and nothing here
+    // (text is drawn on a canvas; the twin is opacity 0). Structural: the transcript needs a real, visible text mode.
+    const { ctx, page, pump } = await open({ width: 1280, height: 800 });
+    const before = await page.screenshot();
+    await page.addStyleTag({ content: '*{line-height:1.5 !important;letter-spacing:.12em !important;word-spacing:.16em !important;font-size:20px !important}' });
+    await page.waitForTimeout(600); await pump(4);
+    const after = await page.screenshot();
+    expect(Buffer.compare(before, after) !== 0, 'text spacing and a larger font from a user stylesheet change what is drawn (WCAG 1.4.12; the JS app is DOM and follows it)');
+    await ctx.close();
+  }
+  {
+    // q. Rotate this page says nothing in an unsaved assignment ("Saved." is only said after a real save). The JS app is silent too
+    // but its header status pill is a live region that goes Saving... / Saved; here the pill is a paragraph read in place
+    const { ctx, page, pump } = await open({ width: 1280, height: 800 });
+    await page.evaluate(() => document.querySelector('#controls [data-id="rotate"]').focus()); await pump(3);
+    await page.keyboard.press('Enter'); await pump(10);
+    const said = await page.evaluate(() => document.getElementById('announce').textContent);
+    expect(said.trim() !== '', 'Rotate this page says that it turned: ' + JSON.stringify(said));
+    await ctx.close();
+  }
 } catch (e) {
   console.error(e);
   failures.push('exception: ' + (e && e.message));

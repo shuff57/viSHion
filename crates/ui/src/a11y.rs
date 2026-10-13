@@ -757,6 +757,21 @@ mod tests {
         assert!(!tex_speech(r"x \to 3").contains("approaches"));
     }
 
+    /// Round 7 (blind critic): \ between two figures is similarity, not "is distributed as" (only a random
+    /// variable before a distribution is). \ is the real numbers, not the letter R. Failing by design.
+    #[test]
+    fn similar_figures_and_number_sets_are_not_misread() {
+        let s = tex_speech(r"\triangle ABC \sim \triangle DEF");
+        assert!(!s.contains("distributed"), "similar triangles: {s}");
+        assert!(s.contains("similar"), "similar triangles: {s}");
+        // a random variable still is distributed
+        assert!(tex_speech(r"X \sim N(0, 1)").contains("distributed"));
+        let s = tex_speech(r"x \in \mathbb{R}");
+        assert!(s.contains("real numbers"), "R of the reals: {s}");
+        let s = tex_speech(r"n \in \mathbb{Z}");
+        assert!(s.contains("integers"), "Z of the integers: {s}");
+    }
+
     #[test]
     fn groups_and_landmarks() {
         assert_eq!(group_of("page-p1").map(|g| g.0), Some("pages"));
