@@ -178,7 +178,7 @@ try {
     const { ctx, page, pump } = await open({ width: 1280, height: 800 });
     await page.bringToFront();
     await page.evaluate(() => navigator.clipboard.writeText('SEED'));
-    await page.evaluate(() => getSelection().selectAllChildren(document.querySelector('#controls .tx-clip')));
+    await page.evaluate(() => getSelection().selectAllChildren(document.querySelector('#controls .tx-clip:has(p.tx)')));
     await page.keyboard.press('Control+c');
     await page.waitForTimeout(300);
     const clip = await page.evaluate(() => navigator.clipboard.readText());
@@ -236,7 +236,7 @@ try {
     const { ctx, page, pump } = await open({ width: w, height: h });
     for (let k = 0; k < fixed; k++) { await page.mouse.move(200, 500); await page.mouse.wheel(0, 350); await pump(4); await page.waitForTimeout(300); }
     for (let k = 0; k < (fixed ? 0 : 8); k++) {
-      const seen = await page.evaluate(() => { const b = document.querySelector('#controls p.tx button.w'); const r = b.getBoundingClientRect(); const c = document.querySelector('#controls .tx-clip').getBoundingClientRect(); return r.top > c.top + 20 && r.bottom < c.bottom - 20; });
+      const seen = await page.evaluate(() => { const b = document.querySelector('#controls p.tx button.w'); const r = b.getBoundingClientRect(); const c = document.querySelector('#controls .tx-clip:has(p.tx)').getBoundingClientRect(); return r.top > c.top + 20 && r.bottom < c.bottom - 20; });
       if (seen) break;
       await page.mouse.move(w / 2, h / 2); await page.mouse.wheel(0, 300); await pump(3); await page.waitForTimeout(250);
     }
@@ -260,7 +260,7 @@ try {
     const { ctx, page, pump } = await open({ width: 1280, height: 450 });
     const geo = (t) => page.evaluate((t) => {
       const p = [...document.querySelectorAll('#controls p.tx')].find((e) => e.textContent.includes(t));
-      const r = p.getBoundingClientRect(); const c = document.querySelector('#controls .tx-clip').getBoundingClientRect();
+      const r = p.getBoundingClientRect(); const c = document.querySelector('#controls .tx-clip:has(p.tx)').getBoundingClientRect();
       return { top: r.top, bottom: r.bottom, clipTop: c.top, clipBottom: c.bottom };
     }, t);
     const before = await geo('likely wide');
@@ -299,16 +299,17 @@ try {
     await ctx.close();
   }
 
-  // 12. A formula is spoken once: nothing under role=math is in the accessibility tree, only its label
+  // 12. A formula is one math node named in words, whose children are its typeset MathML (structure for math
+  //     navigation and braille); its TeX source (the text laid over it for find and copy) is not in the tree
   {
     const { ctx, page } = await open({ width: 1280, height: 800 });
     const cdp = await ctx.newCDPSession(page);
     const { nodes } = await cdp.send('Accessibility.getFullAXTree');
     const byId = new Map(nodes.map((n) => [n.nodeId, n]));
-    const exposed = []; let maths = 0;
-    const walk = (n) => { for (const id of n.childIds || []) { const k = byId.get(id); if (!k) continue; if (!k.ignored && k.role?.value === 'StaticText') exposed.push(k.name?.value); walk(k); } };
-    for (const n of nodes) if (!n.ignored && n.role?.value === 'math') { maths++; walk(n); }
-    expect(maths >= 2 && exposed.length === 0, `a formula is one named math node with no text under it (${maths} formulas): ` + JSON.stringify(exposed));
+    const tex = []; const roles = new Set(); let maths = 0, unnamed = 0, nested = 0;
+    const walk = (n, inMath) => { for (const id of n.childIds || []) { const k = byId.get(id); if (!k) continue; if (!k.ignored) { roles.add(k.role?.value); if (k.role?.value === 'math') nested++; if (k.role?.value === 'StaticText' && /[\\$]/.test(k.name?.value || '')) tex.push(k.name.value); } walk(k, true); } };
+    for (const n of nodes) if (!n.ignored && n.role?.value === 'math') { maths++; if (!(n.name?.value || '').trim()) unnamed++; walk(n); }
+    expect(maths >= 2 && unnamed === 0 && nested === 0 && tex.length === 0 && roles.has('MathMLFraction'), `a formula is one named math node with its MathML under it and no TeX (${maths} formulas): ` + JSON.stringify([unnamed, nested, tex, [...roles]]));
     await ctx.close();
   }
 
@@ -321,6 +322,42 @@ try {
     await pump(10); await page.waitForTimeout(800); await pump(4);
     const g1 = await gaps();
     expect(g1.every((g, i) => g >= g0[i] + 16), `${css}: each line has at least 16px more room: ` + JSON.stringify([g0, g1]));
+    await ctx.close();
+  }
+
+  // 14. The rest of the pane is real text as well: a user stylesheet with the WCAG 1.4.12 text spacing and another
+  //     typeface reaches the student's name, the counts, the legend, the pill, the stat and the hint, and the
+  //     screen makes room for what grew
+  {
+    const { ctx, page, pump } = await open({ width: 1280, height: 900 });
+    const ids = ['student-name', 'student-meta', 'legend', 'student-status', 'foot-stats', 'foot-hint'];
+    const probe = () => page.evaluate((ids) => ids.map((id) => {
+      const e = document.querySelector(`#controls [data-id="${id}"]`);
+      if (!e) return { id, missing: true };
+      const cs = getComputedStyle(e), r = e.getBoundingClientRect();
+      let o = 1; for (let n = e; n && n.id !== 'controls'; n = n.parentElement) o *= parseFloat(getComputedStyle(n).opacity);
+      return { id, o, ls: cs.letterSpacing, fam: cs.fontFamily, fs: cs.fontSize, top: r.top, bottom: r.bottom, left: r.left, right: r.right, w: r.width, h: r.height };
+    }), ids);
+    const before = await probe();
+    expect(before.every((b) => !b.missing && b.o === 1), 'name, counts, legend, pill, stat and hint are painted DOM text: ' + JSON.stringify(before.map((b) => [b.id, b.o])));
+    expect(before.every((b) => b.ls === 'normal' || parseFloat(b.ls) === 0), 'no letter spacing to begin with');
+    await page.addStyleTag({ content: '* { letter-spacing: 0.12em !important; word-spacing: 0.16em !important; line-height: 1.5 !important; font-family: Georgia, serif !important; }' });
+    await pump(10); await page.waitForTimeout(700); await pump(4);
+    const after = await probe();
+    expect(after.every((a) => parseFloat(a.ls) > 0 && /Georgia/.test(a.fam)), 'the stylesheet reaches every one of them: ' + JSON.stringify(after.map((a) => [a.id, a.ls, a.fam.slice(0, 12)])));
+    expect(after.filter((a) => a.id !== 'student-status').every((a, i) => a.w > 0) && after.find((a) => a.id === 'student-name').w >= before.find((b) => b.id === 'student-name').w, 'the name keeps its column (it reflows inside it)');
+    expect(after.find((a) => a.id === 'student-status').w > before.find((b) => b.id === 'student-status').w + 4, 'the pill grows with its text: ' + [before[3].w, after[3].w]);
+    const by = Object.fromEntries(after.map((a) => [a.id, a]));
+    expect(by['student-name'].bottom <= by['student-meta'].top + 1, 'the name and the count line do not overlap: ' + [by['student-name'].bottom, by['student-meta'].top]);
+    const below = await page.evaluate(() => {
+      const t = (id) => document.querySelector(`#controls [data-id="${id}"]`)?.getBoundingClientRect();
+      return { meta: t('student-meta'), change: t('change-student'), legend: t('legend'), seg: t('ver-corrected'), hint: t('foot-hint'), stats: t('foot-stats'), more: t('text-view') };
+    });
+    expect(below.change.top >= by['student-meta'].bottom - 1, 'Change student stays under the count line: ' + [by['student-meta'].bottom, below.change.top]);
+    expect(below.legend.top >= below.change.bottom - 1 || below.legend.top >= by['student-status'].bottom - 1, 'the legend stays under the name block');
+    expect(below.legend.right <= below.seg.left + 1 || below.seg.top >= below.legend.bottom - 1, 'the legend does not run under Corrected / Original: ' + JSON.stringify([below.legend.right, below.seg.left]));
+    expect(below.hint.top >= below.stats.top - 1, 'the hint follows the stat');
+    expect(before.every((b) => b.h > 0) && after.find((a) => a.id === 'legend').h >= before.find((b) => b.id === 'legend').h, 'the legend is as tall as it came out');
     await ctx.close();
   }
 } catch (e) {

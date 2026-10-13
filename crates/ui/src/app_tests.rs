@@ -2704,7 +2704,6 @@ fn dom_click_on_a_line_underlines_it_and_a_word_keeps_its_measured_rectangle() {
 /// the canvas only (`css_text` in the `transcribing` arm of `transcript_pane` registers no twin node), so it is
 /// not DOM text on the web (no find, selection, user stylesheet) and a screen reader never gets it.
 #[test]
-#[ignore = "failing by design: the streamed transcript is canvas-only text with no node in the twin"]
 fn critic4_streamed_transcript_is_a_node_of_the_twin() {
     let mut h = H::new("m1");
     h.app.ctl.dom_text = true;
@@ -2717,4 +2716,34 @@ fn critic4_streamed_transcript_is_a_node_of_the_twin() {
         _ => false,
     });
     assert!(has, "the text being read is in the twin");
+}
+
+/// DOM transcript round 4: on the web the name, counts, legend, pill, stat and hint are DOM text of the pane, said
+/// to the twin per node (class and where it may be seen), and egui paints nothing of them.
+#[test]
+fn round4_pane_text_is_dom_text_on_the_web() {
+    let mut h = H::new("m1");
+    h.app.ctl.dom_text = true;
+    h.frames(4);
+    let chrome = &h.app.last_chrome;
+    for id in ["student-name", "student-meta", "legend", "student-status"] {
+        let c = chrome.get(id).unwrap_or_else(|| panic!("{id} is DOM text: {:?}", chrome.keys().collect::<Vec<_>>()));
+        assert!(c.1 .2 > 0 && c.1 .3 > 0, "{id} says where it may be seen: {c:?}");
+    }
+    assert!(chrome.get("student-status").is_some_and(|c| c.0.starts_with("pill ")));
+    // the nodes are the same as ever (native tree, tests, a screen reader's headings)
+    assert!(h.app.nodes().iter().any(|n| matches!(n, Node::Heading { id, level: 1, .. } if id == "student-name")));
+}
+
+#[test]
+fn round4_streamed_text_is_dom_text_on_the_web() {
+    let mut h = H::new("m1");
+    h.app.ctl.dom_text = true;
+    h.sess().a.pages.get_mut("m1").unwrap().set("status", serde_json::json!("transcribing"));
+    h.sess().a.pages.get_mut("m1").unwrap().set("raw", serde_json::json!("The mean of the sample streams in here"));
+    h.frames(4);
+    let chrome = &h.app.last_chrome;
+    assert!(chrome.get("stream").is_some_and(|c| c.0 == "stream"), "{:?}", chrome.keys().collect::<Vec<_>>());
+    assert!(chrome.contains_key("stream-note"));
+    assert!(h.app.nodes().iter().any(|n| matches!(n, Node::Text { id, text, .. } if id == "stream" && text.contains("streams in here"))));
 }

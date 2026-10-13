@@ -114,6 +114,12 @@ pub struct Ctl {
     pub(crate) dom_chips: HashMap<String, [f32; 4]>,
     /// Where DOM transcript lines may be seen (the scroll area they are in): set when they are drawn.
     pub(crate) dom_vis: Option<egui::Rect>,
+    /// Web: the text of the pane the page lays out itself (the student's name, the counts, the legend, the
+    /// stat and hint, the pill, streamed text): twin node id -> (CSS class, where it may be seen). Set when the
+    /// screen describes the node, cleared every frame.
+    pub(crate) chrome: HashMap<String, (String, (i32, i32, u16, u16))>,
+    /// The transcript line the pointer is over (`line-<page>-<index>`): the page lights its box.
+    pub(crate) hover_line: Option<String>,
     ring: egui::Color32,
     /// Keys of this frame (twin and egui).
     pub(crate) keys: Vec<KeyEv>,
@@ -609,6 +615,8 @@ impl Ctl {
                 self.scroll_by += d.parse::<f32>().unwrap_or(0.0);
             } else if let Some(id) = m.strip_prefix("reveal:") {
                 self.reveal = Some(id.into());
+            } else if let Some(id) = m.strip_prefix("hover:") {
+                self.hover_line = if id.is_empty() { None } else { Some(id.into()) };
             } else if let Some(id) = m.strip_prefix("blur:") {
                 if self.focus.as_deref() == Some(id) {
                     self.focus = None;
@@ -667,6 +675,7 @@ pub struct App {
     queue: Queue,
     ctl: Ctl,
     last_nodes: Vec<Node>,
+    last_chrome: HashMap<String, (String, (i32, i32, u16, u16))>,
     last_screen: (f32, f32),
     host: Option<(Dispatch, Inbox)>,
     boot: Boot,
@@ -773,6 +782,7 @@ impl App {
             queue,
             ctl: Ctl { dom_text: cfg!(target_arch = "wasm32"), ..Ctl::default() },
             last_nodes: vec![],
+            last_chrome: HashMap::new(),
             last_screen: (0.0, 0.0),
             host: None,
             boot: Boot::Loading,
@@ -1346,6 +1356,7 @@ impl App {
         self.ctl.focused = None;
         self.ctl.activated = None;
         self.ctl.lines.clear();
+        self.ctl.chrome.clear();
         #[cfg(not(target_arch = "wasm32"))]
         {
             self.want_at_start = self.ctl.want_focus.clone();
@@ -1399,14 +1410,17 @@ impl App {
         let nodes = std::mem::take(&mut self.ctl.nodes);
         let sr = ctx.screen_rect();
         let screen = (sr.width(), sr.height());
-        if nodes != self.last_nodes || screen != self.last_screen {
+        let chrome = std::mem::take(&mut self.ctl.chrome);
+        if nodes != self.last_nodes || screen != self.last_screen || chrome != self.last_chrome {
             #[cfg(target_arch = "wasm32")]
             {
                 web::place(screen);
+                web::set_chrome(&chrome);
                 web::sync(&nodes);
             }
             self.last_nodes = nodes;
             self.last_screen = screen;
+            self.last_chrome = chrome;
         }
         // the browser lays the transcript out: when it came to other heights than the ones this frame
         // allocated (a user stylesheet, a font that arrived), draw the screen again with them

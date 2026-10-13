@@ -46,7 +46,7 @@ try {
   // 2. Selecting across lines keeps the lines apart, and a formula is not one symbol per line
   {
     const { ctx, page } = await open({ width: 1280, height: 800 });
-    const sel = await page.evaluate(() => { const c = document.querySelector('#controls .tx-clip'); getSelection().selectAllChildren(c); return getSelection().toString(); });
+    const sel = await page.evaluate(() => { const c = document.querySelector('#controls .tx-clip:has(p.tx)'); getSelection().selectAllChildren(c); return getSelection().toString(); });
     expect(!/samples,about|mean\.probably|wide\.Margin/.test(sel), 'the end of a line and the start of the next are not glued: ' + JSON.stringify(sel.slice(-160)));
     const sym = sel.split('\n').filter((l) => l.length <= 1).length;
     expect(sym < 4, 'a formula is not copied one symbol per line (' + sym + ' one-character lines)');

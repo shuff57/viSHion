@@ -1,6 +1,6 @@
 // Blind-critic checks on the DOM transcript (round 4): keyboard scrolling from the transcript, hover link to the
 // page's line boxes, the rest of the pane being real text, math structure for assistive technology, label in name.
-// FAILING BY DESIGN until the gaps are closed.
+// (Closed by the DOM transcript round 4 fixes; kept as a regression check.)
 // Usage: node crates/app/web/transcript-dom-critic-4.mjs   (run build.mjs first)
 import { chromium } from 'playwright-core';
 import { serve } from './serve.mjs';

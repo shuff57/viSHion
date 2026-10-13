@@ -350,7 +350,7 @@ try {
     const l0 = await sentence('line-p-maya-1-0');
     expect(l0 === 'The 95% [Spelling to check: confidance. Show options.] interval for the average commute time is (18.4, 24.1) minutes.', 'twin line 0 reads the word inside the sentence: ' + l0);
     const l4 = await sentence('line-p-maya-1-4');
-    expect(!!l4 && /^about 95% of those \[Word that could not be read\. Show options\.\] would capture the true \[Spelling to check: populaton\. Show options\.\] mean\.$/.test(l4), 'twin line 4 reads both words inside the sentence: ' + l4);
+    expect(!!l4 && /^about 95% of those \[Word that could not be read: \[illegible\]\. Show options\.\] would capture the true \[Spelling to check: populaton\. Show options\.\] mean\.$/.test(l4), 'twin line 4 reads both words inside the sentence: ' + l4);
     const asnap = await p7.locator('#controls').ariaSnapshot();
     expect(/The 95%[\s\S]{0,40}button "Spelling to check: confidance[\s\S]{0,80}interval for the average/.test(asnap), 'accessibility tree keeps the sentence order around a flagged word');
     // the tray's position is in the twin, between Previous and Next, and follows the step

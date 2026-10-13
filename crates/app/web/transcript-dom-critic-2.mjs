@@ -24,7 +24,7 @@ async function open(viewport, query = 'demo=1&theme=light&tray=0') {
 }
 const top = (page, text) => page.evaluate((t) => {
   const p = [...document.querySelectorAll('#controls p.tx')].find((e) => e.textContent.includes(t));
-  const r = p.getBoundingClientRect(); const c = document.querySelector('#controls .tx-clip').getBoundingClientRect();
+  const r = p.getBoundingClientRect(); const c = document.querySelector('#controls .tx-clip:has(p.tx)').getBoundingClientRect();
   return { top: r.top, bottom: r.bottom, clipTop: c.top, clipBottom: c.bottom };
 }, text);
 
@@ -37,7 +37,7 @@ try {
     const { ctx, page, pump } = await open({ width: w, height: h });
     for (let k = 0; k < fixed; k++) { await page.mouse.move(200, 500); await page.mouse.wheel(0, 350); await pump(4); await page.waitForTimeout(300); }
     for (let k = 0; k < (fixed ? 0 : 8); k++) {
-      const seen = await page.evaluate(() => { const b = document.querySelector('#controls p.tx button.w'); const r = b.getBoundingClientRect(); const c = document.querySelector('#controls .tx-clip').getBoundingClientRect(); return r.top > c.top + 20 && r.bottom < c.bottom - 20; });
+      const seen = await page.evaluate(() => { const b = document.querySelector('#controls p.tx button.w'); const r = b.getBoundingClientRect(); const c = document.querySelector('#controls .tx-clip:has(p.tx)').getBoundingClientRect(); return r.top > c.top + 20 && r.bottom < c.bottom - 20; });
       if (seen) break;
       await page.mouse.move(w / 2, h / 2); await page.mouse.wheel(0, 300); await pump(3); await page.waitForTimeout(250);
     }
@@ -90,9 +90,10 @@ try {
     const { nodes } = await cdp.send('Accessibility.getFullAXTree');
     const byId = new Map(nodes.map((n) => [n.nodeId, n]));
     const exposed = [];
-    const walk = (n) => { for (const id of n.childIds || []) { const k = byId.get(id); if (!k) continue; if (!k.ignored && k.role?.value === 'StaticText') exposed.push(k.name?.value); walk(k); } };
+    // (round 4: the typeset MathML is in the tree for math navigation; what must not be is the TeX source)
+    const walk = (n) => { for (const id of n.childIds || []) { const k = byId.get(id); if (!k) continue; if (!k.ignored && k.role?.value === 'StaticText' && /[\\$]/.test(k.name?.value || '')) exposed.push(k.name?.value); walk(k); } };
     for (const n of nodes) if (!n.ignored && n.role?.value === 'math') walk(n);
-    expect(exposed.length === 0, 'no text node is exposed inside role=math (name read, then the TeX read again): ' + JSON.stringify(exposed));
+    expect(exposed.length === 0, 'no TeX source is exposed inside role=math (name read, then the TeX read again): ' + JSON.stringify(exposed));
     await ctx.close();
   }
 

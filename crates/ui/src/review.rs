@@ -154,6 +154,36 @@ fn css_text(ui: &mut Ui, text: &str, font: egui::FontId, color: Color32, line_h:
     rect
 }
 
+/// The size text takes in a CSS line box (`css_text` without painting it): natural width and rows at `line_h`.
+fn css_size(ui: &Ui, text: &str, font: egui::FontId, line_h: f32, wrap_w: f32, anywhere: bool) -> Vec2 {
+    let mut job = egui::text::LayoutJob::single_section(
+        text.to_string(),
+        egui::TextFormat { font_id: font, color: Color32::WHITE, line_height: Some(line_h), ..Default::default() },
+    );
+    job.wrap.max_width = wrap_w.max(1.0);
+    job.wrap.break_anywhere = anywhere;
+    let g = ui.painter().layout_job(job);
+    vec2(g.size().x.max(1.0), g.rows.len().max(1) as f32 * line_h)
+}
+
+/// A block of the pane's text that the web lays out as DOM text (`index.html`, `.txc`): the page measures it, so a
+/// user stylesheet (text spacing, a font) reaches it and what follows moves with it. `class` is its look, `width`
+/// the column it wraps in and `est_h` its height until the page has measured it. Returns the rect it takes.
+fn dom_block(ui: &mut Ui, cx: &mut Cx, id: &str, class: &str, width: f32, est_h: f32) -> Rect {
+    dom_vis(ui, cx);
+    let h = cx.ctl.dom_h.get(id).copied().unwrap_or(est_h);
+    let (rect, _) = ui.allocate_exact_size(vec2(width, h), Sense::hover());
+    dom_chrome(cx, id, class, rect);
+    rect
+}
+
+/// Say that the twin node `id` is DOM text of this look, where it may be seen (the scroll area it is in).
+fn dom_chrome(cx: &mut Cx, id: &str, class: &str, rect: Rect) {
+    let v = cx.ctl.dom_vis.unwrap_or(rect);
+    let (at, size) = crate::twin::geo(v);
+    cx.ctl.chrome.insert(id.into(), (class.into(), (at.0, at.1, size.0, size.1)));
+}
+
 fn font_id_of(job: &egui::text::LayoutJob) -> egui::FontId {
     job.sections.first().map(|s| s.format.font_id.clone()).unwrap_or_else(|| theme::sans(14.0))
 }
@@ -1846,12 +1876,20 @@ fn page_image(ui: &mut Ui, cx: &mut Cx, s: &Session, p: &Page, im: &Img, pad: f3
     let Some((boxes, approx)) = state::geometry(p, n, &im.bands) else { return };
     let (kinds, sel_unit) = s.flagged_lines(p);
     let at = |b: &state::BBox| Rect::from_min_size(rect.min + vec2(b.x * w, b.y * h), vec2(b.w * w, b.h * h));
+    // js `R.hoverSync`: the box of the transcript line the pointer is over takes the accent (`.box.on`)
+    let hover = cx.ctl.hover_line.as_ref().and_then(|h| h.strip_prefix(&format!("line-{}-", p.id()))).and_then(|i| i.parse::<usize>().ok());
     if s.boxes == BoxMode::All && !approx {
-        for b in &boxes {
+        for (i, b) in boxes.iter().enumerate() {
+            if hover == Some(i) {
+                continue;
+            }
             let r = at(b);
             pt.rect_filled(r, 2.0, t.accent.gamma_multiply(0.10));
             pt.rect_stroke(r, 2.0, Stroke::new(1.0, t.accent.gamma_multiply(0.55)));
         }
+    }
+    if let Some(b) = hover.and_then(|i| boxes.get(i)) {
+        pt.rect_stroke(at(b).expand(1.0), 3.0, Stroke::new(2.0, t.accent));
     }
     let read = s.selected.as_ref().and_then(|id| s.read_line.get(id)).copied();
     for (i, kind) in kinds {
@@ -1931,10 +1969,23 @@ fn transcript_pane(ui: &mut Ui, cx: &mut Cx, s: &Session, g: Option<&vishion_cor
     let same_row = block_w + 12.0 + pill_w <= avail;
     let wrap_w = if same_row { block_w } else { avail };
     let top = ui.cursor().min;
-    let name_r = css_text(ui, &g.name, theme::serif_semi(32.0), t.ink, 32.0 * 1.15, wrap_w, true);
+    // (the web: real text, so a few pixels of room keep the browser from wrapping what egui measured to fit)
+    let dom = cx.ctl.dom_text;
+    let slack = if same_row { 2.0 } else { 0.0 };
+    let name_r = if dom {
+        let h = css_size(ui, &g.name, theme::serif_semi(32.0), 32.0 * 1.15, wrap_w, true).y;
+        dom_block(ui, cx, "student-name", "name", wrap_w + slack, h)
+    } else {
+        css_text(ui, &g.name, theme::serif_semi(32.0), t.ink, 32.0 * 1.15, wrap_w, true)
+    };
     cx.ctl.heading("student-name", 1, &g.name, TEXT, name_r);
     ui.add_space(6.0);
-    let meta_r = css_text(ui, &meta, theme::sans(14.0), t.muted, 14.0 * 1.4, wrap_w, false);
+    let meta_r = if dom {
+        let h = css_size(ui, &meta, theme::sans(14.0), 14.0 * 1.4, wrap_w, false).y;
+        dom_block(ui, cx, "student-meta", "meta", wrap_w + slack, h)
+    } else {
+        css_text(ui, &meta, theme::sans(14.0), t.muted, 14.0 * 1.4, wrap_w, false)
+    };
     cx.ctl.text("student-meta", &meta, TEXT, meta_r);
     ui.add_space(4.0);
     let at = ui.cursor().min + vec2(-16.0, 0.0);
@@ -1951,7 +2002,23 @@ fn transcript_pane(ui: &mut Ui, cx: &mut Cx, s: &Session, g: Option<&vishion_cor
         ui.allocate_space(vec2(1.0, widgets::PILL_H));
         p
     };
-    let r = widgets::pill_at(ui, t, kind, &label, pill_min);
+    let r = if dom {
+        // the pill is text too: `.pill` in the page's CSS (its colours are the screen's tokens)
+        use crate::state::PillKind::*;
+        let rect = Rect::from_min_size(pill_min, vec2(pill_w, widgets::PILL_H));
+        dom_vis(ui, cx);
+        let k = match kind {
+            Warn => "warn",
+            Ok => "ok",
+            Bad => "bad",
+            Busy => "busy",
+            Queued => "queued",
+        };
+        dom_chrome(cx, "student-status", &format!("pill {k}"), rect);
+        rect
+    } else {
+        widgets::pill_at(ui, t, kind, &label, pill_min)
+    };
     cx.ctl.status("student-status", &label, TEXT, r);
 
     // legend + version: `.legend-row { margin-top: 18px; gap: 10px 20px }`
@@ -1965,9 +2032,27 @@ fn transcript_pane(ui: &mut Ui, cx: &mut Cx, s: &Session, g: Option<&vishion_cor
             // `.tx-foot { margin-top: 28px }`
             ui.add_space(24.0);
             let wrap = ui.available_width().min(31.0 * 20.0);
-            css_text(ui, p.raw(), theme::serif(20.0), t.ink, 20.0 * 1.7, wrap, false);
+            // the text being read is page text: a node of the twin (a screen reader has it; on the web it is DOM
+            // text, so find, selection and the person's stylesheet reach it, as the JS app's `.stream`)
+            let r = if cx.ctl.dom_text {
+                let h = css_size(ui, p.raw(), theme::serif(20.0), 20.0 * 1.7, wrap, false).y;
+                dom_block(ui, cx, "stream", "stream", wrap, h)
+            } else {
+                css_text(ui, p.raw(), theme::serif(20.0), t.ink, 20.0 * 1.7, wrap, false)
+            };
+            if !p.raw().is_empty() {
+                cx.ctl.text("stream", p.raw(), TEXT, r);
+            }
             ui.add_space(28.0);
-            css_text(ui, "Reading this page. The text appears as it is read.", theme::sans(13.0), t.muted, 13.0 * 1.4, ui.available_width(), false);
+            let note = "Reading this page. The text appears as it is read.";
+            let r = if cx.ctl.dom_text {
+                let w = ui.available_width();
+                let h = css_size(ui, note, theme::sans(13.0), 13.0 * 1.4, w, false).y;
+                dom_block(ui, cx, "stream-note", "foot", w, h)
+            } else {
+                css_text(ui, note, theme::sans(13.0), t.muted, 13.0 * 1.4, ui.available_width(), false)
+            };
+            cx.ctl.text("stream-note", note, TEXT, r);
         }
         "pending" if p.raw().is_empty() => {
             let id = p.id().to_string();
@@ -2080,12 +2165,22 @@ fn legend_row(ui: &mut Ui, cx: &mut Cx, s: &Session) {
             cur.push(i);
         }
     }
+    let dom = cx.ctl.dom_text;
     let legend_h = rows.len() as f32 * line_h + (rows.len() as f32 - 1.0) * 6.0;
+    // the web: the page lays the legend out and says how tall it came out
+    let legend_h = if dom { cx.ctl.dom_h.get("legend").copied().unwrap_or(legend_h) } else { legend_h };
     let row_h = if one_row { TARGET.max(legend_h) } else { legend_h };
     let (rect, _) = ui.allocate_exact_size(vec2(avail, row_h), Sense::hover());
     // what the three swatches mean (the JS tree has them as text)
     let mut y = rect.top() + if one_row { (row_h - legend_h) / 2.0 } else { 0.0 };
     cx.ctl.text("legend", "Spelling to check, Couldn’t read, You checked it", TEXT, Rect::from_min_size(pos2(rect.left(), y), vec2(legend_w, legend_h)));
+    if dom {
+        dom_vis(ui, cx);
+        // (a few pixels of room: the widths are the ones egui measured, and a browser wraps at the exact edge)
+        let w = if legend_w < avail { legend_w + 2.0 } else { legend_w };
+        dom_chrome(cx, "legend", "legend", Rect::from_min_size(pos2(rect.left(), y), vec2(w, legend_h)));
+        rows.clear();
+    }
     for row in &rows {
         let mut x = rect.left();
         for &i in row {
@@ -2213,6 +2308,7 @@ fn lines(ui: &mut Ui, cx: &mut Cx, s: &Session, p: &Page) {
     ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
     let block_top = ui.cursor().min;
     let mut block_h = 0.0;
+    let mut hovered: Option<String> = None;
     for line in &ls {
         if line.margin {
             ui.add_space(14.0);
@@ -2220,6 +2316,14 @@ fn lines(ui: &mut Ui, cx: &mut Cx, s: &Session, p: &Page) {
         }
         let rect = unit(ui, cx, s, p, line, &items, sel_key.as_deref(), width, read == Some(line.index));
         block_h += rect.height();
+        // (the web learns which line the pointer is over from the page: the DOM text takes the pointer)
+        if !cx.ctl.dom_text && ui.rect_contains_pointer(rect) {
+            hovered = Some(format!("line-{}-{}", p.id(), line.index));
+        }
+    }
+    if !cx.ctl.dom_text && cx.ctl.hover_line != hovered {
+        cx.ctl.hover_line = hovered;
+        ui.ctx().request_repaint();
     }
     // the focus ring wraps `.tx-body`, which is the whole column (the text inside stops at 31em)
     transcript_group(ui, cx, Rect::from_min_size(block_top, vec2(ui.available_width().max(width), block_h)));
@@ -2402,7 +2506,7 @@ fn unit(ui: &mut Ui, cx: &mut Cx, s: &Session, p: &Page, line: &Line, items: &[w
                 let label = if checked {
                     format!("Checked word: {shown}. Show options.")
                 } else if item.kind == "illegible" {
-                    "Word that could not be read. Show options.".to_string()
+                    format!("Word that could not be read: {shown}. Show options.")
                 } else {
                     format!("Spelling to check: {shown}. Show options.")
                 };
@@ -2559,7 +2663,7 @@ fn dom_unit(ui: &mut Ui, cx: &mut Cx, s: &Session, p: &Page, line: &Line, items:
                 let label = if checked {
                     format!("Checked word: {shown}. Show options.")
                 } else if item.kind == "illegible" {
-                    "Word that could not be read. Show options.".to_string()
+                    format!("Word that could not be read: {shown}. Show options.")
                 } else {
                     format!("Spelling to check: {shown}. Show options.")
                 };
@@ -2781,9 +2885,18 @@ fn foot(ui: &mut Ui, cx: &mut Cx, s: &Session, p: &Page, has_words: bool) {
             for it in row {
                 match it {
                     FootItem::Text(id, x) => {
-                        let r = ui.add(egui::Label::new(RichText::new(&x).font(theme::sans(13.0)).color(t.muted)).wrap());
                         // the token stat and the hint are part of the page for someone who cannot see it
-                        cx.ctl.text(id, &x, TEXT, r.rect);
+                        if cx.ctl.dom_text {
+                            // the web: DOM text, wrapped and measured by the page
+                            let w = tw(ui, &x, theme::sans(13.0));
+                            let room = if w >= avail { avail } else { w + 2.0 };
+                            let h = css_size(ui, &x, theme::sans(13.0), 13.0 * 1.4, avail, false).y;
+                            let r = dom_block(ui, cx, id, "foot", room, h);
+                            cx.ctl.text(id, &x, TEXT, r);
+                        } else {
+                            let r = ui.add(egui::Label::new(RichText::new(&x).font(theme::sans(13.0)).color(t.muted)).wrap());
+                            cx.ctl.text(id, &x, TEXT, r.rect);
+                        }
                     }
                     FootItem::Btn { id, label, look, act } => {
                         if widgets::button_sized(cx.ctl, ui, t, C::new(id, label, TEXT), label, look, 13.0) {

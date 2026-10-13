@@ -97,6 +97,30 @@ pub fn install(q: Queue, ctx: egui::Context) {
     };
     listen("click", "act");
     forward_scroll(&h);
+    // js `R.hoverSync`: the pointer over a transcript line lights its box on the page. The DOM text takes the pointer
+    // (the canvas under it never sees it), so the page says which line it is over.
+    {
+        let last = std::rc::Rc::new(std::cell::RefCell::new(String::new()));
+        for kind in ["mouseover", "mouseout"] {
+            let (q, ctx, last) = (q.clone(), ctx.clone(), last.clone());
+            let line_of = |t: Option<web_sys::EventTarget>| -> Option<String> {
+                t.and_then(|t| t.dyn_into::<web_sys::Element>().ok())
+                    .and_then(|el| el.closest("p[data-line]").ok().flatten())
+                    .and_then(|p| p.get_attribute("data-id"))
+            };
+            let cb = Closure::<dyn FnMut(web_sys::MouseEvent)>::new(move |e: web_sys::MouseEvent| {
+                let id = if e.type_() == "mouseover" { line_of(e.target()) } else { line_of(e.related_target()) };
+                let id = id.unwrap_or_default();
+                if *last.borrow() != id {
+                    *last.borrow_mut() = id.clone();
+                    q.lock().unwrap().push(format!("hover:{id}"));
+                    ctx.request_repaint();
+                }
+            });
+            let _ = h.add_event_listener_with_callback(kind, cb.as_ref().unchecked_ref());
+            cb.forget();
+        }
+    }
     install_transcript(&h, q.clone(), ctx.clone());
     observe_sizes(ctx.clone());
     // focus arriving by keyboard (`:focus-visible`: Tab, or a script while the keyboard is in use) brings up
@@ -168,6 +192,27 @@ pub fn install(q: Queue, ctx: egui::Context) {
         let Some(el) = e.target().and_then(|t| t.dyn_into::<web_sys::Element>().ok()) else { return };
         if matches!(el.tag_name().as_str(), "INPUT" | "TEXTAREA" | "SELECT") && key != "Escape" {
             return;
+        }
+        // The keys that scroll a pane scroll the transcript, as they do the JS app's `#tx-pane` (the canvas owns the
+        // position, so the page is asked: `scrollby:`). Space on a button is the button's; a formula that scrolls
+        // sideways keeps what it does with them.
+        if scope_of(&el) == Some("transcript") && !(e.ctrl_key() || e.meta_key() || e.alt_key()) && !el.class_list().contains("tx-math") {
+            let page = web_sys::window().and_then(|w| w.inner_height().ok()).and_then(|h| h.as_f64()).unwrap_or(600.0) * 0.8;
+            let on_button = el.tag_name() == "BUTTON";
+            let d = match key.as_str() {
+                "PageDown" => Some(page),
+                "PageUp" => Some(-page),
+                " " if !on_button => Some(if e.shift_key() { -page } else { page }),
+                "End" => Some(1.0e6),
+                "Home" => Some(-1.0e6),
+                _ => None,
+            };
+            if let Some(d) = d {
+                e.prevent_default();
+                q4.lock().unwrap().push(format!("scrollby:{}", d.round() as i64));
+                c4.request_repaint();
+                return;
+            }
         }
         let allowed = match key.as_str() {
             "Escape" => true,
@@ -675,6 +720,8 @@ fn dom_para(id: &str, parts: &[Part], flags: &[u16], reading: bool, margin: bool
                 let disp = f & look::DISPLAY != 0;
                 let mut m = Spec::new(&format!("{id}#m{i}"), "span")
                     .attr("class", if disp { "tx-math disp" } else { "tx-math" })
+                    // what it says, in words: the name of the formula (a math node whose children are its
+                    // typeset MathML)
                     .attr("role", "math")
                     .attr("aria-label", a11y::tex_speech(t))
                     .attr("data-tex", t.clone());
@@ -701,6 +748,67 @@ fn dom_para(id: &str, parts: &[Part], flags: &[u16], reading: bool, margin: bool
     kids.push(Spec::new(&format!("{id}#nl"), "span").attr("class", "tx-nl").attr("aria-hidden", "true").text("\n"));
     p.children = Some(kids);
     p
+}
+
+type Chrome = (String, (i32, i32, u16, u16));
+
+thread_local! {
+    /// The text of the pane that is DOM text on the web (the student's name, the counts, the legend, the pill,
+    /// the stat and hint, streamed text), by twin node id: its CSS class and where it may be seen. Set by the
+    /// screen each frame (`set_chrome`).
+    static CHROME: std::cell::RefCell<HashMap<String, Chrome>> = std::cell::RefCell::new(HashMap::new());
+}
+
+pub fn set_chrome(m: &HashMap<String, Chrome>) {
+    CHROME.with(|c| *c.borrow_mut() = m.clone());
+}
+
+fn chrome_of(id: &str) -> Option<Chrome> {
+    CHROME.with(|c| c.borrow().get(id).cloned())
+}
+
+/// A heading, count or note of the pane as visible DOM text (`#controls .txc`): the person's stylesheet reaches
+/// it, it is found and selected like the rest of the page, and the page measures what it takes.
+fn chrome_spec(n: &Node, class: &str) -> Spec {
+    let (id, text, at, size, h1) = match n {
+        Node::Heading { id, text, at, size, level, .. } => (id, text, *at, *size, *level == 1),
+        Node::Status { id, text, at, size, .. } | Node::Text { id, text, at, size, .. } => (id, text, *at, *size, false),
+        _ => unreachable!(),
+    };
+    let mut s = Spec::new(id, if h1 { "h1" } else { "p" }).attr("class", format!("txc {class}"));
+    if h1 {
+        // the screen's h1 takes focus when a different screen replaces it (see `restore_focus`)
+        s = s.attr("tabindex", "-1");
+    }
+    s.rect = rect_of(at, size);
+    s.auto_h = true;
+    s.attrs.push(("data-alloc-h", Some(size.1.to_string())));
+    if id == "legend" {
+        // what the three swatches mean: a sample of the look and its name, as the JS app's `.legend`
+        let kids = [("warn", "Spelling to check"), ("bad", "Couldn’t read"), ("ok", "You checked it")]
+            .iter()
+            .enumerate()
+            .map(|(i, (k, label))| {
+                Spec::new(&format!("legend#{i}"), "span").attr("class", "lg").kids(vec![
+                    Spec::new(&format!("legend#{i}k"), "span").attr("class", format!("k {k}")).attr("aria-hidden", "true").text("word"),
+                    Spec::new(&format!("legend#{i}t"), "span").text(label),
+                ])
+            })
+            .collect();
+        s.children = Some(kids);
+    } else {
+        s.text = Some(text.clone());
+    }
+    s
+}
+
+/// A node that is DOM text of the pane, with where it may be seen.
+fn chrome_item(n: &Node) -> Option<(Spec, (i32, i32, i32, i32))> {
+    if !matches!(n, Node::Heading { .. } | Node::Status { .. } | Node::Text { .. }) {
+        return None;
+    }
+    let (class, v) = chrome_of(n.id())?;
+    Some((chrome_spec(n, &class), (v.0, v.1, v.2 as i32, v.3 as i32)))
 }
 
 fn spec_of(n: &Node) -> Spec {
@@ -792,24 +900,46 @@ fn region_specs(nodes: &[&Node], holes: &[(i32, i32, i32, i32)]) -> Vec<Spec> {
         }
     };
     for n in nodes {
-        if let Node::Para { flags, vis, .. } = n {
-            if !flags.is_empty() {
-                flush(&mut open, &mut out);
-                let item = spec_of(n);
-                let c = tx.get_or_insert_with(|| Spec::new("tx-clip", "div").attr("class", "tx-clip").kids(vec![]));
-                let v = (vis.0, vis.1, vis.2 as i32, vis.3 as i32);
-                c.rect = Some(match c.rect {
-                    None => v,
-                    Some((x, y, w, h)) => {
-                        let (l, t, r, b) = (x.min(v.0), y.min(v.1), (x + w).max(v.0 + v.2), (y + h).max(v.1 + v.3));
-                        (l, t, r - l, b - t)
-                    }
-                });
-                if let Some(k) = c.children.as_mut() {
-                    k.push(item);
+        // DOM text: the lines of the transcript and the text of the pane around them, in a box each run of them
+        // shares that is the part of the screen they may be seen in
+        let dom_item = match n {
+            Node::Para { flags, vis, .. } if !flags.is_empty() => Some((spec_of(n), (vis.0, vis.1, vis.2 as i32, vis.3 as i32))),
+            _ => chrome_item(n),
+        };
+        if let Some((item, v)) = dom_item {
+            flush(&mut open, &mut out);
+            let c = tx.get_or_insert_with(|| {
+                // named by what it starts with, so it is the same element from frame to frame. A run that holds
+                // lines is a box the browser can scroll (find-in-page, selection, focus); one that holds only the
+                // pane's own text stays where it is (a scroller with nothing to focus in it is not reachable by
+                // keyboard, WCAG 2.1.1)
+                if matches!(n, Node::Para { .. }) {
+                    Spec::new(&format!("tx-clip:{}", item.key), "div").attr("class", "tx-clip").kids(vec![])
+                } else {
+                    Spec::new(&format!("tx-still:{}", item.key), "div").attr("class", "tx-clip tx-still").kids(vec![])
                 }
-                continue;
+            });
+            // a run that began with the pane's text and reached the lines is one that scrolls
+            if matches!(n, Node::Para { .. }) && c.key.starts_with("tx-still:") {
+                c.key = c.key.replacen("tx-still:", "tx-clip:", 1);
+                c.attrs.retain(|(k, _)| *k != "class");
+                c.attrs.push(("class", Some("tx-clip".to_string())));
             }
+            c.rect = Some(match c.rect {
+                None => v,
+                Some((x, y, w, h)) => {
+                    let (l, t, r, b) = (x.min(v.0), y.min(v.1), (x + w).max(v.0 + v.2), (y + h).max(v.1 + v.3));
+                    (l, t, r - l, b - t)
+                }
+            });
+            if let Some(k) = c.children.as_mut() {
+                // (the lines carry their own end-of-line break; these are separate boxes as well, which a selection
+                // would run together)
+                let nl = (!matches!(n, Node::Para { .. })).then(|| Spec::new(&format!("{}#nl", item.key), "span").attr("class", "tx-nl").attr("aria-hidden", "true").text("\n"));
+                k.push(item);
+                k.extend(nl);
+            }
+            continue;
         }
         if let Some(c) = tx.take() {
             out.push(clip_holes(c, holes));
@@ -1160,7 +1290,7 @@ fn reconcile(doc: &web_sys::Document, parent: &web_sys::Element, specs: &[Spec],
         }
         if let Some(kids) = &sp.children {
             let mut o = sp.rect.map_or(origin, |r| (r.0, r.1));
-            let clip = sp.key == "tx-clip";
+            let clip = sp.key.starts_with("tx-clip:");
             if clip {
                 o.1 -= TX_BIAS;
             }
@@ -1478,7 +1608,7 @@ pub fn measured() -> (HashMap<String, f32>, HashMap<String, [f32; 4]>) {
 /// screen is drawn again with the new numbers.
 pub fn measure() -> bool {
     let Some(h) = host() else { return false };
-    let Ok(list) = h.query_selector_all("p.tx") else { return false };
+    let Ok(list) = h.query_selector_all("p.tx, .txc") else { return false };
     if list.length() == 0 && MEASURED.with(|m| m.borrow().h.is_empty()) {
         return false;
     }
@@ -1631,10 +1761,11 @@ let _ = js_sys::Reflect::set(&opts, &"output".into(), &"mathml".into());
                     if let Ok(Some(a)) = el.query_selector("annotation") {
                         a.remove();
                     }
-                    // the formula is spoken once, from the element's label (`tex_speech`): the typeset copy is
-                    // for the eye (and for find-in-page and selection); a copy gives its TeX (`install_copy`)
-                    if let Some(m) = el.first_element_child() {
-                        let _ = m.set_attribute("aria-hidden", "true");
+                    // The typeset MathML is what assistive technology gets (its structure: fractions, roots, scripts,
+                    // for math navigation and Nemeth / UEB braille), named in words; the TeX laid over it is
+                    // `aria-hidden`, so a formula is still one node in the tree and spoken once
+                    if let Ok(Some(k)) = el.query_selector(".katex") {
+                        let _ = k.remove_attribute("aria-hidden");
                     }
                     // What find-in-page hits and a selection holds (the typeset formula is `user-select: none`:
                     // its symbols are blocks, which a selection reads one per line): the TeX, as text laid over
@@ -1684,7 +1815,7 @@ pub fn set_tokens(t: &crate::theme::Tokens) {
     thread_local! {
         static LAST: std::cell::RefCell<String> = const { std::cell::RefCell::new(String::new()) };
     }
-    let v = [("--ink", t.ink), ("--muted", t.muted), ("--warn", t.warn), ("--bad", t.bad), ("--bad-bg", t.bad_bg), ("--ok", t.ok), ("--accent", t.accent), ("--sunken", t.sunken), ("--line2", t.line2)]
+    let v = [("--ink", t.ink), ("--muted", t.muted), ("--warn", t.warn), ("--bad", t.bad), ("--bad-bg", t.bad_bg), ("--ok", t.ok), ("--ok-bg", t.ok_bg), ("--hover", t.hover), ("--accent", t.accent), ("--sunken", t.sunken), ("--line2", t.line2)]
         .iter()
         .map(|(k, c)| format!("{k}:{}", css(*c)))
         .collect::<Vec<_>>()

@@ -102,7 +102,7 @@ try {
     has(/textbox "Type what the word says"/, 'textbox with its accessible name');
     has(/button "Spelling to check: confidance\. Show options\."/, 'a flagged word is a button inside its sentence, named for what it asks');
     has(/- paragraph: 4 words to check/, 'the count of words to check is read in place (not a live region: one utterance per action)');
-    has(/- paragraph: Spelling to check, Couldn.t read, You checked it/, 'the legend of the colours is text');
+    has(/- paragraph:[\s\S]{0,20}Spelling to check[\s\S]{0,20}Couldn.t read[\s\S]{0,20}You checked it/, 'the legend of the colours is text');
     expect(/- math "x bar plus or minus 1\.96 times the fraction s over square root of n end fraction equals/.test(snap)
       && !snap.includes('\\\\' + 'bar{x}'), 'math: role=math with its spoken name, and no text under it (the TeX is not read a second time)');
     const sentenceOrder = await page.evaluate(() => [...document.querySelectorAll('#controls p[data-id^="line-"]')].map(p => p.textContent.trim()).filter(Boolean).slice(0, 3));
