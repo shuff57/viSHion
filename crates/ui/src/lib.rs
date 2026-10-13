@@ -539,6 +539,8 @@ pub struct App {
     prev_focus: Option<String>,
     #[cfg(not(target_arch = "wasm32"))]
     tab_queue: Vec<bool>,
+    /// Escape was pressed this frame (native: taken out of egui's input, see `filter_tab`).
+    esc_pressed: bool,
     last_save: Option<String>,
     /// Per page: its status and a hash of its transcript as last seen, so the start and the end of a
     /// transcription (and a transcript replaced in one step) are spoken (the JS app has a status pill).
@@ -632,6 +634,7 @@ impl App {
             prev_focus: None,
             #[cfg(not(target_arch = "wasm32"))]
             tab_queue: vec![],
+            esc_pressed: false,
             last_save: None,
             run_seen: HashMap::new(),
             said_log: vec![],
@@ -1372,6 +1375,11 @@ impl App {
     /// Keys egui saw (native, or the canvas on the web) become the same `KeyEv`s the twin forwards. Not while
     /// a text field has the keyboard.
     fn collect_egui_keys(&mut self, ctx: &egui::Context) {
+        // Escape always goes through (as on the web twin); egui never saw it, so it did not drop focus
+        if std::mem::take(&mut self.esc_pressed) {
+            self.ctl.keys.push(KeyEv { key: "Escape".into(), alt: false });
+            self.ctl.kbd = true;
+        }
         if ctx.wants_keyboard_input() {
             return;
         }
@@ -1416,6 +1424,7 @@ impl App {
             self.last_nodes.iter().any(|n| matches!(n, Node::Control(c) if c.id == f && c.role == "textbox"))
         });
         let arrows = self.ctl.dialog_was && !in_text;
+        let mut esc = false;
         raw.events.retain(|e| match e {
             egui::Event::Key { key, pressed, modifiers, .. }
                 if arrows
@@ -1429,6 +1438,12 @@ impl App {
                 }
                 false
             }
+            // Escape is the screen's too: egui answers it by dropping focus to the window, so a person on a plain
+            // control (Zoom in) who presses it would lose their place; the js page does nothing there.
+            egui::Event::Key { key: egui::Key::Escape, pressed, .. } => {
+                esc |= *pressed;
+                false
+            }
             egui::Event::Key { key: egui::Key::Tab, pressed, modifiers, .. } if !modifiers.ctrl && !modifiers.alt && !modifiers.command => {
                 if *pressed {
                     tabs.push(modifiers.shift);
@@ -1438,6 +1453,7 @@ impl App {
             _ => true,
         });
         self.tab_queue.extend(tabs);
+        self.esc_pressed |= esc;
     }
 
     /// Carry out the Tab presses of this frame: the next stop of the twin's reading order gets focus.

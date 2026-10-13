@@ -2341,3 +2341,106 @@ fn native_dialog_opened_with_the_mouse_returns_focus_to_its_opener() {
         assert_eq!(h.app.prev_focus.as_deref(), Some(opener), "{opener}: focus back on the opener");
     }
 }
+
+/// Native, round 9: Enter in the new-student name box keeps focus in the box (egui's single-line text box
+/// surrenders it; a js input does not), and Escape on a plain control with nothing open keeps focus there.
+#[test]
+fn native_enter_in_the_name_box_keeps_focus() {
+    let mut h = H::new("m1");
+    h.act("change-student");
+    h.act("cs-new");
+    h.frames(3);
+    let name = *h.app.ctl.widgets.get("cs-name").expect("name box widget");
+    assert_eq!(h.ctx.memory(|m| m.focused()), Some(name), "name box has egui focus");
+    h.events.push(egui::Event::Text("Zed".into()));
+    h.frames(2);
+    for pressed in [true, false] {
+        h.events.push(egui::Event::Key { key: egui::Key::Enter, physical_key: None, pressed, repeat: false, modifiers: Default::default() });
+        h.frames(1);
+    }
+    h.frames(3);
+    assert!(h.app.dialog.is_some(), "Enter does not close the dialog");
+    assert_eq!(h.ctx.memory(|m| m.focused()), Some(name), "focus stays in the name box after Enter");
+    assert_eq!(h.app.prev_focus.as_deref(), Some("cs-name"));
+}
+
+#[test]
+fn native_escape_on_a_plain_control_keeps_focus() {
+    let mut h = H::new("m1");
+    for id in ["zoom-in", "settings"] {
+        if h.ctl(id).is_none() {
+            continue;
+        }
+        h.app.ctl.want_focus = Some(id.into());
+        h.frames(3);
+        assert_eq!(h.app.prev_focus.as_deref(), Some(id));
+        let before = h.ctx.memory(|m| m.focused());
+        assert!(before.is_some());
+        for pressed in [true, false] {
+            h.events.push(egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed, repeat: false, modifiers: Default::default() });
+            h.frames(1);
+        }
+        h.frames(3);
+        assert_eq!(h.ctx.memory(|m| m.focused()), before, "{id}: Escape leaves egui focus on it");
+        assert_eq!(h.app.prev_focus.as_deref(), Some(id));
+    }
+    // and Escape still closes a dialog, from a control and from the name box
+    h.act("change-student");
+    h.act("cs-new");
+    h.frames(3);
+    for pressed in [true, false] {
+        h.events.push(egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed, repeat: false, modifiers: Default::default() });
+        h.frames(1);
+    }
+    h.frames(3);
+    assert!(h.app.dialog.is_none(), "Escape closes the dialog from the name box");
+}
+
+/// Native: the AccessKit tree is a tree. A node with two parents (or a cycle) shows up to a UI Automation client
+/// as the same subtree many times over (FindAll returned ~4500 nodes with Settings open).
+#[test]
+fn native_tree_has_one_parent_per_node_and_no_cycles() {
+    for opener in [None, Some("settings"), Some("change-student"), Some("remove")] {
+        let mut h = H::new("m1");
+        h.ctx.enable_accesskit();
+        h.frames(2);
+        if let Some(o) = opener {
+            h.act(o);
+        }
+        h.frames(3);
+        let upd = h.out.platform_output.accesskit_update.clone().expect("update");
+        let mut tree = accesskit_consumer::Tree::new(upd, true);
+        for _ in 0..3 {
+            h.frames(1);
+            tree.update(h.out.platform_output.accesskit_update.clone().expect("update"));
+        }
+        let state = tree.state();
+        let mut parents: std::collections::HashMap<accesskit::NodeId, Vec<accesskit::NodeId>> = Default::default();
+        let mut stack = vec![state.root().id()];
+        let mut seen = std::collections::HashSet::new();
+        let mut visits = 0usize;
+        while let Some(id) = stack.pop() {
+            visits += 1;
+            assert!(visits < 20000, "{opener:?}: the tree walk does not end (cycle)");
+            if !seen.insert(id) {
+                continue;
+            }
+            let n = state.node_by_id(id).unwrap();
+            for c in n.child_ids() {
+                parents.entry(c).or_default().push(id);
+                stack.push(c);
+            }
+        }
+        let multi: Vec<_> = parents.iter().filter(|(_, p)| p.len() > 1).map(|(c, p)| (c.0, p.iter().map(|x| x.0).collect::<Vec<_>>())).collect();
+        let describe = |id: u64| {
+            let n = state.node_by_id(accesskit::NodeId(id)).unwrap();
+            format!("{:?} {:?}", n.role(), n.name())
+        };
+        let shown: Vec<String> = multi
+            .iter()
+            .take(5)
+            .map(|(c, p)| format!("{} <- {}", describe(*c), p.iter().map(|x| describe(*x)).collect::<Vec<_>>().join(" | ")))
+            .collect();
+        assert!(multi.is_empty(), "{opener:?}: nodes with several parents: {shown:?}");
+    }
+}

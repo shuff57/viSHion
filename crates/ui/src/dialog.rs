@@ -300,7 +300,8 @@ fn settings(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, s: &Session, drafts: &mut st
             if let Some(v) = choice(ctl, ui, t, "st-fmt-", &get_s("exportFormat", "md"), &[("docx", "Word (.docx)"), ("md", "Markdown (.md)"), ("txt", "Plain text (.txt)")]) {
                 out = Some(Out::Setting("exportFormat", json!(v), format!("Combined file: {v}.")));
             }
-            label(ctl, ui, t, "st-sep-label", "Between pages");
+            // (not "st-sep-label": that is the id of the "A Page N line" choice; one id on two nodes gave it two parents)
+            label(ctl, ui, t, "st-sep-title", "Between pages");
             if let Some(v) = choice(ctl, ui, t, "st-sep-", &get_s("exportSeparator", "label"), &[("label", "A \u{201C}Page N\u{201D} line"), ("break", "A page break"), ("none", "Nothing")]) {
                 out = Some(Out::Setting("exportSeparator", json!(v), format!("Between pages: {v}.")));
             }
@@ -370,6 +371,11 @@ fn change_student(
         let edit = egui::TextEdit::singleline(name).hint_text("Student name").font(theme::sans(14.0)).margin(vec2(12.0, 13.0)).desired_width(slot.width() - 24.0);
         let mut r = ui.put(slot, edit);
         r.rect = slot;
+        // egui's single-line box gives focus up on Enter; a js input keeps it, so the person (and a screen
+        // reader) stays in the box instead of landing on the window
+        if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+            r.request_focus();
+        }
         if let Some(v) = ctl.reg_text(ui, &r, C::new("cs-name", "New student name", DIALOG), name) {
             *name = v;
         }
