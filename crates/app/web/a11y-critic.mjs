@@ -1,0 +1,91 @@
+// Blind-critic checks the phase-4 twin does not meet yet (each FAIL is a gap against the JS app).
+// Usage: node crates/app/web/a11y-critic.mjs   (run build.mjs first)
+import { chromium } from 'playwright-core';
+import { serve } from './serve.mjs';
+
+const exe = process.env.CHROME
+  || (process.platform === 'win32' ? 'C:/Program Files/Google/Chrome/Application/chrome.exe' : '/usr/bin/google-chrome');
+const failures = [];
+const expect = (ok, msg) => { console.log((ok ? 'ok   ' : 'FAIL ') + msg); if (!ok) failures.push(msg); };
+const { port, stop } = await serve(+(process.env.PORT || 8790));
+let browser;
+
+async function open(viewport, opts = {}) {
+  const ctx = await browser.newContext({ viewport, bypassCSP: true, ...opts });
+  const page = await ctx.newPage();
+  await page.goto(`http://127.0.0.1:${port}/?demo=1&theme=light`, { waitUntil: 'load' });
+  for (let i = 0; i < 300 && !(await page.evaluate(() => window.__ready === true || !!window.__error)); i++) await page.waitForTimeout(100);
+  const pump = async (n = 5) => { for (let i = 0; i < n; i++) { await page.mouse.move(viewport.width - 30 + (i % 3), viewport.height - 30 + i); await page.waitForTimeout(70); } };
+  await pump(8);
+  await page.waitForSelector('#controls [data-id]', { timeout: 20000 });
+  return { ctx, page, pump };
+}
+const shot = async (page) => 'data:image/png;base64,' + (await page.screenshot()).toString('base64');
+const changed = (page, a, b) => page.evaluate(async ([a, b]) => {
+  const ld = async (u) => { const i = new Image(); i.src = u; await i.decode(); const c = document.createElement('canvas'); c.width = i.width; c.height = i.height; const x = c.getContext('2d'); x.drawImage(i, 0, 0); return x.getImageData(0, 0, i.width, i.height).data; };
+  const A = await ld(a), B = await ld(b); let n = 0;
+  for (let k = 0; k < A.length; k += 4) if (Math.abs(A[k] - B[k]) + Math.abs(A[k + 1] - B[k + 1]) + Math.abs(A[k + 2] - B[k + 2]) > 30) n++;
+  return n;
+}, [a, b]);
+
+try {
+  browser = await chromium.launch({ executablePath: exe, args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'] });
+
+  // 1. Every Tab stop shows where focus is (WCAG 2.4.7) and is on screen (2.4.11): a keyboard user at 400% zoom or on a phone
+  for (const vp of [{ width: 1280, height: 800 }, { width: 390, height: 844 }, { width: 320, height: 256 }]) {
+    const { ctx, page, pump } = await open(vp, vp.width === 320 ? { deviceScaleFactor: 4 } : {});
+    await page.mouse.click(vp.width / 2, 2);
+    const off = [];
+    for (let i = 0; i < 45; i++) {
+      await page.keyboard.press('Tab'); await pump(3);
+      const r = await page.evaluate(() => { const e = document.activeElement; if (!e?.dataset?.id) return null; const b = e.getBoundingClientRect(); return { id: e.dataset.id, top: b.top, bottom: b.bottom, h: innerHeight }; });
+      if (r && (r.bottom > r.h + 1 || r.top < -1) && !off.includes(r.id)) off.push(r.id);
+    }
+    expect(off.length === 0, `${vp.width}x${vp.height}: focus never lands off screen (Tab does not scroll it into view)` + (off.length ? ': ' + off.slice(0, 8) : ''));
+    await ctx.close();
+  }
+
+  // 2. Every focusable twin element has a visible focus indicator
+  {
+    const { ctx, page, pump } = await open({ width: 1280, height: 800 });
+    await page.evaluate(() => document.activeElement.blur()); await pump(4);
+    const base = await shot(page);
+    const none = [];
+    for (const id of ['transcript', 'stage', 'text-view', 'transcribe-again']) {
+      await page.evaluate(() => document.activeElement.blur());
+      await page.evaluate((i) => document.querySelector(`#controls [data-id="${i}"]`).focus(), id); await pump(4);
+      const n = await changed(page, base, await shot(page));
+      if (n < 400) none.push(`${id} (${n}px changed)`);
+    }
+    expect(none.length === 0, 'every Tab stop draws a focus ring of a visible size' + (none.length ? ': ' + none : ''));
+    await ctx.close();
+  }
+
+  // 3. What the JS app says that the twin does not
+  {
+    const { ctx, page } = await open({ width: 1280, height: 800 });
+    const snap = await page.locator('body').ariaSnapshot();
+    expect(/button "Fit the page to the pane"[^\n]*100%/.test(snap) || /zoom[^\n]*100%/i.test(snap), 'the zoom level is exposed (JS: button "Fit the page to the pane": 100%)');
+    expect(/\bimg\b/.test(snap), 'the page image has a text alternative (JS: img "The scanned handwritten page")');
+    expect(/2 pages, \d+ words/.test(snap), 'the page and word count are exposed (JS: "2 pages, 96 words")');
+    await ctx.close();
+  }
+
+  // 4. A modal dialog leaves nothing of the screen behind it in the tree
+  {
+    const { ctx, page, pump } = await open({ width: 1280, height: 800 });
+    await page.evaluate(() => document.querySelector('#controls [data-id="settings"]').focus());
+    await page.keyboard.press('Enter'); await pump(6);
+    const snap = await page.locator('body').ariaSnapshot();
+    expect(!/heading "Maya R\."/.test(snap) && !/- main:/.test(snap), 'behind a dialog: no main landmark or h1 left in the tree');
+    await ctx.close();
+  }
+} catch (e) {
+  console.error(e);
+  failures.push('exception: ' + (e && e.message));
+} finally {
+  if (browser) await browser.close();
+  stop();
+}
+console.log(failures.length ? `\n${failures.length} FAILED` : '\nall critic checks passed');
+process.exit(failures.length ? 1 : 0);

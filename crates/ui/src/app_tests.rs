@@ -1572,3 +1572,28 @@ fn math_has_a_spoken_form() {
         assert!(!said.is_empty() && !said.contains('\\') && !said.contains('{'), "{t} -> {said}");
     }
 }
+
+/// Blind-critic probes: what a screen reader says must keep the scope a sighted reader sees.
+/// Each case names the spoken form that does not lose the structure of the formula.
+#[test]
+fn critic_math_speech_keeps_scope() {
+    let cases: &[(&str, &[&str])] = &[
+        // limits of a sum: "from i equals 1 to n", never "sub i equals 1 to the power of n"
+        (r"\sum_{i=1}^{n} x_i", &["from", "to n"]),
+        (r"\int_0^1 x\,dx", &["from 0 to 1"]),
+        // a long exponent must say where it ends, or "x^{a+b} + c" reads as x^(a+b+c)
+        (r"x^{a+b} + c", &["end"]),
+        // a subscript with several tokens needs an end as well
+        (r"a_{n+1} = 2", &["end"]),
+        // absolute value is not "bar x bar"
+        (r"|x - 3| < 2", &["absolute value"]),
+    ];
+    let mut bad = Vec::new();
+    for (tex, wants) in cases {
+        let said = crate::a11y::tex_speech(tex);
+        if !wants.iter().all(|w| said.contains(w)) {
+            bad.push(format!("{tex} -> {said:?} (wanted {wants:?})"));
+        }
+    }
+    assert!(bad.is_empty(), "spoken math loses structure:\n{}", bad.join("\n"));
+}
