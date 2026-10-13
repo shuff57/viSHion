@@ -301,12 +301,12 @@ impl Backend {
             Cmd::RotateImage { slug, id } => match self.projects.load_image(&slug, &id).await {
                 Ok(Some(b)) => match pictures::rotate90(&b) {
                     Ok(r) => match self.projects.save_image(&slug, &id, &r).await {
-                        Ok(()) => Event::Image { id, bytes: Some(r) },
+                        Ok(()) => Event::Many(vec![Event::Image { id, bytes: Some(r) }, Event::Saved]),
                         Err(e) => Event::SaveFailed(e.to_string()),
                     },
-                    Err(e) => Event::Notice { text: format!("Could not turn this page: {e}"), error: true },
+                    Err(e) => Event::SaveFailed(format!("Could not turn this page: {e}")),
                 },
-                _ => Event::Notice { text: "The image of this page is missing.".into(), error: true },
+                _ => Event::SaveFailed("The image of this page is missing.".into()),
             },
             Cmd::ReplaceImage { slug, id } => {
                 let mut files = pick_pictures(false).await;

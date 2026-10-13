@@ -215,9 +215,12 @@ mod tests {
             Event::Image { bytes: Some(b), .. } => dims(&b),
             e => panic!("{e:?}"),
         };
-        let Event::Image { id, bytes: Some(b) } = block_on(be.handle(Cmd::RotateImage { slug: slug.clone(), id: "p-maya-1".into() }, 0)) else {
+        // the answer is the new picture and the end of the save (the header was left at "Saving..." without it)
+        let Event::Many(mut both) = block_on(be.handle(Cmd::RotateImage { slug: slug.clone(), id: "p-maya-1".into() }, 0)) else {
             panic!("rotate")
         };
+        assert!(matches!(both.pop(), Some(Event::Saved)));
+        let Some(Event::Image { id, bytes: Some(b) }) = both.pop() else { panic!("rotate image") };
         assert_eq!(id, "p-maya-1");
         assert_eq!(dims(&b), (before.1, before.0));
         // stored: a second load sees the turned picture

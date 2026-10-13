@@ -64,18 +64,18 @@ try {
   expect(true, 'DOM control twin present for the review screen: #controls [data-id=done]');
   const tray = await page.evaluate(() => ({
     h1: document.querySelector('#controls h1')?.textContent,
-    status: document.querySelector('#controls [role=status][data-id=student-status]')?.textContent,
+    status: document.querySelector('#controls [data-id=student-status]')?.textContent,
     words: [...document.querySelectorAll('#controls p button[data-id^="word-"]')].map(b => b.getAttribute('aria-label') || b.textContent),
     math: [...document.querySelectorAll('#controls p [role=math]')].map(m => m.textContent),
   }));
   expect(tray.h1 === 'Maya R.', 'twin exposes the student as the h1: ' + tray.h1);
-  expect(/to check$/.test(tray.status || ''), 'twin exposes a live status: ' + tray.status);
+  expect(/to check$/.test(tray.status || ''), 'twin exposes the count of words to check: ' + tray.status);
   expect(tray.words.length >= 3, 'flagged words are inline buttons inside the transcript paragraphs: ' + JSON.stringify(tray.words));
   expect(tray.math.length >= 2, 'math is exposed as role=math with its TeX: ' + JSON.stringify(tray.math));
   // what a screen reader is given: Chrome's own accessibility tree for the twin
   const snap = await page.locator('#controls').ariaSnapshot();
-  expect(/heading "Maya R\." \[level=1\]/.test(snap) && /status/.test(snap) && /button "Spelling to check: confidance\. Show options\."/.test(snap)
-    && /button "Side by side" \[pressed\]/.test(snap), 'accessibility tree: h1, live status, named word buttons and pressed toggles');
+  expect(/heading "Maya R\." \[level=1\]/.test(snap) && /paragraph: \d words to check/.test(snap) && /button "Spelling to check: confidance\. Show options\."/.test(snap)
+    && /button "Side by side" \[pressed\]/.test(snap), 'accessibility tree: h1, count, named word buttons and pressed toggles');
   const nameOf = (id) => page.evaluate((i) => {
     const e = [...document.querySelectorAll('#controls [data-id]')].find(x => x.dataset.id === i);
     return e ? (e.getAttribute('aria-label') || e.textContent) : null;

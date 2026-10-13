@@ -124,6 +124,23 @@ mod tests {
         }
     }
 
+    /// Blind critic round 5: Rotate this page counted as a pending save that nothing ever answered, so the
+    /// header said "Saving..." for the rest of the session.
+    #[test]
+    fn blind5_rotate_settles_the_save_indicator() {
+        let mut r = Rig::demo();
+        r.act("rotate");
+        r.frames(20);
+        let say = |r: &Rig| {
+            r.app.nodes().iter().find_map(|n| match n {
+                vishion_ui::twin::Node::Status { id, text, .. } if id == "save-state" => Some(text.clone()),
+                _ => None,
+            })
+        };
+        let s = say(&r).unwrap_or_default();
+        assert!(!s.starts_with("Saving"), "{s:?}");
+    }
+
     /// Blind critic round 3: "Retry this page" and "Transcribe this page" did nothing (the host answered
     /// "needs the OCR connection"). In demo mode the JS app reads sample text, runs the judge and ends with
     /// status done and corrections.

@@ -93,6 +93,8 @@ pub struct Ctl {
     ring: egui::Color32,
     /// Keys of this frame (twin and egui).
     pub(crate) keys: Vec<KeyEv>,
+    /// A keyboard pan of the page stage waiting for the stage to be drawn (js: `.scan-stage` scrolls).
+    pub(crate) pan: Option<crate::review::Pan>,
     /// The control or group that has focus this frame, with its region (egui focus or twin focus).
     pub(crate) focused: Option<(String, u8)>,
     /// Move focus to this id when it is next registered (strip arrow keys).
@@ -340,6 +342,11 @@ impl Ctl {
         self.said.push((text.into(), false));
     }
 
+    /// Announce `text` at once (a refusal, a failure): the assertive live region.
+    pub fn say_alert(&mut self, text: impl Into<String>) {
+        self.said.push((text.into(), true));
+    }
+
     /// Announce what the node `id` says once the next frame has drawn it (a page or student that just changed).
     pub fn say_node(&mut self, id: &'static str) {
         self.say_nodes.push((id, String::new()));
@@ -543,6 +550,8 @@ pub struct App {
     dark_applied: Option<bool>,
     /// The system asks for more contrast (`prefers-contrast: more` or forced colours); read once at start.
     high_contrast: bool,
+    /// Forced colours (web): the user's system colours as tokens, read once at start.
+    forced: Option<theme::Tokens>,
     exit_after: Option<Duration>,
     #[cfg(not(target_arch = "wasm32"))]
     screenshot: Option<(std::path::PathBuf, f64)>,
@@ -626,6 +635,7 @@ impl App {
             start_no_tray: false,
             dark_applied: None,
             high_contrast: false,
+            forced: None,
             exit_after: None,
             #[cfg(not(target_arch = "wasm32"))]
             screenshot: None,
@@ -635,6 +645,10 @@ impl App {
             closing: false,
         };
         app.high_contrast = high_contrast;
+        #[cfg(target_arch = "wasm32")]
+        {
+            app.forced = web::forced_tokens(&theme::LIGHT);
+        }
         app
     }
 
@@ -1028,7 +1042,11 @@ impl App {
             .or_else(|| self.session.as_ref().and_then(|s| s.settings.get("theme").and_then(|v| v.as_str().map(String::from))))
             .unwrap_or_else(|| self.theme_name.clone());
         self.theme_name = name;
-        let t = theme::pick_hc(&self.theme_name, system_dark, self.high_contrast);
+        let forced = self.forced;
+        let t: &theme::Tokens = match &forced {
+            Some(f) => f,
+            None => theme::pick_hc(&self.theme_name, system_dark, self.high_contrast),
+        };
         if self.dark_applied != Some(t.dark) {
             theme::apply(ctx, t);
             // a new font atlas, with this theme's coverage gamma
@@ -1291,6 +1309,8 @@ impl App {
                     egui::Key::ArrowRight => "ArrowRight",
                     egui::Key::Home => "Home",
                     egui::Key::End => "End",
+                    egui::Key::PageUp => "PageUp",
+                    egui::Key::PageDown => "PageDown",
                     egui::Key::Delete => "Delete",
                     egui::Key::Escape => "Escape",
                     egui::Key::Plus => "+",

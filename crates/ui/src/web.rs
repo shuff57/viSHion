@@ -108,7 +108,7 @@ pub fn install(q: Queue, ctx: egui::Context) {
         let allowed = match key.as_str() {
             "Escape" => true,
             k => match scope_of(&el) {
-                Some("stage") => matches!(k, "+" | "=" | "-" | "0"),
+                Some("stage") => matches!(k, "+" | "=" | "-" | "0" | "ArrowUp" | "ArrowDown" | "ArrowLeft" | "ArrowRight" | "PageUp" | "PageDown" | "Home" | "End"),
                 Some("transcript") => matches!(k, "ArrowUp" | "ArrowDown"),
                 Some("strip") => matches!(k, "ArrowLeft" | "ArrowRight" | "Home" | "End" | "Delete"),
                 _ => false,
@@ -327,7 +327,9 @@ fn spec_of(n: &Node) -> Spec {
         // a problem the person has to act on is announced at once (role=alert), the rest politely. The
         // toast is spoken through `announce` (an element that arrives with its text is often not read).
         Node::Status { id, text, .. } if id == "toast" => Spec::new(id, "p").text(text),
-        Node::Status { id, text, .. } => Spec::new(id, "div").attr("role", if id.ends_with("-error") { "alert" } else { "status" }).text(text),
+        Node::Status { id, text, .. } if id.ends_with("-error") => Spec::new(id, "div").attr("role", "alert").text(text),
+        // counts and the save state are read in place; what changed is said once, through `announce`
+        Node::Status { id, text, .. } => Spec::new(id, "p").text(text),
         Node::Group { id, label, keys, at, size, .. } => {
             let mut s = Spec::new(id, "div").attr("role", "group").attr("tabindex", "0").attr("aria-label", label.clone()).attr("data-keys", *keys);
             if size.0 > 0 && size.1 > 0 {
@@ -808,6 +810,73 @@ pub fn announce(text: &str, assertive: bool) {
 /// A media query, e.g. `(prefers-reduced-motion: reduce)`.
 pub fn media(query: &str) -> bool {
     web_sys::window().and_then(|w| w.match_media(query).ok().flatten()).is_some_and(|m| m.matches())
+}
+
+/// A CSS system colour (`Canvas`, `CanvasText`, `GrayText`, `LinkText`, `Highlight`) as the browser resolves it.
+fn system_color(name: &str) -> Option<egui::Color32> {
+    use wasm_bindgen::JsCast;
+    let doc = document()?;
+    let el = doc.create_element("div").ok()?.dyn_into::<web_sys::HtmlElement>().ok()?;
+    el.style().set_property("color", name).ok()?;
+    let body = doc.body()?;
+    body.append_child(&el).ok()?;
+    let css = web_sys::window()?.get_computed_style(&el).ok()??.get_property_value("color").ok();
+    let _ = body.remove_child(&el);
+    let css = css?;
+    let nums: Vec<f32> = css.split(|c: char| !(c.is_ascii_digit() || c == '.')).filter(|s| !s.is_empty()).filter_map(|s| s.parse().ok()).collect();
+    match nums.as_slice() {
+        [r, g, b, ..] => Some(egui::Color32::from_rgb(*r as u8, *g as u8, *b as u8)),
+        _ => None,
+    }
+}
+
+/// Windows contrast themes and other forced colours: the canvas is drawn in the user's own colours, as the
+/// DOM of the JS app is. Quiet greys, fills and tints collapse to `Canvas`; ink, rules and focus are
+/// `CanvasText`; links and the accent are `LinkText`; disabled text is `GrayText`.
+pub fn forced_tokens(base: &crate::theme::Tokens) -> Option<crate::theme::Tokens> {
+    if !media("(forced-colors: active)") {
+        return None;
+    }
+    let canvas = system_color("Canvas")?;
+    let text = system_color("CanvasText")?;
+    let gray = system_color("GrayText").unwrap_or(text);
+    let link = system_color("LinkText").unwrap_or(text);
+    let lum = |c: egui::Color32| 0.2126 * c.r() as f32 + 0.7152 * c.g() as f32 + 0.0722 * c.b() as f32;
+    let mut t = *base;
+    t.dark = lum(canvas) < 128.0;
+    t.bg = canvas;
+    t.surface = canvas;
+    t.sunken = canvas;
+    t.soft = canvas;
+    t.track = canvas;
+    t.hover = canvas;
+    t.ink = text;
+    t.on_ink = canvas;
+    t.muted = text;
+    t.faint = gray;
+    t.line = text;
+    t.line2 = text;
+    t.warn = canvas;
+    t.warn_bg = canvas;
+    t.warn_line = link;
+    t.bad = text;
+    t.bad_bg = canvas;
+    t.ok = text;
+    t.ok_bg = canvas;
+    t.accent = link;
+    t.scanbg = canvas;
+    t.scanhead = canvas;
+    t.scanline = text;
+    t.paper = canvas;
+    t.paper_ink = text;
+    t.paper_rule = gray;
+    t.bar_warn = link;
+    t.bar_ok = link;
+    t.bar_bad = gray;
+    t.bar_ok_edge = text;
+    t.bar_warn_edge = text;
+    t.bar_bad_edge = text;
+    Some(t)
 }
 
 /// Record the user's display preferences on the twin, where tests (and curious people) can see them.

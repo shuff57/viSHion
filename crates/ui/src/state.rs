@@ -480,13 +480,26 @@ impl Session {
             let left = list.iter().filter(|e| e.item.via.is_none()).count();
             return format!("{} left to check.", plural(left, "word", "words"));
         };
+        format!("Next, word {} of {}: {}", i + 1, n, Self::kind_phrase(&e))
+    }
+
+    /// "a word that could not be read. Nothing is chosen for it yet." for one entry of the tray.
+    fn kind_phrase(e: &Entry) -> String {
         let what = match (e.item.via.as_deref(), e.item.kind) {
             (Some(_), _) => format!("a word you checked, {}", shown_str(&e.item)),
             (None, "illegible") => "a word that could not be read".to_string(),
             _ => format!("spelling to check, {}", word_str(&e.item)),
         };
         let state = if e.item.via.is_some() { "Already chosen." } else { "Nothing is chosen for it yet." };
-        format!("Next, word {} of {}: {what}. {state}", i + 1, n)
+        format!("{what}. {state}")
+    }
+
+    /// What Next and Previous word to check say: which word the panel is on now, what kind of problem it is and,
+    /// when the step crossed to another page, which page the transcript shows.
+    pub fn step_phrase(&self, page_changed: bool) -> String {
+        let Some((e, i, n)) = self.open_entry() else { return String::new() };
+        let page = if page_changed { format!(" {}", self.page_phrase()) } else { String::new() };
+        format!("Word {} of {}: {}{page}", i + 1, n, Self::kind_phrase(&e))
     }
 
     /// Transcript line (unit index) of every flagged word on a page, with its strongest kind:

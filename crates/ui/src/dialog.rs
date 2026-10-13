@@ -11,6 +11,7 @@ use egui::{vec2, Align2, Margin, Order, RichText, Sense, Stroke, Ui};
 /// What a confirmation does when accepted.
 #[derive(Clone, Debug, PartialEq)]
 pub enum After {
+    ClearFixes,
     RemovePage(String),
     TranscribeAgain(String),
     ReviewAgain(Vec<String>),
@@ -18,7 +19,9 @@ pub enum After {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Dialog {
-    Settings,
+    /// `drafts`: text the person is typing in the settings boxes, by control id; they are saved when the
+    /// dialog closes (as the JS inputs save on `change`).
+    Settings { drafts: std::collections::BTreeMap<&'static str, String> },
     ChangeStudent {
         /// A name from the other students, or `None` while nothing is picked.
         pick: Option<String>,
@@ -37,6 +40,10 @@ pub enum Dialog {
 }
 
 impl Dialog {
+    pub fn settings() -> Dialog {
+        Dialog::Settings { drafts: Default::default() }
+    }
+
     pub fn change_student() -> Dialog {
         Dialog::ChangeStudent { pick: None, new_student: false, name: String::new(), all: false, error: false }
     }
@@ -49,7 +56,7 @@ impl Dialog {
         match self {
             // the first control in reading order (the one for the theme in use), not the last: Tab goes on
             // through the rest and Shift+Tab does not leave the dialog at once
-            Dialog::Settings => match s.settings.get("theme").and_then(|v| v.as_str()) {
+            Dialog::Settings { .. } => match s.settings.get("theme").and_then(|v| v.as_str()) {
                 Some("light") => "theme-light".into(),
                 Some("dark") => "theme-dark".into(),
                 _ => "theme-auto".into(),
@@ -73,6 +80,47 @@ pub enum Out {
     Student { name: String, all: bool },
     Confirmed(After),
     Theme(String),
+    /// A setting changed in the open dialog (it stays open): key, value, what is said.
+    Setting(&'static str, serde_json::Value, String),
+    /// Ask before forgetting the remembered fixes.
+    AskClearFixes,
+}
+
+/// Save what was typed in the settings boxes (the JS inputs save on `change`).
+pub fn commit(s: &mut Session, d: &Dialog) {
+    let Dialog::Settings { drafts } = d else { return };
+    let mut changed = false;
+    for (id, v) in drafts {
+        let (key, val) = match *id {
+            "st-ocr" => ("ocrUrl", serde_json::json!(v.trim())),
+            "st-key" => ("apiKey", serde_json::json!(v.trim())),
+            "st-model" => ("model", serde_json::json!(v.trim())),
+            "st-timeout" => ("timeoutSec", serde_json::json!(v.trim().parse::<f64>().ok().filter(|n| *n > 0.0).map_or(180.0, |n| n.round().max(10.0)))),
+            "st-words" => {
+                let topic = s.a.meta.topic().to_string();
+                let terms: Vec<String> = v.split([',', '\n', ';']).map(|w| w.trim().to_string()).filter(|w| !w.is_empty()).collect();
+                if terms == s.settings.terms(&topic) {
+                    continue;
+                }
+                let mut topics = s.settings.get("topics").cloned().unwrap_or_else(|| serde_json::json!({}));
+                if let Some(o) = topics.as_object_mut() {
+                    let e = o.entry(topic).or_insert_with(|| serde_json::json!({ "description": "", "terms": [] }));
+                    if let Some(m) = e.as_object_mut() {
+                        m.insert("terms".into(), serde_json::json!(terms));
+                    }
+                }
+                ("topics", topics)
+            }
+            _ => continue,
+        };
+        if s.settings.get(key) != Some(&val) {
+            s.settings.set(key, val);
+            changed = true;
+        }
+    }
+    if changed {
+        s.dirty.settings = true;
+    }
 }
 
 fn heading(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, text: &str) {
@@ -101,7 +149,7 @@ pub fn show(ctx: &egui::Context, ctl: &mut Ctl, t: &Tokens, s: &Session, d: &mut
                 ui.set_width(width - 40.0);
                 ui.spacing_mut().item_spacing = vec2(8.0, 10.0);
                 match d {
-                    Dialog::Settings => out = settings(ctl, ui, t, s),
+                    Dialog::Settings { drafts } => out = settings(ctl, ui, t, s, drafts),
                     Dialog::ChangeStudent { pick, new_student, name, all, error } => {
                         out = change_student(ctl, ui, t, s, pick, new_student, name, all, error)
                     }
@@ -127,29 +175,150 @@ pub fn show(ctx: &egui::Context, ctl: &mut Ctl, t: &Tokens, s: &Session, d: &mut
     out
 }
 
-fn settings(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, s: &Session) -> Option<Out> {
+fn section(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, id: &'static str, text: &str) {
+    ui.add_space(6.0);
+    let r = ui.label(RichText::new(text).font(theme::serif_semi(17.0)).color(t.ink));
+    ctl.heading(id, 3, text, DIALOG, r.rect.min);
+}
+
+fn label(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, id: &'static str, text: &str) {
+    let r = ui.label(RichText::new(text).font(theme::sans_semi(14.0)).color(t.ink));
+    ctl.text(id, text, DIALOG, r.rect.min);
+}
+
+fn hint(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, id: &'static str, text: &str) {
+    let r = ui.label(RichText::new(text).font(theme::sans(13.0)).color(t.muted));
+    ctl.text(id, text, DIALOG, r.rect.min);
+}
+
+/// A row of choices where one is on (`aria-pressed`): returns the value picked.
+fn choice(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, prefix: &str, cur: &str, items: &[(&str, &str)]) -> Option<String> {
     let mut out = None;
-    heading(ctl, ui, t, "Settings");
-    let r = ui.label(RichText::new("Theme").font(theme::sans_semi(14.0)).color(t.ink));
-    ctl.text("settings-theme-label", "Theme", DIALOG, r.rect.min);
-    let cur = s.settings.get("theme").and_then(|v| v.as_str()).unwrap_or("auto").to_string();
     ui.horizontal_wrapped(|ui| {
-        for (id, label, val) in [("theme-auto", "Match my device", "auto"), ("theme-light", "Light", "light"), ("theme-dark", "Dark", "dark")] {
-            let on = cur == val || (val == "auto" && cur != "light" && cur != "dark");
+        for (val, text) in items {
+            let on = cur == *val;
             let look = if on { Look::Primary } else { Look::Outline };
-            if widgets::button(ctl, ui, t, C::new(id, label, DIALOG).pressed(on), label, look, 0.0) {
-                out = Some(Out::Theme(val.to_string()));
+            if widgets::button(ctl, ui, t, C::new(&format!("{prefix}{val}"), text, DIALOG).pressed(on), text, look, 0.0) {
+                out = Some(val.to_string());
             }
         }
     });
-    let r = ui.label(
-        RichText::new("The model, the course words and the export options move into this dialog with phase 6.")
-            .font(theme::sans(13.0))
-            .color(t.muted),
-    );
-    ctl.text("settings-note", "The model, the course words and the export options move into this dialog with phase 6.", DIALOG, r.rect.min);
+    out
+}
+
+fn check(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, id: &str, text: &str, on: bool) -> bool {
+    let look = if on { Look::Primary } else { Look::Outline };
+    widgets::button(ctl, ui, t, C::new(id, text, DIALOG).pressed(on).role("checkbox"), text, look, 0.0)
+}
+
+fn text_box(ctl: &mut Ctl, ui: &mut Ui, id: &'static str, name: &str, hint: &str, cur: String, drafts: &mut std::collections::BTreeMap<&'static str, String>, secret: bool) {
+    let buf = drafts.entry(id).or_insert(cur);
+    let (slot, _) = ui.allocate_exact_size(vec2(ui.available_width(), TARGET), Sense::hover());
+    let edit = egui::TextEdit::singleline(buf).hint_text(hint).password(secret).font(theme::sans(14.0)).margin(vec2(12.0, 13.0)).desired_width(slot.width() - 24.0);
+    let mut r = ui.put(slot, edit);
+    r.rect = slot;
+    if let Some(v) = ctl.reg_text(ui, &r, C::new(id, name, DIALOG), buf) {
+        *buf = v;
+    }
+}
+
+fn on_off(on: bool) -> &'static str {
+    if on {
+        "off"
+    } else {
+        "on"
+    }
+}
+
+fn settings(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, s: &Session, drafts: &mut std::collections::BTreeMap<&'static str, String>) -> Option<Out> {
+    use serde_json::json;
+    let mut out = None;
+    heading(ctl, ui, t, "Settings");
+    let get_s = |k: &str, d: &str| s.settings.get(k).and_then(|v| v.as_str()).unwrap_or(d).to_string();
+    let get_b = |k: &str, d: bool| s.settings.get(k).and_then(|v| v.as_bool()).unwrap_or(d);
+    let max_h = (ui.ctx().screen_rect().height() - 190.0).clamp(150.0, 560.0);
+    egui::ScrollArea::vertical().max_height(max_h).auto_shrink([true, true]).show(ui, |ui| {
+        ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
+            section(ctl, ui, t, "set-appearance", "Appearance");
+            label(ctl, ui, t, "settings-theme-label", "Theme");
+            let cur = get_s("theme", "auto");
+            let cur = if cur == "light" || cur == "dark" { cur } else { "auto".to_string() };
+            if let Some(v) = choice(ctl, ui, t, "theme-", &cur, &[("auto", "Match my device"), ("light", "Light"), ("dark", "Dark")]) {
+                out = Some(Out::Theme(v));
+            }
+
+            section(ctl, ui, t, "set-model", "Model");
+            hint(ctl, ui, t, "set-model-note", "One model reads the pages, finds the student\u{2019}s name and checks spelling.");
+            label(ctl, ui, t, "st-ocr-label", "Server address");
+            text_box(ctl, ui, "st-ocr", "Server address", "http://localhost:8188", get_s("ocrUrl", ""), drafts, false);
+            label(ctl, ui, t, "st-key-label", "API key");
+            text_box(ctl, ui, "st-key", "API key", "Not needed for a server on this computer", get_s("apiKey", ""), drafts, true);
+            label(ctl, ui, t, "st-model-label", "Model name");
+            text_box(ctl, ui, "st-model", "Model name", "Whatever the server has loaded", get_s("model", ""), drafts, false);
+            label(ctl, ui, t, "st-timeout-label", "Give up on a page after (seconds)");
+            let secs = s.settings.get("timeoutSec").and_then(|v| v.as_f64()).unwrap_or(180.0);
+            text_box(ctl, ui, "st-timeout", "Give up on a page after (seconds)", "180", format!("{secs}"), drafts, false);
+            let on = get_b("straighten", true);
+            if check(ctl, ui, t, "st-straighten", "Straighten tilted pages", on) {
+                out = Some(Out::Setting("straighten", json!(!on), format!("Straighten tilted pages: {}.", on_off(on))));
+            }
+            let on = get_b("demo", false);
+            if check(ctl, ui, t, "st-demo", "Demo mode", on) {
+                out = Some(Out::Setting("demo", json!(!on), format!("Demo mode: {}.", on_off(on))));
+            }
+
+            section(ctl, ui, t, "set-spelling", "Spelling check");
+            label(ctl, ui, t, "st-jmode-label", "How to suggest");
+            let cur = if get_s("judgeMode", "auto") == "heuristic" { "heuristic" } else { "auto" };
+            if let Some(v) = choice(ctl, ui, t, "st-jmode-", cur, &[("auto", "Ask the model"), ("heuristic", "Built-in matching only")]) {
+                let said = format!("How to suggest: {}.", if v == "auto" { "ask the model" } else { "built-in matching only" });
+                out = Some(Out::Setting("judgeMode", json!(v), said));
+            }
+            let topic = s.a.meta.topic().to_string();
+            let name = if topic.is_empty() { "Course words".to_string() } else { format!("Course words for {topic}") };
+            label(ctl, ui, t, "st-words-label", &name);
+            hint(ctl, ui, t, "st-words-hint", "Separate words with commas. Used to catch course words that get misread.");
+            text_box(ctl, ui, "st-words", &name, "derivative, integral", s.settings.terms(&topic).join(", "), drafts, false);
+
+            section(ctl, ui, t, "set-unreadable", "Unreadable words");
+            let on = get_b("guessIllegible", true);
+            if check(ctl, ui, t, "st-guess", "Suggest likely words", on) {
+                out = Some(Out::Setting("guessIllegible", json!(!on), format!("Suggest likely words: {}.", on_off(on))));
+            }
+            let on = get_b("rememberFixes", true);
+            if check(ctl, ui, t, "st-remember", "Remember my fixes for unreadable words", on) {
+                out = Some(Out::Setting("rememberFixes", json!(!on), format!("Remember my fixes: {}.", on_off(on))));
+            }
+            let n = s.settings.get("reference").and_then(|v| v.as_array()).map_or(0, |a| a.len());
+            hint(ctl, ui, t, "st-fixes-count", &format!("{} remembered.", crate::state::plural(n, "fix", "fixes")));
+            if widgets::button(ctl, ui, t, C::new("st-clear-fixes", "Clear remembered fixes", DIALOG).disabled(n == 0), "Clear remembered fixes", Look::Outline, 0.0) {
+                out = Some(Out::AskClearFixes);
+            }
+
+            section(ctl, ui, t, "set-export", "Export defaults");
+            label(ctl, ui, t, "st-fmt-label", "Combined file");
+            if let Some(v) = choice(ctl, ui, t, "st-fmt-", &get_s("exportFormat", "md"), &[("docx", "Word (.docx)"), ("md", "Markdown (.md)"), ("txt", "Plain text (.txt)")]) {
+                out = Some(Out::Setting("exportFormat", json!(v), format!("Combined file: {v}.")));
+            }
+            label(ctl, ui, t, "st-sep-label", "Between pages");
+            if let Some(v) = choice(ctl, ui, t, "st-sep-", &get_s("exportSeparator", "label"), &[("label", "A \u{201C}Page N\u{201D} line"), ("break", "A page break"), ("none", "Nothing")]) {
+                out = Some(Out::Setting("exportSeparator", json!(v), format!("Between pages: {v}.")));
+            }
+            label(ctl, ui, t, "st-txt-label", "Text to export");
+            if let Some(v) = choice(ctl, ui, t, "st-txt-", &get_s("exportText", "corrected"), &[("corrected", "Corrected"), ("raw", "Original"), ("both", "Both")]) {
+                out = Some(Out::Setting("exportText", json!(v), format!("Text to export: {v}.")));
+            }
+
+            section(ctl, ui, t, "set-storage", "Storage");
+            let on = get_b("keepOriginals", false);
+            if check(ctl, ui, t, "st-orig", "Keep untouched originals", on) {
+                out = Some(Out::Setting("keepOriginals", json!(!on), format!("Keep untouched originals: {}.", on_off(on))));
+            }
+            ctl.flush_scroll(ui, &[DIALOG]);
+        });
+    });
     ui.add_space(4.0);
-    if widgets::button(ctl, ui, t, C::new("dialog-close", "Close", DIALOG), "Close", Look::Outline, 0.0) {
+    if widgets::button(ctl, ui, t, C::new("dialog-close", "Done", DIALOG), "Done", Look::Primary, 0.0) {
         out = Some(Out::Close);
     }
     out
@@ -185,6 +354,11 @@ fn change_student(
             }
             let look = if *new_student { Look::Primary } else { Look::Outline };
             if widgets::button(ctl, ui, t, C::new("cs-new", "A new student\u{2026}", DIALOG).pressed(*new_student).role("listitem"),"A new student\u{2026}", look, 0.0) {
+                if !*new_student {
+                    // js: the text box takes focus; a person who cannot see it is told it appeared
+                    ctl.want_focus = Some("cs-name".into());
+                    ctl.say("A text box for the new student’s name is now shown. Type the name.");
+                }
                 *new_student = true;
                 *error = false;
             }
@@ -228,6 +402,9 @@ fn change_student(
             let chosen = if *new_student { name.trim().to_string() } else { pick.clone().unwrap_or_default() };
             if chosen.trim().is_empty() {
                 *error = true;
+                // js focuses the select or the name box; here the refusal is said and focus goes to the same place
+                ctl.say_alert("Choose a student, or type a name.");
+                ctl.want_focus = Some(if *new_student { "cs-name".into() } else if names.is_empty() { "cs-new".into() } else { "cs-student-0".into() });
             } else {
                 out = Some(Out::Student { name: chosen, all: *all });
             }

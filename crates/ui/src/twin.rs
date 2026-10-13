@@ -45,7 +45,8 @@ pub enum Part {
 #[derive(Clone, PartialEq, Debug)]
 pub enum Node {
     Heading { id: String, level: u8, text: String, region: u8, pos: (i32, i32) },
-    /// `role=status`, announced politely when its text changes.
+    /// A short status line (counts, save state). Only a `-error` one is a live region (`role=alert`); the
+    /// rest is spoken once through `announce`, so one action is one utterance.
     Status { id: String, text: String, region: u8, pos: (i32, i32) },
     Text { id: String, text: String, region: u8, pos: (i32, i32) },
     /// A transcript line. `keys`: arrow keys inside it move the reading underline; `reading`: it is the

@@ -101,7 +101,8 @@ try {
     has(/list "Choices for this word":\s+- listitem:\s+- button "confidence\. Course word, 90% match"/, 'the choices for a word are a list');
     has(/textbox "Type what the word says"/, 'textbox with its accessible name');
     has(/button "Spelling to check: confidance\. Show options\."/, 'a flagged word is a button inside its sentence, named for what it asks');
-    has(/- status: 4 words to check/, 'live status for the count of words to check');
+    has(/- paragraph: 4 words to check/, 'the count of words to check is read in place (not a live region: one utterance per action)');
+    has(/- paragraph: Spelling to check, Couldn.t read, You checked it/, 'the legend of the colours is text');
     expect(/- math "x bar plus or minus 1\.96 times the fraction s over square root of n end fraction equals/.test(snap)
       && /\\\\bar\{x\} \\\\pm/.test(snap), 'math: role=math, spoken name from TeX, and the TeX as its text');
     const sentenceOrder = await page.evaluate(() => [...document.querySelectorAll('#controls p[data-id^="line-"]')].map(p => p.textContent.trim()).filter(Boolean).slice(0, 3));
@@ -193,6 +194,9 @@ try {
     expect(await page.evaluate(() => document.querySelector('#controls [role=dialog]')?.getAttribute('aria-modal')) === 'true', 'aria-modal=true');
     expect(!/button "Done, next student"/.test(dlg), 'the screen behind the dialog is not in the tree');
     await a.axe('settings dialog', { modal: true });
+    expect(/textbox "Server address"/.test(dlg) && /textbox "Model name"/.test(dlg) && /textbox "Course words/.test(dlg), 'Settings reaches the model and the course words');
+    expect(/group "Combined file":[\s\S]*button "Word \(\.docx\)"/.test(dlg) && /group "Between pages"/.test(dlg) && /group "Text to export"/.test(dlg), 'Settings reaches the export options as pressed-state groups');
+    expect(/heading "Model" \[level=3\]/.test(dlg), 'Settings sections are h3 under the dialog h2');
     const behind = await page.evaluate(() => [...document.querySelectorAll('#controls > [data-region], #controls > [role=main]')]
       .filter(e => e.getAttribute('role') !== 'dialog').map(e => e.hasAttribute('inert') && e.getAttribute('aria-hidden') === 'true'));
     expect(behind.length > 0 && behind.every(Boolean), 'everything behind the dialog is inert and aria-hidden');

@@ -2005,3 +2005,123 @@ fn disabled_original_toggle_says_why() {
     assert_eq!(b.description.as_deref(), Some(why));
     assert!(native::platform_name(b, true).contains("Original, unavailable: Nothing has been corrected"));
 }
+
+// ---------------------------------------------------------------------------------------------------------
+// Blind critic round 5.
+// ---------------------------------------------------------------------------------------------------------
+
+#[test]
+fn round5_counts_and_save_state_are_not_live_regions() {
+    let h = H::new("m1");
+    let t = crate::tree::of(h.app.nodes());
+    for id in ["student-status", "tray-count", "save-state"] {
+        let n = t.iter().find_map(|n| n.find(id)).unwrap_or_else(|| panic!("{id} in the tree"));
+        assert_ne!(n.role, crate::tree::Role::Status, "{id} is read in place, not announced on its own");
+    }
+}
+
+#[test]
+fn round5_arrows_and_page_keys_pan_the_zoomed_page() {
+    let mut h = H::new("m1");
+    h.with_picture();
+    h.focus("stage");
+    for _ in 0..4 {
+        h.twin_key("+", false);
+    }
+    h.frames(6);
+    let before = h.app.stage.off;
+    h.twin_key("ArrowDown", false);
+    h.frames(4);
+    assert!(h.app.stage.off.y > before.y, "ArrowDown pans down: {:?} -> {:?}", before, h.app.stage.off);
+    let y = h.app.stage.off.y;
+    h.twin_key("PageDown", false);
+    h.frames(4);
+    assert!(h.app.stage.off.y > y + 100.0, "PageDown pans by most of the view");
+    h.twin_key("ArrowRight", false);
+    h.frames(4);
+    assert!(h.app.stage.off.x > 0.0, "ArrowRight pans right");
+    h.twin_key("Home", false);
+    h.frames(4);
+    assert_eq!(h.app.stage.off.y, 0.0, "Home goes to the top");
+}
+
+#[test]
+fn round5_change_student_says_why_and_leads_to_the_text_box() {
+    let mut h = H::new("m1");
+    h.act("change-student");
+    let n = h.app.announced().len();
+    h.act("dialog-ok");
+    let said = h.app.announced()[n..].join(" ");
+    assert!(said.contains("Choose a student"), "{said:?}");
+    assert_eq!(h.app.ctl.focus.as_deref(), Some("cs-student-0"), "focus goes to the list, as the select in js");
+    let n = h.app.announced().len();
+    h.act("cs-new");
+    h.frames(2);
+    assert_eq!(h.app.ctl.focus.as_deref(), Some("cs-name"));
+    assert!(h.app.announced()[n..].join(" ").contains("text box"), "{:?}", h.app.announced());
+    // a new student with no name is refused the same way
+    h.act("dialog-ok");
+    assert_eq!(h.app.ctl.focus.as_deref(), Some("cs-name"));
+}
+
+#[test]
+fn round5_next_word_says_which_word_and_the_page_when_it_changes() {
+    let mut h = H::new("m1");
+    let n = h.app.announced().len();
+    h.act("next-word");
+    let said = h.app.announced()[n..].join(" ");
+    assert!(said.starts_with("Word 2 of "), "{said:?}");
+    assert!(said.contains("spelling to check") || said.contains("could not be read"), "{said:?}");
+    assert!(!said.contains("page 2"), "{said:?}");
+    // walk until the page changes
+    for _ in 0..4 {
+        let n = h.app.announced().len();
+        let was = h.s().selected.clone();
+        h.act("next-word");
+        if h.s().selected != was {
+            assert!(h.app.announced()[n..].join(" ").contains("Now on page 2"), "{:?}", h.app.announced());
+            return;
+        }
+    }
+    panic!("the page never changed");
+}
+
+#[test]
+fn round5_settings_reach_model_course_words_and_export() {
+    let mut h = H::new("m1");
+    h.act("settings");
+    for id in ["st-ocr", "st-key", "st-model", "st-words", "st-fmt-docx", "st-sep-break", "st-txt-both", "st-jmode-heuristic", "st-orig", "st-clear-fixes"] {
+        assert!(h.ctl(id).is_some(), "{id} is in the Settings dialog");
+    }
+    h.act("st-fmt-docx");
+    assert_eq!(h.s().settings.get("exportFormat").and_then(|v| v.as_str()), Some("docx"));
+    assert!(h.app.announced().last().is_some_and(|s| s.contains("Combined file")));
+    h.app.queue.lock().unwrap().push("text:st-words\u{1}alpha, beta".into());
+    h.frames(2);
+    h.act("dialog-close");
+    let topic = h.s().a.meta.topic().to_string();
+    assert_eq!(h.s().settings.terms(&topic), vec!["alpha".to_string(), "beta".to_string()]);
+}
+
+#[test]
+fn round5_text_hint_and_stats_are_in_the_twin() {
+    let h = H::new("m1");
+    assert!(h.node_text("legend").is_some_and(|t| t.contains("Spelling to check")));
+    assert!(h.node_text("foot-hint").is_some_and(|t| t.starts_with("Click a line")));
+}
+
+#[test]
+fn round5_boxes_button_names_end_with_the_instruction_in_every_state() {
+    let mut h = H::new("m1");
+    for (mode, want) in [
+        (state::BoxMode::Off, "Marks on the page: off. Click to change."),
+        (state::BoxMode::Flagged, "Marks on the page: underlines. Click to change."),
+        (state::BoxMode::All, "Marks on the page: underlines and a box on every line. Click to change."),
+    ] {
+        h.sess().boxes = mode;
+        h.frames(2);
+        assert_eq!(h.ctl("boxes").unwrap().label, want);
+        let t = crate::tree::of(h.app.nodes());
+        assert_eq!(t.iter().find_map(|n| n.find("boxes")).unwrap().name, want);
+    }
+}

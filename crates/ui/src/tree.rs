@@ -113,7 +113,7 @@ fn node_of(n: &Node) -> Tree {
             t.level = Some(*level);
             t
         }
-        Node::Status { id, text, .. } => Tree::new(id, if id.ends_with("-error") { Role::Alert } else { Role::Status }, text),
+        Node::Status { id, text, .. } => Tree::new(id, if id.ends_with("-error") { Role::Alert } else { Role::Text }, text),
         Node::Text { id, text, .. } => Tree::new(id, Role::Text, text),
         Node::Group { id, label, at, size, .. } => {
             let mut t = Tree::new(id, Role::Group, label);

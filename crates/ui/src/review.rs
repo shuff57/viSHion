@@ -21,10 +21,19 @@ use vishion_core::jsx::truthy as jsx_truthy;
 use vishion_core::model::Page;
 use vishion_core::words;
 
+/// A keyboard scroll of the zoomed page image: arrows by a line, Page keys by most of the view, Home and End to
+/// the top and bottom (what a browser does in an `overflow: auto` box with `tabindex=0`).
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum Pan {
+    Line(f32, f32),
+    Page(f32),
+    Edge(bool),
+}
+
 /// Zoom and scroll of the page stage, kept between frames so a zoom step holds the middle of the view.
 #[derive(Default)]
 pub(crate) struct Stage {
-    off: Vec2,
+    pub(crate) off: Vec2,
     view: Vec2,
     zoom: f32,
     /// Offset to keep applying for a few frames while the content grows to its new size.
@@ -66,6 +75,7 @@ pub(crate) enum Act {
     ReadClear,
     Zoom(i32),
     ZoomSet(f32),
+    Pan(Pan),
     Rotate,
     Level,
     Replace,
@@ -271,7 +281,7 @@ pub(crate) fn show(app: &mut App, ctx: &egui::Context, t: &Tokens) {
     if let Some(s) = session.as_mut() {
         s.now = crate::now_ms();
         for a in acts {
-            if !matches!(a, Act::ReadLine(_) | Act::ReadMove(_) | Act::ReadClear | Act::Zoom(_) | Act::ZoomSet(_) | Act::Dialog(_) | Act::CloseDialog | Act::Scrolled(_)) {
+            if !matches!(a, Act::ReadLine(_) | Act::ReadMove(_) | Act::ReadClear | Act::Zoom(_) | Act::ZoomSet(_) | Act::Pan(_) | Act::Dialog(_) | Act::CloseDialog | Act::Scrolled(_)) {
                 *status_msg = None;
             }
             apply(a, s, ctx, ctl, typed, status_msg, status_err, dialog, &send);
@@ -326,6 +336,14 @@ fn route_keys(ctl: &Ctl, s: &Session, dialog_open: bool, acts: &mut Vec<Act>) {
             "+" | "=" if in_stage => acts.push(Act::Zoom(1)),
             "-" if in_stage => acts.push(Act::Zoom(-1)),
             "0" if in_stage => acts.push(Act::ZoomSet(1.0)),
+            "ArrowDown" if in_stage => acts.push(Act::Pan(Pan::Line(0.0, 40.0))),
+            "ArrowUp" if in_stage => acts.push(Act::Pan(Pan::Line(0.0, -40.0))),
+            "ArrowRight" if in_stage => acts.push(Act::Pan(Pan::Line(40.0, 0.0))),
+            "ArrowLeft" if in_stage => acts.push(Act::Pan(Pan::Line(-40.0, 0.0))),
+            "PageDown" if in_stage => acts.push(Act::Pan(Pan::Page(1.0))),
+            "PageUp" if in_stage => acts.push(Act::Pan(Pan::Page(-1.0))),
+            "Home" if in_stage => acts.push(Act::Pan(Pan::Edge(false))),
+            "End" if in_stage => acts.push(Act::Pan(Pan::Edge(true))),
             k => {
                 if let Some(id) = strip_id {
                     match (k, *alt) {
@@ -440,7 +458,14 @@ fn apply(
             s.use_all();
             ctl.say(format!("Used all the suggestions. {}", s.next_word_phrase()));
         }
-        Act::StepWord(d) => s.step_word(d),
+        Act::StepWord(d) => {
+            let from = s.selected.clone();
+            s.step_word(d);
+            let said = s.step_phrase(s.selected != from);
+            if !said.is_empty() {
+                ctl.say(said);
+            }
+        }
         Act::Tray(open) => {
             s.tray_open = open;
             if open {
@@ -471,6 +496,7 @@ fn apply(
         Act::ReadClear => s.set_read_line(None),
         Act::Zoom(d) => s.step_zoom(d),
         Act::ZoomSet(z) => s.set_zoom(z),
+        Act::Pan(p) => ctl.pan = Some(p),
         Act::Rotate => {
             s.rotate_current();
         }
@@ -523,8 +549,13 @@ fn apply(
                 send(Cmd::Guess { slug, id: id.clone(), raw: p.raw().to_string() });
             }
         }
-        Act::OpenSettings => *dialog = Some(Dialog::Settings),
-        Act::CloseDialog => *dialog = None,
+        Act::OpenSettings => *dialog = Some(Dialog::settings()),
+        Act::CloseDialog => {
+            if let Some(d) = dialog.as_ref() {
+                dialog::commit(s, d);
+            }
+            *dialog = None;
+        }
         Act::Inbox => s.view = View::Inbox,
         Act::OpenReview(id) => {
             s.select(&id);
@@ -588,7 +619,30 @@ fn apply(
         }
         Act::Dialog(o) => {
             match o {
-                dialog::Out::Close => {}
+                dialog::Out::Close => {
+                    if let Some(d) = dialog.as_ref() {
+                        dialog::commit(s, d);
+                    }
+                }
+                dialog::Out::Setting(key, v, said) => {
+                    s.settings.set(key, v);
+                    s.dirty.settings = true;
+                    ctl.say(said);
+                    return;
+                }
+                dialog::Out::AskClearFixes => {
+                    if let Some(d) = dialog.as_ref() {
+                        dialog::commit(s, d);
+                    }
+                    *dialog = Some(Dialog::Confirm {
+                        title: "Clear remembered fixes".into(),
+                        text: "Forget all remembered fixes? Transcripts and your choices on pages are not affected.".into(),
+                        ok: "Forget them".into(),
+                        danger: true,
+                        then: After::ClearFixes,
+                    });
+                    return;
+                }
                 dialog::Out::Student { name, all } => {
                     let n = s.set_student(&name, all);
                     say(state::moved_pages(n, &name), false);
@@ -601,6 +655,11 @@ fn apply(
                     return;
                 }
                 dialog::Out::Confirmed(then) => match then {
+                    After::ClearFixes => {
+                        s.settings.set("reference", serde_json::json!([]));
+                        s.dirty.settings = true;
+                        say("Forgot the remembered fixes.".into(), false);
+                    }
                     After::RemovePage(id) => s.remove_page(&id),
                     After::TranscribeAgain(id) => send(Cmd::Transcribe { slug, ids: vec![id] }),
                     After::ReviewAgain(ids) => {
@@ -948,7 +1007,7 @@ fn inbox_body(ui: &mut Ui, cx: &mut Cx, s: &Session) {
                 widgets::paint_icon(ui, ir, Icon::Page, t.muted);
                 ui.add_space(10.0);
                 let r = css_text(ui, "No pages in this assignment", theme::sans_semi(18.0), t.ink, 18.0 * 1.4, w, false);
-                cx.ctl.heading("inbox-empty", 3, "No pages in this assignment", TEXT, r.min);
+                cx.ctl.heading("inbox-empty", 2, "No pages in this assignment", TEXT, r.min);
             });
         });
         return;
@@ -1077,7 +1136,7 @@ fn inbox_body(ui: &mut Ui, cx: &mut Cx, s: &Session) {
                 widgets::paint_icon(ui, ir, Icon::Check, t.muted);
                 ui.add_space(10.0);
                 let r = css_text(ui, "Nothing left to check", theme::sans_semi(18.0), t.ink, 18.0 * 1.4, w, false);
-                cx.ctl.heading("inbox-nothing", 3, "Nothing left to check", TEXT, r.min);
+                cx.ctl.heading("inbox-nothing", 2, "Nothing left to check", TEXT, r.min);
                 ui.add_space(10.0);
                 let msg = "Every student in this filter has been read. Pick another filter to see the rest.";
                 let r = css_text(ui, msg, theme::sans(14.0), t.muted, 14.0 * 1.4, 36.0 * 8.0, false);
@@ -1648,6 +1707,15 @@ fn scan(ui: &mut Ui, cx: &mut Cx, s: &Session, stacked: bool) {
         cx.stage.target = Some((off, 4));
         cx.stage.zoom = s.zoom;
     }
+    if let Some(p) = cx.ctl.pan.take() {
+        let (o, v) = (cx.stage.off, cx.stage.view);
+        let off = match p {
+            Pan::Line(dx, dy) => o + vec2(dx, dy),
+            Pan::Page(d) => o + vec2(0.0, d * v.y * 0.875),
+            Pan::Edge(end) => vec2(o.x, if end { 1.0e6 } else { 0.0 }),
+        };
+        cx.stage.target = Some((off.max(Vec2::ZERO), 1));
+    }
     if let Some((off, left)) = cx.stage.target {
         area = area.scroll_offset(off);
         cx.stage.target = if left > 1 { Some((off, left - 1)) } else { None };
@@ -1694,7 +1762,7 @@ fn scan(ui: &mut Ui, cx: &mut Cx, s: &Session, stacked: bool) {
     // keys, wheel and double click on the stage
     let stage_rect = out.inner_rect;
     let r = ui.interact(stage_rect, ui.id().with("stage-keys"), Sense::focusable_noninteractive());
-    cx.ctl.group(ui, &r, "stage", "Page image. Press plus or minus to zoom, zero to fit.", "stage", SCAN);
+    cx.ctl.group(ui, &r, "stage", "Page image. Press plus or minus to zoom, zero to fit, arrow keys to move around a zoomed page.", "stage", SCAN);
     // `img { alt: 'The scanned handwritten page' }`: the picture has a text alternative
     if cur.is_some_and(|p| matches!(cx.images.get(p.id()), Some(Slot::Ready(_)))) {
         cx.ctl.image(ui, "page-image", "The scanned handwritten page", SCAN, stage_rect);
@@ -1926,7 +1994,7 @@ fn state_block(ui: &mut Ui, cx: &mut Cx, title: &str, text: &str, button: Option
     let tg = ui.painter().layout_no_wrap(title.to_string(), theme::sans_semi(18.0), t.ink);
     let dy = ((h3_h - tg.size().y) / 2.0 + 0.2).round();
     ui.painter().galley(pos2(cxm - tg.size().x / 2.0, y + dy), tg.clone(), t.ink);
-    cx.ctl.heading("state-title", 3, title, TEXT, pos2(cxm - tg.size().x / 2.0, y));
+    cx.ctl.heading("state-title", 2, title, TEXT, pos2(cxm - tg.size().x / 2.0, y));
     y += h3_h + 10.0;
     let ny = ((14.0 * 1.4 - ui.painter().layout_no_wrap("Hg".into(), theme::sans(14.0), t.muted).size().y) / 2.0 + 0.2).round();
     ui.painter().galley(pos2(cxm, y + ny), pg, t.muted);
@@ -1971,6 +2039,8 @@ fn legend_row(ui: &mut Ui, cx: &mut Cx, s: &Session) {
     let legend_h = rows.len() as f32 * line_h + (rows.len() as f32 - 1.0) * 6.0;
     let row_h = if one_row { TARGET.max(legend_h) } else { legend_h };
     let (rect, _) = ui.allocate_exact_size(vec2(avail, row_h), Sense::hover());
+    // what the three swatches mean (the JS tree has them as text)
+    cx.ctl.text("legend", "Spelling to check, Couldn’t read, You checked it", TEXT, rect.min);
     let mut y = rect.top() + if one_row { (row_h - legend_h) / 2.0 } else { 0.0 };
     for row in &rows {
         let mut x = rect.left();
@@ -2473,7 +2543,7 @@ fn paint_chip(ui: &mut Ui, t: &Tokens, chip: Rect, g: &std::sync::Arc<egui::Gall
 }
 
 enum FootItem {
-    Text(String),
+    Text(&'static str, String),
     Btn { id: &'static str, label: &'static str, look: Look, act: Act },
 }
 
@@ -2488,10 +2558,10 @@ fn foot(ui: &mut Ui, cx: &mut Cx, s: &Session, p: &Page, has_words: bool) {
     let tokens = p.get("timings").and_then(|x| x.get("tokens")).and_then(|v| v.as_f64()).unwrap_or(0.0);
     if tokens > 0.0 {
         let ms = p.get("timings").and_then(|x| x.get("ms")).and_then(|v| v.as_f64()).unwrap_or(0.0);
-        items.push(FootItem::Text(format!("{} tokens in {:.1}s", tokens, ms / 1000.0)));
+        items.push(FootItem::Text("foot-stats", format!("{} tokens in {:.1}s", tokens, ms / 1000.0)));
     }
     if !s.text_raw && s.selected.as_ref().and_then(|id| s.read_line.get(id)).is_none() {
-        items.push(FootItem::Text("Click a line, or use the up and down arrow keys, to underline where you are.".into()));
+        items.push(FootItem::Text("foot-hint", "Click a line, or use the up and down arrow keys, to underline where you are.".into()));
     }
     if has_words && !s.tray_open {
         items.push(FootItem::Btn { id: "tray-open", label: "Check words", look: Look::Outline, act: Act::Tray(true) });
@@ -2506,7 +2576,7 @@ fn foot(ui: &mut Ui, cx: &mut Cx, s: &Session, p: &Page, has_words: bool) {
 
     const GAP: f32 = 16.0;
     let width = |ui: &Ui, it: &FootItem| match it {
-        FootItem::Text(x) => tw(ui, x, theme::sans(13.0)).min(avail),
+        FootItem::Text(_, x) => tw(ui, x, theme::sans(13.0)).min(avail),
         FootItem::Btn { label, .. } => tw(ui, label, theme::sans_semi(13.0)) + widgets::BTN_PAD,
     };
     let mut rows: Vec<Vec<FootItem>> = vec![];
@@ -2528,14 +2598,16 @@ fn foot(ui: &mut Ui, cx: &mut Cx, s: &Session, p: &Page, has_words: bool) {
     for (ri, row) in rows.into_iter().enumerate() {
         let has_btn = row.iter().any(|i| matches!(i, FootItem::Btn { .. }));
         let h = if has_btn { TARGET } else { 13.0 * 1.4 };
-        let single_wide = row.len() == 1 && matches!(&row[0], FootItem::Text(x) if tw(ui, x, theme::sans(13.0)) > avail);
+        let single_wide = row.len() == 1 && matches!(&row[0], FootItem::Text(_, x) if tw(ui, x, theme::sans(13.0)) > avail);
         let mut clicked: Vec<Act> = vec![];
         let body = |ui: &mut Ui, cx: &mut Cx, clicked: &mut Vec<Act>| {
             ui.spacing_mut().item_spacing.x = GAP;
             for it in row {
                 match it {
-                    FootItem::Text(x) => {
-                        ui.add(egui::Label::new(RichText::new(x).font(theme::sans(13.0)).color(t.muted)).wrap());
+                    FootItem::Text(id, x) => {
+                        let r = ui.add(egui::Label::new(RichText::new(&x).font(theme::sans(13.0)).color(t.muted)).wrap());
+                        // the token stat and the hint are part of the page for someone who cannot see it
+                        cx.ctl.text(id, &x, TEXT, r.rect.min);
                     }
                     FootItem::Btn { id, label, look, act } => {
                         if widgets::button_sized(cx.ctl, ui, t, C::new(id, label, TEXT), label, look, 13.0) {

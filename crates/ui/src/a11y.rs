@@ -14,6 +14,10 @@ pub fn group_of(id: &str) -> Option<(&'static str, &'static str, &'static str)> 
         "cs-scope-page" | "cs-scope-all" => Some(("scope", "group", "Which pages")),
         "cs-new" => Some(("students", "list", "Students")),
         _ if id.starts_with("theme-") => Some(("theme", "group", "Theme")),
+        _ if id.starts_with("st-jmode-") => Some(("jmode", "group", "How to suggest")),
+        _ if id.starts_with("st-fmt-") => Some(("fmt", "group", "Combined file")),
+        _ if id.starts_with("st-sep-") => Some(("sep", "group", "Between pages")),
+        _ if id.starts_with("st-txt-") => Some(("txt", "group", "Text to export")),
         _ if id.starts_with("tab-") => Some(("filter", "group", "Show")),
         _ if id.starts_with("page-") => Some(("pages", "list", "Pages")),
         _ if id.starts_with("cs-student-") => Some(("students", "list", "Students")),
@@ -70,6 +74,8 @@ thread_local! {
     /// How many fractions or binomials enclose the one being spoken: an inner one is always closed with its
     /// own "end fraction", or "1 over 2 over 3" would not say which division comes first.
     static NEST: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    /// Inside the subscript of a `\lim`: only there does an arrow "approach" something.
+    static IN_LIM: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// What a screen reader should say for a formula written in TeX: `\frac{s}{\sqrt{n}}` is "the fraction s
@@ -99,7 +105,54 @@ fn word_for(cmd: &str) -> Option<&'static str> {
         "approx" => "is approximately",
         "sim" => "is distributed as",
         "infty" => "infinity",
-        "to" | "rightarrow" => "approaches",
+        "to" | "rightarrow" | "longrightarrow" | "mapsto" | "longmapsto" => "to",
+        "leftarrow" => "from",
+        "Rightarrow" | "implies" | "Longrightarrow" => "implies",
+        "Leftarrow" => "is implied by",
+        "Leftrightarrow" | "iff" | "Longleftrightarrow" => "if and only if",
+        "leftrightarrow" => "to and from",
+        "emptyset" | "varnothing" => "the empty set",
+        "forall" => "for all",
+        "exists" => "there is some",
+        "nexists" => "there is no",
+        "lfloor" => "floor of",
+        "rfloor" => "end floor",
+        "lceil" => "ceiling of",
+        "rceil" => "end ceiling",
+        "lvert" => "absolute value of",
+        "rvert" => "end absolute value",
+        "lVert" => "norm of",
+        "rVert" => "end norm",
+        "|" | "Vert" => "norm",
+        "cong" => "is congruent to",
+        "perp" => "is perpendicular to",
+        "parallel" => "is parallel to",
+        "mid" => "divides",
+        "notin" => "is not in",
+        "ni" => "contains",
+        "subset" => "is a subset of",
+        "subseteq" => "is a subset of or equal to",
+        "supset" => "is a superset of",
+        "supseteq" => "is a superset of or equal to",
+        "setminus" => "minus the set",
+        "equiv" => "is equivalent to",
+        "propto" => "is proportional to",
+        "wedge" | "land" => "and",
+        "vee" | "lor" => "or",
+        "neg" | "lnot" => "not",
+        "bmod" | "mod" => "mod",
+        "angle" => "angle",
+        "triangle" => "triangle",
+        "therefore" => "therefore",
+        "because" => "because",
+        "partial" => "partial",
+        "nabla" => "del",
+        "ell" => "script l",
+        "cdotp" => "times",
+        "lt" => "is less than",
+        "gt" => "is greater than",
+        "langle" => "open angle bracket",
+        "rangle" => "close angle bracket",
         "ldots" | "cdots" | "dots" => "dot dot dot",
         "circ" | "degree" => "degrees",
         "sum" => "the sum of",
@@ -228,7 +281,9 @@ fn limits(cs: &[char], p: &mut usize, head: &str) -> String {
         match cs.get(q) {
             Some('_') if lo.is_none() => {
                 *p = q + 1;
+                let was = IN_LIM.with(|l| l.replace(head.starts_with("the limit")));
                 lo = Some(atom(cs, p).trim().to_string());
+                IN_LIM.with(|l| l.set(was));
             }
             Some('^') if hi.is_none() => {
                 *p = q + 1;
@@ -444,12 +499,29 @@ fn command(cs: &[char], p: &mut usize) -> String {
         "sum" => limits(cs, p, "the sum"),
         "prod" => limits(cs, p, "the product"),
         "int" => limits(cs, p, "the integral"),
+        "iint" => limits(cs, p, "the double integral"),
+        "iiint" => limits(cs, p, "the triple integral"),
         "oint" => limits(cs, p, "the contour integral"),
         "lim" => limits(cs, p, "the limit"),
         "sin" | "cos" | "tan" | "log" | "ln" | "exp" | "min" | "max" | "sup" | "inf" => format!(" {name} "),
         "Sigma" | "Delta" | "Omega" | "Gamma" | "Theta" | "Lambda" | "Pi" | "Phi" | "Psi" | "Xi" => {
             format!(" capital {} ", name.to_lowercase())
         }
+        "to" | "rightarrow" | "longrightarrow" if IN_LIM.with(|l| l.get()) => " approaches ".into(),
+        "xrightarrow" | "xleftarrow" => {
+            if cs.get(*p) == Some(&'[') {
+                while *p < cs.len() && cs[*p] != ']' {
+                    *p += 1;
+                }
+                *p += 1;
+            }
+            let a = atom(cs, p);
+            let dir = if name == "xrightarrow" { "arrow" } else { "arrow back" };
+            format!(" {dir} labeled {a} end arrow ")
+        }
+        "overrightarrow" | "overleftarrow" | "overrightarrow*" => format!(" vector {} ", atom(cs, p)),
+        "pmod" | "pod" => format!(" mod {} ", atom(cs, p)),
+        "overrightharpoon" => format!(" vector {} ", atom(cs, p)),
         "varepsilon" => " epsilon ".into(),
         "varphi" => " phi ".into(),
         "vartheta" => " theta ".into(),
@@ -460,17 +532,75 @@ fn command(cs: &[char], p: &mut usize) -> String {
     }
 }
 
+/// Bars left in the current group after `from` (a `\|` or `\{` is not one).
+fn bars_ahead(cs: &[char], from: usize, in_group: bool) -> usize {
+    let (mut n, mut depth, mut q) = (0, 0i32, from);
+    while q < cs.len() {
+        match cs[q] {
+            '\\' => q += 1,
+            '{' => depth += 1,
+            '}' => {
+                if depth == 0 && in_group {
+                    break;
+                }
+                depth -= 1;
+            }
+            '|' if depth == 0 => n += 1,
+            _ => {}
+        }
+        q += 1;
+    }
+    n
+}
+
+fn divider(paren: i32, in_set: bool) -> &'static str {
+    if in_set {
+        " such that "
+    } else if paren > 0 {
+        " given "
+    } else {
+        " divides "
+    }
+}
+
 fn seq(cs: &[char], p: &mut usize, in_group: bool) -> String {
     let mut out = String::new();
     // `|x - 3|`: the first bar opens an absolute value and the next closes it
     let mut bar_open = false;
+    // `P(A|B)` and `\{x | x > 0\}`: a bar with no partner is a divider, not an absolute value
+    let (mut paren, mut in_set) = (0i32, false);
     while *p < cs.len() {
         let c = cs[*p];
         match c {
             '|' => {
                 *p += 1;
-                out.push_str(if bar_open { " end absolute value " } else { " absolute value of " });
-                bar_open = !bar_open;
+                if bar_open {
+                    out.push_str(" end absolute value ");
+                    bar_open = false;
+                } else if bars_ahead(cs, *p, in_group) % 2 == 0 {
+                    out.push_str(divider(paren, in_set));
+                } else {
+                    out.push_str(" absolute value of ");
+                    bar_open = true;
+                }
+            }
+            '(' => {
+                paren += 1;
+                *p += 1;
+                out.push_str(" open paren ");
+            }
+            ')' => {
+                paren -= 1;
+                *p += 1;
+                out.push_str(" close paren ");
+            }
+            '\\' if cs.get(*p + 1) == Some(&'{') => {
+                in_set = true;
+                out.push_str(&command(cs, p));
+            }
+            '\\' if cs[*p + 1..].starts_with(&['m', 'i', 'd']) && !cs.get(*p + 4).is_some_and(|c| c.is_ascii_alphabetic()) => {
+                *p += 4;
+                out.push_str(divider(paren, in_set));
             }
             '}' if in_group => break,
             '}' => *p += 1,
@@ -501,6 +631,10 @@ fn seq(cs: &[char], p: &mut usize, in_group: bool) -> String {
                     *p += 1;
                 }
                 out.push(' ');
+                // `1rac{1}{2}` is a mixed number
+                if cs[*p..].starts_with(&['\\', 'f', 'r', 'a', 'c']) || cs[*p..].starts_with(&['\\', 'd', 'f', 'r', 'a', 'c']) {
+                    out.push_str(" and ");
+                }
             }
             c => {
                 *p += 1;
@@ -609,6 +743,18 @@ mod tests {
         assert!(!s.contains("approaches"), "{s}");
         // inside a limit it still approaches
         assert!(tex_speech(r"\lim_{x \to 0} f(x)").contains("approaches"));
+    }
+
+    /// Round 5: a mixed number is "1 and 1 over 2", a set-builder bar is "such that", a pair of bars is one value.
+    #[test]
+    fn mixed_numbers_and_set_builder_bars() {
+        let s = tex_speech(r"1\frac{1}{2}");
+        assert!(s.starts_with("1 and "), "{s}");
+        assert!(tex_speech(r"\{x | x > 0\}").contains("such that"));
+        assert!(tex_speech(r"P(A|B)").contains("given"));
+        assert_eq!(tex_speech(r"|a| + |b|").matches("absolute value of").count(), 2);
+        assert!(tex_speech(r"a \mid b").contains("divides"));
+        assert!(!tex_speech(r"x \to 3").contains("approaches"));
     }
 
     #[test]
