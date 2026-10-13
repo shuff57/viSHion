@@ -144,6 +144,10 @@ try {
   const ringOn2 = await shot();
   await page.mouse.click(640, 4);
   const ringOff = await shot();
+  if (ringOff !== idle) {
+    fs.writeFileSync(path.join(here, '../dist/check-ring-idle.png'), Buffer.from(idle, 'base64'));
+    fs.writeFileSync(path.join(here, '../dist/check-ring-off.png'), Buffer.from(ringOff, 'base64'));
+  }
   expect(ringOn2 !== ringOff && ringOff === idle, 'focus ring clears on blur (frame after blur equals the idle frame)');
 
   // 6. Tab (real key presses only) until a given control has focus
@@ -309,6 +313,29 @@ try {
     await ctx4.close();
   }
 
+  // ---- the assignment overview: tabs with counts, the run bar, and Retry reading a page in demo mode
+  {
+    const ctx6 = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+    const p6 = await ctx6.newPage();
+    await p6.addInitScript(track);
+    await p6.goto(base + '/?demo=1&view=inbox&theme=light', { waitUntil: 'load' });
+    await settled(p6);
+    const nudge = async () => { for (let i = 0; i < 6; i++) { await p6.mouse.move(300 + i, 500 + i); await p6.waitForTimeout(80); } };
+    await nudge();
+    await p6.waitForSelector('#controls [data-id="tab-ready"]', { timeout: 20000 });
+    const label = (id) => p6.evaluate((i) => { const e = document.querySelector(`#controls [data-id="${i}"]`); return e ? (e.getAttribute('aria-label') || e.textContent) : null; }, id);
+    expect((await label('tab-ready')) === 'Ready to read 1' && (await label('tab-all')) === 'All 4', 'the overview has filter tabs with counts: ' + await label('tab-ready'));
+    expect((await label('resume')) === 'Resume (1 left)' && (await label('retry-failed')) === 'Retry 1 failed', 'the run bar offers Resume and Retry');
+    expect(/Couldn.t transcribe$/.test(await label('row-n:omar k.')), 'a failed student reads "Couldn\u2019t transcribe": ' + await label('row-n:omar k.'));
+    await p6.evaluate(() => document.querySelector('#controls [data-id="retry-n:omar k."]').click());
+    let after = '';
+    for (let i = 0; i < 60 && !/to check|Ready to read/.test(after); i++) { await nudge(); after = (await label('row-n:omar k.')) || ''; }
+    expect(/Open Omar K\., \d+ words? to check|Ready to read/.test(after), 'Retry reads the page in demo mode: ' + after);
+    expect((await p6.evaluate(() => window.__violations)).length === 0, 'zero CSP violations on the overview');
+    await p6.screenshot({ path: path.join(here, '../dist/check-inbox-demo.png') });
+    await ctx6.close();
+  }
+
   // ---- phone width: boots under the same CSP and exposes the page pane and the tools
   {
     const ctx5 = await browser.newContext({ viewport: { width: 390, height: 844 } });
@@ -331,7 +358,8 @@ try {
     const ctx3 = await browser.newContext({ viewport: { width: 1280, height: 800 } });
     const p3 = await ctx3.newPage();
     const fontReqs = [];
-    p3.on('request', r => { if (r.url().includes('fallback-cjk')) fontReqs.push(r.url()); });
+    const emojiReqs = [];
+    p3.on('request', r => { if (r.url().includes('fallback-cjk')) fontReqs.push(r.url()); if (r.url().includes('twemoji')) emojiReqs.push(r.url()); });
     await p3.addInitScript(track);
     await p3.goto(base + '/?theme=light', { waitUntil: 'load' });
     await settled(p3);
@@ -418,6 +446,21 @@ try {
     expect(alts.length === 3 && new Set(alts.map(a => a.split(' | ')[0])).size === 3 && alts.some(a => a.includes('intervals. 62% likely')) && alts.some(a => a.includes('intervening. 21% likely')),
       'each guess of an unreadable word is its own twin control: ' + JSON.stringify(alts));
     expect(fontReqs.some(u => u.endsWith('/fallback-cjk-emoji.ttf')), 'CJK text makes the app fetch the fallback font on demand');
+    expect(emojiReqs.some(u => u.endsWith('/twemoji-colr.ttf')), 'an emoji makes the app fetch the colour emoji face on demand');
+    // the transcript pane's scroll position is written into project.json (meta.ui.scroll / scrollId), as review.js does
+    await p3.setViewportSize({ width: 1280, height: 520 });
+    await empty();
+    await p3.mouse.move(900, 250);
+    await p3.mouse.wheel(0, 240);
+    const readMeta = () => p3.evaluate(async () => {
+      const db = await new Promise((res, rej) => { const r = indexedDB.open('ocr_fs', 1); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+      const v = await new Promise((res, rej) => { const q = db.transaction('files').objectStore('files').get('unit-5/project.json'); q.onsuccess = () => res(q.result); q.onerror = () => rej(q.error); });
+      db.close();
+      return v;
+    });
+    let ui = {};
+    for (let i = 0; i < 60 && !(ui.scroll > 0); i++) { await empty(); await p3.waitForTimeout(100); try { ui = JSON.parse(await readMeta()).ui || {}; } catch (e) { ui = {}; } }
+    expect(ui.scroll > 0 && ui.scrollId === 'p2', 'scrolling the transcript writes meta.ui.scroll and scrollId: ' + JSON.stringify(ui));
     await p3.evaluate(() => { for (let i = 0; i < 4; i++) document.querySelector('#controls [data-id="zoom-in"]').click(); });
     let maxed = false;
     for (let i = 0; i < 30 && !maxed; i++) { await empty(); maxed = await p3.evaluate(() => document.querySelector('#controls [data-id="zoom-in"]').disabled); }

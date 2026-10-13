@@ -6,6 +6,14 @@ use egui::{pos2, vec2, Color32, Rect, Response, Sense, Shape, Stroke, Ui};
 
 pub const TARGET: f32 = 44.0;
 
+/// Where a text of `size` goes to be centred in `rect`, on a whole pixel. A 14px label centred in a 44 high
+/// control lands exactly on a half pixel (22 - 17 / 2), where floating point noise in the layout above decides
+/// between two rows of pixels from one frame to the next; this decides it the same way every time.
+pub fn centered(rect: Rect, size: egui::Vec2) -> egui::Pos2 {
+    let p = rect.center() - size / 2.0;
+    pos2((p.x + 0.02).round(), (p.y + 0.02).round())
+}
+
 #[derive(Clone, Copy, PartialEq)]
 pub enum Look {
     /// Filled with ink (the primary action).
@@ -62,7 +70,7 @@ fn paint_button(ui: &Ui, r: &Response, t: &Tokens, c: &C, g: std::sync::Arc<egui
         _ => if c.disabled { t.faint } else { t.ink },
     };
     paint_look(ui, r, t, look, false, c.disabled);
-    let pos = r.rect.center() - g.size() / 2.0;
+    let pos = centered(r.rect, g.size());
     ui.painter().galley(pos, g, fg);
 }
 
@@ -253,7 +261,7 @@ pub fn seg(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, region: u8, group: &str, item
         } else if r.hovered() && !dis {
             ui.painter().rect_filled(slot.shrink2(vec2(0.0, 3.0)), 8.0, t.line);
         }
-        ui.painter().galley(slot.center() - g.size() / 2.0, g, t.ink);
+        ui.painter().galley(centered(slot, g.size()), g, t.ink);
         if ctl.reg(ui, &r, C::new(id, label, region).pressed(on).disabled(dis)) {
             clicked = Some(i);
         }
@@ -281,7 +289,7 @@ pub fn pill_at(ui: &Ui, t: &Tokens, kind: crate::state::PillKind, text: &str, mi
     if outline {
         ui.painter().rect_stroke(rect.shrink(0.5), 999.0, Stroke::new(1.0, t.line2));
     }
-    ui.painter().galley(rect.center() - g.size() / 2.0, g, fg);
+    ui.painter().galley(centered(rect, g.size()), g, fg);
     rect
 }
 

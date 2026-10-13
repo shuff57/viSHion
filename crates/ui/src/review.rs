@@ -1745,7 +1745,7 @@ fn legend(ui: &mut Ui, t: &Tokens) {
                 ui.painter().line_segment([pos2(r.left() + 4.0, r.bottom() - 1.0), pos2(r.right() - 4.0, r.bottom() - 1.0)], Stroke::new(2.0, t.ok));
             }
         }
-        ui.painter().galley(r.center() - g.size() / 2.0, g, t.ink);
+        ui.painter().galley(widgets::centered(r, g.size()), g, t.ink);
         ui.painter().galley(pos2(r.right() + 8.0, rect.center().y - l.size().y / 2.0), l, t.muted);
     };
     sw(ui, "Spelling to check", Kind::Warn);
@@ -2131,7 +2131,7 @@ fn paint_chip(ui: &mut Ui, t: &Tokens, chip: Rect, g: &std::sync::Arc<egui::Gall
     if selected {
         ui.painter().rect_stroke(chip.expand(3.0), 7.0, Stroke::new(2.0, t.ink));
     }
-    ui.painter().galley(chip.center() - g.size() / 2.0, g.clone(), color);
+    ui.painter().galley(widgets::centered(chip, g.size()), g.clone(), color);
 }
 
 enum FootItem {
