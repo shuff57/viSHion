@@ -2261,3 +2261,44 @@ fn round6_focus_after_a_decision_is_on_the_next_word_not_on_its_choices() {
     let f = h.app.ctl.focused.as_ref().map(|f| f.0.clone()).unwrap_or_default();
     assert!(f.starts_with("word-"), "focus is on {f:?}, not on the word the panel moved to");
 }
+
+/// Round 7 blocker: a dialog opened from the keyboard (Enter on a focused button) with a UI Automation client
+/// attached killed the window: the update named a focus the tree did not contain (accesskit_consumer tree.rs:35).
+/// Feeds every update of the same key sequence to a consumer, as the platform adapter does.
+#[test]
+fn native_dialog_opened_from_the_keyboard_keeps_focus_in_the_tree() {
+    for (opener, first) in [("settings", "theme-auto"), ("remove", "dialog-cancel"), ("change-student", "cs-new")] {
+        let mut h = H::new("m1");
+        h.ctx.enable_accesskit();
+        h.frames(2);
+        let upd = h.out.platform_output.accesskit_update.clone().expect("update");
+        let mut tree = accesskit_consumer::Tree::new(upd, true);
+        for _ in 0..80 {
+            if h.app.prev_focus.as_deref() == Some(opener) {
+                break;
+            }
+            h.events.push(tab_key(false));
+            h.frames(2);
+        }
+        assert_eq!(h.app.prev_focus.as_deref(), Some(opener), "Tab reaches it");
+        let mut feed = |h: &mut H, n: usize| {
+            for _ in 0..n {
+                h.frames(1);
+                let u = h.out.platform_output.accesskit_update.clone().expect("update");
+                tree.update(u);
+            }
+        };
+        feed(&mut h, 2);
+        for k in [egui::Key::Enter, egui::Key::Escape] {
+            for pressed in [true, false] {
+                h.events.push(egui::Event::Key { key: k, physical_key: Some(k), pressed, repeat: false, modifiers: Default::default() });
+                feed(&mut h, 1);
+            }
+            feed(&mut h, 4);
+            if k == egui::Key::Enter {
+                assert!(h.app.dialog.is_some(), "{opener}: dialog open");
+                assert!(h.ctl(first).is_some(), "{opener}: {first} present");
+            }
+        }
+    }
+}

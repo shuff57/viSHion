@@ -44,3 +44,17 @@ which epaint ignores (it only reads the legacy `kern` table); the two Latin fami
 Together the widths of Instrument Sans and Source Serif 4 strings are within 0.6 px of what Chrome reports
 (`app_tests::round4_text_is_as_wide_as_the_browser_sets_it`). Wired in with `[patch.crates-io]`. Drop it when
 egui exposes the setting.
+
+## accesskit_consumer 0.16.1
+
+Copy of the crates.io release (src, README, `Cargo.toml`) with one block of `tree.rs` (`State::update`) replaced.
+When a node changes parent in an update, the old parent's dropped child was marked an orphan and the whole subtree
+under every orphan was removed afterwards, even when another parent of the same update had taken the child over.
+egui builds the update from a hash map, so whether the child survived depended on the order of the nodes. The
+native build moves nodes between parents all the time (a button under the banner goes under a hidden container
+when a dialog opens), and when the moved node was the focus the consumer asserted
+(`self.nodes.contains_key(&self.focus)`, `tree.rs:35`) in the window thread: the window died as soon as a UI
+Automation client (Narrator, NVDA) was attached and a dialog was opened from the keyboard. Now what is removed is
+what the root no longer reaches. `app_tests::native_dialog_opened_from_the_keyboard_keeps_focus_in_the_tree`
+feeds the same updates to a consumer. Wired in with `[patch.crates-io]` (accesskit_windows, accesskit_winit and the
+test consumer all take it). Drop it when accesskit is upgraded past the fix (egui pin, plan rule 6).

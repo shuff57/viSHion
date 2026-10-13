@@ -126,6 +126,48 @@ pub const DARK: Tokens = Tokens {
 pub const LIGHT_HC: Tokens = Tokens { muted: LIGHT.ink, faint: rgb(0x3A4256), line: rgb(0x5A6477), line2: LIGHT.ink, ..LIGHT };
 pub const DARK_HC: Tokens = Tokens { muted: DARK.ink, faint: rgb(0xC9D1E0), line: rgb(0x9AA5B8), line2: DARK.ink, ..DARK };
 
+/// The tokens in the user's own system colours (a Windows contrast theme, forced colours): quiet greys, fills
+/// and tints collapse to `canvas`; ink, rules and focus are `text`; links and the accent are `link`; disabled
+/// text is `gray`. Shared by the web build (CSS system colours) and the native Windows one (`GetSysColor`).
+pub fn forced(base: &Tokens, canvas: Color32, text: Color32, gray: Color32, link: Color32) -> Tokens {
+    let lum = |c: egui::Color32| 0.2126 * c.r() as f32 + 0.7152 * c.g() as f32 + 0.0722 * c.b() as f32;
+    let mut t = *base;
+    t.dark = lum(canvas) < 128.0;
+    t.bg = canvas;
+    t.surface = canvas;
+    t.sunken = canvas;
+    t.soft = canvas;
+    t.track = canvas;
+    t.hover = canvas;
+    t.ink = text;
+    t.on_ink = canvas;
+    t.muted = text;
+    t.faint = gray;
+    t.line = text;
+    t.line2 = text;
+    t.warn = canvas;
+    t.warn_bg = canvas;
+    t.warn_line = link;
+    t.bad = text;
+    t.bad_bg = canvas;
+    t.ok = text;
+    t.ok_bg = canvas;
+    t.accent = link;
+    t.scanbg = canvas;
+    t.scanhead = canvas;
+    t.scanline = text;
+    t.paper = canvas;
+    t.paper_ink = text;
+    t.paper_rule = gray;
+    t.bar_warn = link;
+    t.bar_ok = link;
+    t.bar_bad = gray;
+    t.bar_ok_edge = text;
+    t.bar_warn_edge = text;
+    t.bar_bad_edge = text;
+    t
+}
+
 /// `pick`, with the high contrast variant when the person asked for more contrast.
 pub fn pick_hc(setting: &str, system_dark: bool, high_contrast: bool) -> &'static Tokens {
     match (pick(setting, system_dark).dark, high_contrast) {

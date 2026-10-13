@@ -58,6 +58,43 @@ pub fn platform_name(t: &Tree, uia: bool) -> String {
     }
 }
 
+/// A Windows contrast theme (Aquatic, Night sky, High Contrast Black / White): the window is drawn in the
+/// system's own colours, as the web build does with `forced-colors` (read once at start, like it). Elsewhere,
+/// and in tests, nothing is forced.
+#[cfg(all(windows, not(test)))]
+pub fn forced_tokens(base: &crate::theme::Tokens) -> Option<crate::theme::Tokens> {
+    #[repr(C)]
+    struct HighContrast {
+        size: u32,
+        flags: u32,
+        scheme: *mut u16,
+    }
+    #[link(name = "user32")]
+    extern "system" {
+        fn SystemParametersInfoW(action: u32, param: u32, data: *mut HighContrast, winini: u32) -> i32;
+        fn GetSysColor(index: i32) -> u32;
+    }
+    const SPI_GETHIGHCONTRAST: u32 = 0x0042;
+    const HCF_HIGHCONTRASTON: u32 = 1;
+    let mut hc = HighContrast { size: std::mem::size_of::<HighContrast>() as u32, flags: 0, scheme: std::ptr::null_mut() };
+    // SAFETY: both calls only read system settings; `hc` is the struct the first one fills in.
+    let on = unsafe { SystemParametersInfoW(SPI_GETHIGHCONTRAST, hc.size, &mut hc, 0) } != 0 && hc.flags & HCF_HIGHCONTRASTON != 0;
+    if !on {
+        return None;
+    }
+    // COLORREF is 0x00BBGGRR; COLOR_WINDOW 5, COLOR_WINDOWTEXT 8, COLOR_GRAYTEXT 17, COLOR_HOTLIGHT 26
+    let sys = |i: i32| {
+        let c = unsafe { GetSysColor(i) };
+        egui::Color32::from_rgb(c as u8, (c >> 8) as u8, (c >> 16) as u8)
+    };
+    Some(crate::theme::forced(base, sys(5), sys(8), sys(17), sys(26)))
+}
+
+#[cfg(not(all(windows, not(test))))]
+pub fn forced_tokens(_base: &crate::theme::Tokens) -> Option<crate::theme::Tokens> {
+    None
+}
+
 fn id_of(key: &str, widgets: &HashMap<String, Id>) -> Id {
     widgets.get(key).copied().unwrap_or_else(|| Id::new(("twin", key)))
 }

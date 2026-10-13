@@ -673,6 +673,11 @@ impl App {
         {
             app.forced = web::forced_tokens(&theme::LIGHT);
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            app.forced = native::forced_tokens(&theme::LIGHT);
+            app.high_contrast = app.forced.is_some();
+        }
         app
     }
 

@@ -36,6 +36,8 @@ egui_glow = { path = "crates/vendor/egui_glow" }
 epaint = { path = "crates/vendor/epaint" }
 # latex-rust 2.1.1 with `egui` built without default_fonts (wasm size, plan risk "wasm size").
 latex-rust = { path = "crates/vendor/latex-rust" }
+# Orphan handling no longer depends on the order of the nodes in an update (one block), see crates/vendor/PATCHES.md.
+accesskit_consumer = { path = "crates/vendor/accesskit_consumer" }
 
 [profile.release]
 opt-level = "z"

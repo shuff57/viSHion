@@ -908,42 +908,7 @@ pub fn forced_tokens(base: &crate::theme::Tokens) -> Option<crate::theme::Tokens
     let text = system_color("CanvasText")?;
     let gray = system_color("GrayText").unwrap_or(text);
     let link = system_color("LinkText").unwrap_or(text);
-    let lum = |c: egui::Color32| 0.2126 * c.r() as f32 + 0.7152 * c.g() as f32 + 0.0722 * c.b() as f32;
-    let mut t = *base;
-    t.dark = lum(canvas) < 128.0;
-    t.bg = canvas;
-    t.surface = canvas;
-    t.sunken = canvas;
-    t.soft = canvas;
-    t.track = canvas;
-    t.hover = canvas;
-    t.ink = text;
-    t.on_ink = canvas;
-    t.muted = text;
-    t.faint = gray;
-    t.line = text;
-    t.line2 = text;
-    t.warn = canvas;
-    t.warn_bg = canvas;
-    t.warn_line = link;
-    t.bad = text;
-    t.bad_bg = canvas;
-    t.ok = text;
-    t.ok_bg = canvas;
-    t.accent = link;
-    t.scanbg = canvas;
-    t.scanhead = canvas;
-    t.scanline = text;
-    t.paper = canvas;
-    t.paper_ink = text;
-    t.paper_rule = gray;
-    t.bar_warn = link;
-    t.bar_ok = link;
-    t.bar_bad = gray;
-    t.bar_ok_edge = text;
-    t.bar_warn_edge = text;
-    t.bar_bad_edge = text;
-    Some(t)
+    Some(crate::theme::forced(base, canvas, text, gray, link))
 }
 
 /// Record the user's display preferences on the twin, where tests (and curious people) can see them.
