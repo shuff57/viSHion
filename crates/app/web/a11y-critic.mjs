@@ -102,6 +102,29 @@ try {
     expect(/\| viSHion$/.test(title), 'the document title names the assignment (JS: "Unit 5 | viSHion"): ' + JSON.stringify(title));
     await ctx.close();
   }
+  // 6. Blind critic round 4 (each FAIL is a gap)
+  {
+    // the same action twice says the same words: a live region whose text did not change is not re-read (JS appends a new toast node each time)
+    const { ctx, page, pump } = await open({ width: 1280, height: 800 });
+    await page.evaluate(() => { window.__m = 0; new MutationObserver(() => { window.__m++; }).observe(document.getElementById('announce'), { childList: true, characterData: true, subtree: true }); });
+    const press = async (id) => { await page.evaluate((i) => document.querySelector('#controls [data-id="' + i + '"]')?.focus(), id); await page.keyboard.press('Enter'); await pump(6); await page.waitForTimeout(700); await pump(2); };
+    await press('copy'); const a = await page.evaluate(() => window.__m);
+    await press('copy'); const c = await page.evaluate(() => window.__m);
+    expect(c > a, 'pressing Copy text twice announces it twice (live region written again): writes ' + a + ' then ' + c);
+    await ctx.close();
+  }
+  {
+    // 400% zoom on a phone: Settings must be where it is drawn, not under the page pane
+    const { ctx, page } = await open({ width: 320, height: 568 }, { deviceScaleFactor: 2 });
+    const r = await page.evaluate(() => { const b = document.querySelector('#controls [data-id="settings"]').getBoundingClientRect(); return { x: b.x, y: b.y, w: b.width, h: b.height }; });
+    const url = 'data:image/png;base64,' + (await page.screenshot()).toString('base64');
+    const bad = await page.evaluate(async ([u, r]) => { const i = new Image(); i.src = u; await i.decode(); const c = document.createElement('canvas'); c.width = i.width; c.height = i.height; const x = c.getContext('2d'); x.drawImage(i, 0, 0);
+      const d = x.getImageData(0, 0, i.width, i.height).data; let n = 0, t = 0;
+      for (let yy = Math.round(r.y * 2) + 2; yy < (r.y + r.h) * 2 - 2; yy += 4) for (let xx = Math.round(r.x * 2) + 2; xx < (r.x + r.w) * 2 - 2; xx += 4) { const k = (yy * i.width + xx) * 4; t++; if (d[k] < 235 && d[k + 2] > d[k] + 8 && d[k + 1] > 190) n++; }
+      return t ? n / t : 1; }, [url, r]);
+    expect(bad < 0.1, '320 css px wide: the Settings button is visible, not covered by the page pane (' + Math.round(bad * 100) + '% of its rectangle is pane colour)');
+    await ctx.close();
+  }
 } catch (e) {
   console.error(e);
   failures.push('exception: ' + (e && e.message));
