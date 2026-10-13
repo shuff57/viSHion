@@ -129,7 +129,7 @@ impl<S: Store> Projects<S> {
 
     /// `readMeta`. `Ok(None)` when project.json is absent. `Err(Parse)` when neither project.json nor its
     /// backup is usable (nothing is written). With `restore`, a usable backup is copied over a damaged
-    /// project.json (as JS does; no extra files). Valid JSON that cannot be represented is not damaged.
+    /// project.json (as JS does, after saving the damaged bytes to `project.json.damaged`). Valid JSON that cannot be represented is not damaged.
     async fn read_meta(&self, slug: &str, restore: bool, now: i64) -> Result<Option<(Project, bool, bool)>> {
         let path = format!("{slug}/project.json");
         let Some(txt) = self.read_text(&path).await? else { return Ok(None) };
@@ -145,6 +145,8 @@ impl<S: Store> Projects<S> {
             if let Ok(m) = Project::from_json(&bak) {
                 let mut restored = false;
                 if restore {
+                    // keep the damaged bytes: they may hold newer metadata than the backup
+                    self.write_text(&format!("{path}.damaged"), &txt).await?;
                     self.write_text(&path, &bak).await?;
                     restored = true;
                 }
@@ -444,7 +446,7 @@ impl<S: Store> Projects<S> {
         if t.is_empty() {
             return Ok(None);
         }
-        match lenient::parse::<Value>(&t) {
+        match lenient::parse_marked::<Value>(&t).map(|(v, _)| v) {
             Ok(Value::Object(mut m)) => {
                 for k in SETTINGS_STRIP {
                     m.remove(k);

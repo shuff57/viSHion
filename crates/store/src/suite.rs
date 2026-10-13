@@ -176,8 +176,8 @@ pub async fn run<S: Store>(store: S) -> std::result::Result<(), String> {
     check!(ob.from_backup && ob.restored, "restored");
     check!(e(pr.read_text(&format!("{slug}/project.json")).await)?.unwrap() == good, "restored bytes");
     check!(
-        e(pr.read_text(&format!("{slug}/project.json.damaged")).await)?.is_none(),
-        "JS writes no .damaged copy"
+        e(pr.read_text(&format!("{slug}/project.json.damaged")).await)?.as_deref() == Some("{\"name\": \"Alg"),
+        "restore keeps the damaged bytes (deliberate deviation from JS)"
     );
     // marker-lookalike text (U+10FFFE + hex digits) opens via a per-document marker, never replaced
     let unrep = "{\"name\":\"N\",\"prompt\":\"\u{10FFFE}d800\",\"order\":[\"a\"]}";
