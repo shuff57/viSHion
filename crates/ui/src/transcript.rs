@@ -160,4 +160,12 @@ mod tests {
         assert!(l[0].display_only().is_some());
         assert!(lines("so $$x$$ here")[0].display_only().is_none());
     }
+
+    /// Blind critic, review screen round 3: the JS app renders HTML, so runs of spaces collapse to one
+    /// ("Last  line   with  gaps" reads as "Last line with gaps"). Here the runs are drawn at full width.
+    #[test]
+    fn blind3_runs_of_spaces_collapse_like_html() {
+        let l = lines("Last  line   with  gaps");
+        assert_eq!(l[0].plain(), "Last line with gaps");
+    }
 }

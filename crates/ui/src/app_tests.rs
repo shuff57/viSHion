@@ -1090,3 +1090,22 @@ fn critic_word_stays_above_the_tray_when_the_crop_arrives() {
     let word = h.ctl(&w).expect("word control");
     assert!(word.pos.0 * 16 + 22 <= tray_top, "the word ends at {} but the tray starts at {tray_top}", word.pos.0 * 16 + 22);
 }
+
+fn blind_node_y(h: &H, id: &str) -> Option<i32> {
+    h.app.nodes().iter().find_map(|n| match n {
+        Node::Heading { id: i, pos, .. } if i == id => Some(pos.0 * 16),
+        _ => None,
+    })
+}
+
+/// js/ui/review.js never scrolls the transcript on open when the selected word already fits above the tray
+/// (1280 x 800): the student name and the status pill stay visible. Here the name heading is scrolled up
+/// under the top bar.
+#[test]
+fn blind3_desktop_open_keeps_student_name_and_pill_on_screen() {
+    let mut h = H::new("m1");
+    h.with_picture();
+    h.frames(15);
+    let name_y = blind_node_y(&h, "student-name").expect("student name heading");
+    assert!(name_y >= 111, "student name sits at {name_y}: scrolled under the 111px top bar");
+}
