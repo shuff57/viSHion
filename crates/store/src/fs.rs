@@ -51,7 +51,9 @@ impl FsStore {
                 || seg.ends_with('.')
                 || seg.ends_with(' ')
                 || is_device_name(seg)
-                || seg.chars().any(|c| matches!(c, '\\' | '\0' | ':'));
+                || seg.chars().any(|c| matches!(c, '\\' | '\0' | ':'))
+                // Windows cannot create these (os error 123): same answer as any other unusable name
+                || (cfg!(windows) && seg.chars().any(|c| matches!(c, '?' | '*' | '"' | '<' | '>' | '|') || c < ' '));
             if bad {
                 return Err(StoreError::InvalidKey(key.into()));
             }

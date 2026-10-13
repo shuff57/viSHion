@@ -471,9 +471,9 @@ pub fn choose(p: &mut Page, key: &str, via: &str, text: &str, settings: &mut Set
     if via == "typed" && key.starts_with('i') {
         remember(p, key, &typed, settings, topic, now);
     }
-    p.set("resolved", Value::Object(resolved));
-    p.set("edits", Value::Array(edits));
-    p.set("reviewed", Value::Bool(false));
+    p.set_carried("resolved", Value::Object(resolved));
+    p.set_carried("edits", Value::Array(edits));
+    p.set_carried("reviewed", Value::Bool(false));
     if key.starts_with('c') {
         let idx = jsx::string_to_number(key.chars().skip(2).collect::<String>().as_str());
         crate::judge::toggle(p, idx, via == "suggested");
@@ -491,9 +491,9 @@ pub fn reopen(p: &mut Page, key: &str) {
         .filter(|e| e.get("key").and_then(Value::as_str) != Some(key))
         .cloned()
         .collect();
-    p.set("resolved", Value::Object(resolved));
-    p.set("edits", Value::Array(edits));
-    p.set("reviewed", Value::Bool(false));
+    p.set_carried("resolved", Value::Object(resolved));
+    p.set_carried("edits", Value::Array(edits));
+    p.set_carried("reviewed", Value::Bool(false));
 }
 
 /// `W.useAll` for one page: use every suggestion that has no decision yet.

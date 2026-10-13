@@ -85,7 +85,7 @@ pub fn apply_found(p: &mut Page, found: &[Found]) {
         .iter()
         .map(|c| json!({"applied": false, "word": c.word, "term": c.term, "conf": num_value(c.conf)}))
         .collect();
-    p.set("corrections", Value::Array(arr));
+    p.set_carried("corrections", Value::Array(arr));
 }
 
 /// A suggestion is only a spelling fix: the replacement must be a glossary term, close to the written word
@@ -244,8 +244,8 @@ pub fn toggle(p: &mut Page, idx: f64, applied: bool) {
         })
         .collect();
     let corrected = rebuild(p.raw(), &next);
-    p.set("corrections", Value::Array(next));
-    p.set("corrected", Value::String(corrected));
+    p.set_carried("corrections", Value::Array(next));
+    p.set_carried("corrected", Value::String(corrected));
 }
 
 /// `J.applyAll`.
@@ -264,6 +264,6 @@ pub fn apply_all(p: &mut Page) {
         })
         .collect();
     let corrected = rebuild(p.raw(), &next);
-    p.set("corrections", Value::Array(next));
-    p.set("corrected", Value::String(corrected));
+    p.set_carried("corrections", Value::Array(next));
+    p.set_carried("corrected", Value::String(corrected));
 }

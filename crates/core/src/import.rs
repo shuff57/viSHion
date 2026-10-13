@@ -223,17 +223,17 @@ pub fn plan(
                 .collect(),
             _ => vec![],
         };
-        p.set("status", json!(if raw.is_empty() { "pending" } else { "done" }));
-        p.set("raw", json!(raw));
-        p.set("corrected", json!(final_text));
+        p.set_carried("status", json!(if raw.is_empty() { "pending" } else { "done" }));
+        p.set_carried("raw", json!(raw));
+        p.set_carried("corrected", json!(final_text));
         let n_corr = corrections.len();
-        p.set("corrections", Value::Array(corrections));
-        p.set("timings", json!({"ms": 0, "tokens": 0}));
+        p.set_carried("corrections", Value::Array(corrections));
+        p.set_carried("timings", json!({"ms": 0, "tokens": 0}));
         let mut resolved = Map::new();
         for i in 0..n_corr {
             resolved.insert(format!("c:{i}"), json!("suggested"));
         }
-        p.set("resolved", Value::Object(resolved));
+        p.set_carried("resolved", Value::Object(resolved));
 
         let image = s
             .get("id")
@@ -246,7 +246,7 @@ pub fn plan(
                 with_image += 1;
                 if !raw.is_empty() {
                     let b = boxes(&bytes, &raw);
-                    p.set("boxes", Value::Array(b));
+                    p.set_carried("boxes", Value::Array(b));
                 }
                 finish(&mut p, &mut order, &mut done_n);
                 pages.push(PlannedPage { page: p, image: Some(bytes) });
@@ -270,10 +270,10 @@ pub fn plan(
         .map_err(|e| e.to_string())?
         .normalized(opt.now);
     meta.set_order(&order);
-    meta.set("topic", json!(pick));
-    meta.set("prompt", json!(prompt));
-    meta.set("updated", json!(opt.now));
-    meta.set("stats", json!({"pages": order.len(), "done": done_n}));
+    meta.set_carried("topic", json!(pick));
+    meta.set_carried("prompt", json!(prompt));
+    meta.set_carried("updated", json!(opt.now));
+    meta.set_carried("stats", json!({"pages": order.len(), "done": done_n}));
     Ok(Plan { name, meta, pages, with_image })
 }
 
@@ -281,7 +281,7 @@ fn finish(p: &mut Page, order: &mut Vec<String>, done_n: &mut usize) {
     if p.status() == "done" {
         *done_n += 1;
     }
-    p.set("order", Value::from(order.len() as i64));
+    p.set_carried("order", Value::from(order.len() as i64));
     order.push(p.id().to_string());
 }
 

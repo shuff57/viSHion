@@ -33,6 +33,63 @@ fn string_units(t: &str, marker: char) -> Vec<String> {
     out
 }
 
+fn value_strings(v: &Value, f: &mut dyn FnMut(&str)) {
+    match v {
+        Value::String(t) => f(t),
+        Value::Array(a) => a.iter().for_each(|x| value_strings(x, f)),
+        Value::Object(m) => m.iter().for_each(|(k, x)| {
+            f(k);
+            value_strings(x, f);
+        }),
+        _ => {}
+    }
+}
+
+fn remark_value(v: &mut Value, old: char, new: char) {
+    match v {
+        Value::String(t) => *t = lenient::remark(t, old, new),
+        Value::Array(a) => a.iter_mut().for_each(|x| remark_value(x, old, new)),
+        Value::Object(m) => remark_map(m, old, new),
+        _ => {}
+    }
+}
+
+fn remark_map(m: &mut Map<String, Value>, old: char, new: char) {
+    let taken = std::mem::take(m);
+    for (k, mut x) in taken {
+        remark_value(&mut x, old, new);
+        m.insert(lenient::remark(&k, old, new), x);
+    }
+}
+
+/// Data typed or pasted after load is literal text. When `incoming` holds the document's marker directly
+/// followed by surrogate hex digits (which would be read back as a lone surrogate), move the document to
+/// a marker char that occurs nowhere in it, so the text is written as typed.
+fn guard_marker(doc: &mut Map<String, Value>, marker: &mut Marker, incoming: &Value) {
+    let m = marker.0;
+    let mut hit = false;
+    value_strings(incoming, &mut |s| hit |= lenient::has_lone_with(s, m));
+    if !hit {
+        return;
+    }
+    let mut all = serde_json::to_string(&*doc).unwrap_or_default();
+    all.push_str(&serde_json::to_string(incoming).unwrap_or_default());
+    let Some(new) = lenient::candidates().find(|c| !all.contains(*c)) else { return };
+    remark_map(doc, m, new);
+    marker.0 = new;
+}
+
+/// JS own-key order: canonical array-index keys ascending first, then the rest in insertion order.
+fn js_key_order(doc: Map<String, Value>) -> Map<String, Value> {
+    let idx = |k: &str| -> Option<u32> {
+        let ok = k == "0" || (!k.starts_with('0') && !k.is_empty() && k.bytes().all(|b| b.is_ascii_digit()));
+        if ok { k.parse::<u32>().ok().filter(|n| *n != u32::MAX) } else { None }
+    };
+    let (mut ints, rest): (Vec<_>, Vec<_>) = doc.into_iter().partition(|(k, _)| idx(k).is_some());
+    ints.sort_by_key(|(k, _)| idx(k));
+    ints.into_iter().chain(rest).collect()
+}
+
 fn s_of<'a>(m: &'a Map<String, Value>, k: &str) -> &'a str {
     m.get(k).and_then(Value::as_str).unwrap_or("")
 }
@@ -116,7 +173,7 @@ impl Project {
         for (k, v) in &self.doc {
             doc.insert(k.clone(), v.clone());
         }
-        Project { doc, marker: self.marker }
+        Project { doc: js_key_order(doc), marker: self.marker }
     }
     /// New empty document (`{}`).
     pub fn empty() -> Project {
@@ -127,7 +184,9 @@ impl Project {
         s_of(&self.doc, "name")
     }
     pub fn set_name(&mut self, name: &str) {
-        self.doc.insert("name".into(), Value::String(name.into()));
+        let v = Value::String(name.into());
+        guard_marker(&mut self.doc, &mut self.marker, &v);
+        self.doc.insert("name".into(), v);
     }
     /// Optional `id`; legacy files never have one.
     pub fn id(&self) -> Option<&str> {
@@ -166,7 +225,15 @@ impl Project {
             .collect();
         self.doc.insert("order".into(), Value::Array(arr));
     }
+    /// Set a field from user input. A string holding this document's lone-surrogate marker directly
+    /// followed by surrogate hex digits is literal text and is written as typed (see `guard_marker`).
     pub fn set(&mut self, key: &str, v: Value) {
+        guard_marker(&mut self.doc, &mut self.marker, &Value::Array(vec![Value::String(key.into()), v.clone()]));
+        self.doc.insert(key.into(), v);
+    }
+    /// Set a field from text taken out of this document's own in-memory strings (lone surrogates are
+    /// `marker` + hex there and stay lone surrogates).
+    pub fn set_carried(&mut self, key: &str, v: Value) {
         self.doc.insert(key.into(), v);
     }
     pub fn doc(&self) -> &Map<String, Value> {
@@ -216,6 +283,11 @@ impl Page {
         s_of(&self.0, k)
     }
     pub fn set(&mut self, k: &str, v: Value) {
+        guard_marker(&mut self.0, &mut self.2, &Value::Array(vec![Value::String(k.into()), v.clone()]));
+        self.0.insert(k.into(), v);
+    }
+    /// [`Project::set_carried`] for pages: text derived from this page's own in-memory strings.
+    pub fn set_carried(&mut self, k: &str, v: Value) {
         self.0.insert(k.into(), v);
     }
     pub fn id(&self) -> &str {
@@ -438,7 +510,7 @@ impl Assignment {
         let Some(p) = self.pages.get_mut(id) else { return };
         let changed = patch.get("status").map_or(false, |s| Some(s) != p.get("status"));
         for (k, v) in patch {
-            p.0.insert(k, v);
+            p.set(&k, v);
         }
         if changed {
             self.sync_stats();

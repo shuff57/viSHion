@@ -343,7 +343,7 @@ impl<S: Store> Projects<S> {
         let dst = self.unique_slug(&format!("{slug}-copy")).await?;
         self.copy_tree(slug, &dst).await?;
         let name = format!("{} copy", m.get("name").map(jsx::to_string).unwrap_or_default());
-        m.set_name(&name);
+        m.set_carried("name", json!(name));
         m.set("created", json!(now));
         m.set("updated", json!(now));
         self.write_text(&format!("{dst}/project.json"), &Self::pretty(&m)?).await?;
@@ -410,7 +410,12 @@ impl<S: Store> Projects<S> {
             match self.store.put(&format!("{slug}/{rel}"), bytes).await {
                 // a name the store can never hold (device names, trailing dot): skip it, keep importing
                 Err(StoreError::InvalidKey(_)) => skipped.push(path.clone()),
-                r => r?,
+                Ok(()) => {}
+                Err(e) => {
+                    // the slug is fresh: never leave a half-written project behind
+                    let _ = self.store.delete_tree(&slug).await;
+                    return Err(e);
+                }
             }
         }
         Ok((slug, skipped))

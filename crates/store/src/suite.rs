@@ -124,7 +124,7 @@ pub async fn run<S: Store>(store: S) -> std::result::Result<(), String> {
     check!(e(pr.read_text(&format!("{slug}/pages/pg2.json")).await)?.unwrap() == lone, "lone-surrogate page must write back byte-identical");
     let mut edited = o4.assignment.pages["pg2"].clone();
     let corrected = format!("{}!", edited.corrected());
-    edited.set("corrected", json!(corrected));
+    edited.set_carried("corrected", json!(corrected));
     edited.set("reviewed", json!(true));
     e(pr.save_page(&slug, &edited).await)?;
     let after = e(pr.read_text(&format!("{slug}/pages/pg2.json")).await)?.unwrap();

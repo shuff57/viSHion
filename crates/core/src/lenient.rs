@@ -43,7 +43,7 @@ fn encode_checked(text: &str) -> Result<Cow<'_, str>, ()> {
 
 /// Marker candidates in preference order: the plain default first, so a document that never collides
 /// keeps the historical marker.
-fn candidates() -> impl Iterator<Item = char> {
+pub fn candidates() -> impl Iterator<Item = char> {
     let astral = (1u32..=0x10).rev().flat_map(|p| [(p << 16) | 0xFFFE, (p << 16) | 0xFFFF]);
     astral.chain([0xFFFE, 0xFFFF]).chain(0xFDD0..=0xFDEF).filter_map(char::from_u32)
 }
@@ -188,6 +188,30 @@ pub fn has_lone(s: &str) -> bool {
 
 pub fn has_lone_with(s: &str, marker: char) -> bool {
     s.match_indices(marker).any(|(i, _)| surrogate_hex(&s[i + marker.len_utf8()..]).is_some())
+}
+
+/// In-memory strings only: replace each `old` + surrogate-hex (an escaped lone surrogate) by `new` + the
+/// same digits. A literal `old` not followed by surrogate hex is left alone.
+pub fn remark(s: &str, old: char, new: char) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(pos) = rest.find(old) {
+        out.push_str(&rest[..pos]);
+        let after = &rest[pos + old.len_utf8()..];
+        match surrogate_hex(after) {
+            Some(h) => {
+                out.push(new);
+                out.push_str(h);
+                rest = &after[4..];
+            }
+            None => {
+                out.push(old);
+                rest = after;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 /// Text for display: lone-surrogate markers become U+FFFD.
