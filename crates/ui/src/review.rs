@@ -7,7 +7,7 @@
 //! (transcript, strip, stage, tray, dialog), exactly as the JS handlers hang off those elements.
 use crate::dialog::{self, After, Dialog};
 use crate::flow;
-use crate::state::{self, BoxMode, Entry, Kind, Session, View};
+use crate::state::{self, BoxMode, Entry, Kind, PillKind, Session, View};
 use crate::theme::{self, Tokens};
 use crate::transcript::{self, Line, Run, Style};
 use crate::twin::{HEADER, SCAN, TEXT, TRAY};
@@ -28,6 +28,19 @@ pub(crate) struct Stage {
     target: Option<(Vec2, u8)>,
     /// Content height of the tray last frame (the phone tray scrolls inside half the screen).
     tray_h: f32,
+    /// What was last scrolled into view (review.js `scrollIntoView({ block: 'nearest' })`), so the view moves
+    /// when the selection moves and is otherwise left to the reader.
+    sel_seen: Option<(String, String)>,
+    tray_seen: bool,
+    read_seen: Option<usize>,
+    mark_seen: Option<(Option<usize>, Option<usize>)>,
+    /// Frames left in which the selected word / the reading line is kept in view. The tray (and the page's
+    /// layout) settle over a frame or two after a selection, so one request is not enough.
+    sel_left: u8,
+    read_left: u8,
+    /// Height of the transcript's scroll area last frame: when the tray grows (its crop arrives, the options
+    /// wrap) the selected word is brought back into view.
+    text_h: f32,
 }
 
 pub(crate) enum Act {
@@ -82,6 +95,9 @@ struct Cx<'a> {
     narrow: bool,
     screen_h: f32,
     stage: &'a mut Stage,
+    /// Keep the selected word / the reading line in view this frame.
+    scroll_sel: bool,
+    scroll_read: bool,
 }
 
 const TEXT_PX: f32 = 22.0;
@@ -91,6 +107,8 @@ const PITCH: f32 = TEXT_PX * 1.7;
 const CHIP_H: f32 = TEXT_PX * 1.35;
 /// `.tx-text { max-width: 31em }`
 const TEXT_MAX_W: f32 = 31.0 * TEXT_PX;
+/// `.katex { font-size: 1.21em }`: math is set 21% larger than the text around it.
+const KATEX_EM: f32 = 1.21;
 /// css/layout.css: below this width the panes stack and the header wraps.
 const NARROW: f32 = 900.0;
 
@@ -122,6 +140,8 @@ pub(crate) fn show(app: &mut App, ctx: &egui::Context, t: &Tokens) {
                 narrow,
                 screen_h: screen.height(),
                 stage: &mut *stage,
+                scroll_sel: false,
+                scroll_read: false,
             };
             egui::TopBottomPanel::top("hdr")
                 .min_height(64.0)
@@ -505,7 +525,7 @@ fn header(ui: &mut Ui, cx: &mut Cx, s: &Session) {
     }
 
     // does one row hold everything? (design: flex-wrap with the right group pushed to the end)
-    let brand_w = tw(ui, "viSHion", egui::FontId::new(17.0, egui::FontFamily::Monospace)) + 16.0;
+    let brand_w = widgets::BRAND_W;
     let crumb_w = (tw(ui, &name, theme::sans_medium(14.0)).min(220.0) + 50.0).max(TARGET);
     let left_w = brand_w + 24.0 + crumb_w + 24.0 + 44.0 + 4.0 + 100.0 + 4.0 + 44.0;
     let right_w = tw(ui, &save_text, theme::sans(13.0))
@@ -635,11 +655,16 @@ fn inbox(ctx: &egui::Context, cx: &mut Cx, s: &Session) {
                     let pg = ui.painter().layout_no_wrap(label.clone(), theme::sans_semi(13.0), t.ink);
                     let pr = Rect::from_center_size(pos2(r.rect.right() - 16.0 - (pg.size().x + 24.0) / 2.0, r.rect.center().y), pg.size() + vec2(24.0, 10.0));
                     let (bg, fg) = match kind {
-                        Kind::Warn => (t.warn, t.ink),
-                        Kind::Ok => (t.ok_bg, t.ok),
-                        Kind::Bad => (t.bad_bg, t.bad),
+                        PillKind::Warn => (t.warn, t.ink),
+                        PillKind::Ok => (t.ok_bg, t.ok),
+                        PillKind::Bad => (t.bad_bg, t.bad),
+                        PillKind::Busy => (t.hover, t.ink),
+                        PillKind::Queued => (Color32::TRANSPARENT, t.muted),
                     };
                     ui.painter().rect_filled(pr, 999.0, bg);
+                    if kind == PillKind::Queued {
+                        ui.painter().rect_stroke(pr, 999.0, Stroke::new(1.0, t.line2));
+                    }
                     ui.painter().galley(pr.center() - pg.size() / 2.0, pg, fg);
                     let first = g.pages.first().cloned().unwrap_or_default();
                     let lab = format!("Open {}, {}", g.name, label);
@@ -676,6 +701,39 @@ fn toast(ctx: &egui::Context, cx: &mut Cx, msg: &str, err: bool) {
 // ------------------------------------------------------------------ review
 
 fn review(ctx: &egui::Context, cx: &mut Cx, s: &Session, narrow: bool) {
+    // the word being decided is never left behind the tray; the reading line follows the arrow keys
+    // (review.js `scrollIntoView({ block: 'nearest' })`). A change starts a short run of frames, since the
+    // tray and the page settle over a frame or two.
+    let read = s.selected.as_ref().and_then(|id| s.read_line.get(id)).copied();
+    let st = &mut *cx.stage;
+    if s.sel_word.is_none() {
+        st.sel_seen = None;
+        st.sel_left = 0;
+    } else if st.sel_seen != s.sel_word || st.tray_seen != s.tray_open {
+        st.sel_seen = s.sel_word.clone();
+        st.tray_seen = s.tray_open;
+        st.sel_left = 6;
+    }
+    if read.is_none() {
+        st.read_seen = None;
+        st.read_left = 0;
+    } else if st.read_seen != read {
+        st.read_seen = read;
+        st.read_left = 6;
+    }
+    cx.scroll_sel = cx.stage.sel_left > 0;
+    cx.scroll_read = cx.stage.read_left > 0;
+    review_panes(ctx, cx, s, narrow);
+    let st = &mut *cx.stage;
+    for left in [&mut st.sel_left, &mut st.read_left] {
+        if *left > 0 {
+            *left -= 1;
+            ctx.request_repaint();
+        }
+    }
+}
+
+fn review_panes(ctx: &egui::Context, cx: &mut Cx, s: &Session, narrow: bool) {
     let t = cx.t;
     let g = s.group();
     let entries: Vec<Entry> = g.as_ref().map(|g| s.entries(g)).unwrap_or_default();
@@ -696,7 +754,7 @@ fn review(ctx: &egui::Context, cx: &mut Cx, s: &Session, narrow: bool) {
                 });
         }
         egui::CentralPanel::default().frame(egui::Frame::none().fill(t.surface)).show(ctx, |ui| {
-            egui::ScrollArea::vertical().auto_shrink([false, false]).id_source("review-scroll").show(ui, |ui| {
+            let out = egui::ScrollArea::vertical().auto_shrink([false, false]).id_source("review-scroll").show(ui, |ui| {
                 if s.split {
                     egui::Frame::none().fill(t.scanbg).show(ui, |ui| {
                         ui.set_width(ui.available_width());
@@ -706,6 +764,7 @@ fn review(ctx: &egui::Context, cx: &mut Cx, s: &Session, narrow: bool) {
                 }
                 text_column(ui, cx, s, g.as_ref(), &entries);
             });
+            note_view_height(cx, out.inner_rect.height());
         });
     } else {
         if s.split {
@@ -721,11 +780,20 @@ fn review(ctx: &egui::Context, cx: &mut Cx, s: &Session, narrow: bool) {
                         .frame(egui::Frame::none().fill(t.sunken).stroke(Stroke::new(1.0, t.line)))
                         .show_inside(ui, |ui| tray(ui, cx, s, &entries));
                 }
-                egui::ScrollArea::vertical().auto_shrink([false, false]).id_source("text-scroll").show(ui, |ui| {
+                let out = egui::ScrollArea::vertical().auto_shrink([false, false]).id_source("text-scroll").show(ui, |ui| {
                     text_column(ui, cx, s, g.as_ref(), &entries);
                 });
+                note_view_height(cx, out.inner_rect.height());
             });
     }
+}
+
+/// The tray changed height (its crop arrived, the options wrapped, a window resize): keep the word in view.
+fn note_view_height(cx: &mut Cx, h: f32) {
+    if cx.stage.text_h > 0.0 && (cx.stage.text_h - h).abs() > 0.5 {
+        cx.stage.sel_left = cx.stage.sel_left.max(4);
+    }
+    cx.stage.text_h = h;
 }
 
 /// `.tx-inner`: at most 760 wide, centred, 40 (20 on a phone) of padding.
@@ -981,7 +1049,7 @@ fn page_image(ui: &mut Ui, cx: &mut Cx, s: &Session, p: &Page, im: &Img, pad: f3
         return;
     }
     let n = vishion_core::render::units(p.raw()).len();
-    let Some((boxes, approx)) = state::geometry(p, n) else { return };
+    let Some((boxes, approx)) = state::geometry(p, n, &im.bands) else { return };
     let (kinds, sel_unit) = s.flagged_lines(p);
     let at = |b: &state::BBox| Rect::from_min_size(rect.min + vec2(b.x * w, b.y * h), vec2(b.w * w, b.h * h));
     if s.boxes == BoxMode::All && !approx {
@@ -1018,6 +1086,15 @@ fn page_image(ui: &mut Ui, cx: &mut Cx, s: &Session, p: &Page, im: &Img, pad: f3
             let y = r.bottom() + 1.0;
             pt.rect_filled(Rect::from_min_max(pos2(r.left(), y), pos2(r.right(), y + 4.0)), 2.0, t.accent);
         }
+    }
+    // the selected mark (or the reading line) is scrolled into view, as `drawBoxes` does
+    let now = (sel_unit, read);
+    if cx.stage.mark_seen != Some(now) {
+        let target = sel_unit.or(read).and_then(|i| boxes.get(i)).map(|b| at(b));
+        if let Some(r) = target {
+            ui.scroll_to_rect(Rect::from_min_max(r.min, pos2(r.max.x, r.max.y + 14.0)), None);
+        }
+        cx.stage.mark_seen = Some(now);
     }
 }
 
@@ -1057,7 +1134,11 @@ fn transcript_pane(ui: &mut Ui, cx: &mut Cx, s: &Session, g: Option<&vishion_cor
         let r = ui.add(egui::Label::new(RichText::new(&g.name).font(theme::serif_semi(32.0)).color(t.ink)).wrap());
         cx.ctl.heading("student-name", 1, &g.name, TEXT, r.rect.min);
         ui.add(egui::Label::new(RichText::new(&meta).font(theme::sans(14.0)).color(t.muted)).wrap());
-        if widgets::button(cx.ctl, ui, t, C::new("change-student", "Change student", TEXT), "Change student", Look::Ghost, 0.0) {
+        // `margin: 4px 0 0 -16px`: the button's text lines up with the name
+        let at = ui.cursor().min + vec2(-16.0, 4.0);
+        let clicked = widgets::button_at(cx.ctl, ui, t, C::new("change-student", "Change student", TEXT), "Change student", Look::Ghost, at);
+        ui.allocate_space(vec2(1.0, 4.0 + TARGET));
+        if clicked {
             cx.acts.push(Act::ChangeStudent);
         }
     };
@@ -1198,11 +1279,20 @@ fn legend(ui: &mut Ui, t: &Tokens) {
 fn plain_text(ui: &mut Ui, cx: &mut Cx, s: &Session, p: &Page) {
     let t = cx.t;
     let text = s.plain_text(p);
-    let w = ui.available_width();
-    let r = ui.add_sized(
-        vec2(w, 0.0),
-        egui::Label::new(RichText::new(&text).font(egui::FontId::new(13.0, egui::FontFamily::Monospace)).color(t.ink)).wrap(),
-    );
+    // `.tx-text.plain { white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/1.65 mono }`
+    let r = ui
+        .with_layout(Layout::top_down(Align::Min), |ui| {
+            ui.add(
+                egui::Label::new(
+                    RichText::new(&text)
+                        .font(egui::FontId::new(13.0, egui::FontFamily::Monospace))
+                        .line_height(Some(13.0 * 1.65))
+                        .color(t.ink),
+                )
+                .wrap(),
+            )
+        })
+        .inner;
     cx.ctl.text(&format!("plain-{}", p.id()), &text, TEXT, r.rect.min);
     transcript_group(ui, cx, r.rect);
 }
@@ -1285,14 +1375,14 @@ fn unit(ui: &mut Ui, cx: &mut Cx, s: &Session, p: &Page, line: &Line, items: &[w
 
     // display math alone on its line: a centred block
     if let Some(m) = line.display_only() {
-        let size = cx.math.get(&m.tex, true, px, t.ink).map(|r| r.size);
+        let size = cx.math.get(&m.tex, true, px * KATEX_EM, t.ink).map(|r| r.size);
         let h = size.map_or(PITCH, |sz| sz.y + 14.0) + 2.0;
         let (rect, _) = ui.allocate_exact_size(vec2(width, h), Sense::hover());
         cx.ctl.para_math(&m.tex);
         match size {
             Some(sz) => {
                 let at = pos2(rect.center().x - sz.x / 2.0, rect.top() + 1.0 + 7.0);
-                paint_math(ui, cx, &m.tex, true, px, at);
+                paint_math(ui, cx, &m.tex, true, px * KATEX_EM, at);
             }
             None => {
                 let col = if cx.math.pending() { t.muted } else { t.bad };
@@ -1302,6 +1392,9 @@ fn unit(ui: &mut Ui, cx: &mut Cx, s: &Session, p: &Page, line: &Line, items: &[w
         click_line(ui, cx, &id, rect, line.index);
         if reading {
             ui.painter().rect_filled(Rect::from_min_size(pos2(rect.left(), rect.bottom() - 4.0), vec2(rect.width(), 3.0)), 1.0, t.accent);
+            if cx.scroll_read {
+                ui.scroll_to_rect(rect, None);
+            }
         }
         cx.ctl.end_para(&id, TEXT, rect.min, true, reading);
         return rect;
@@ -1373,7 +1466,7 @@ fn unit(ui: &mut Ui, cx: &mut Cx, s: &Session, p: &Page, line: &Line, items: &[w
             Run::Math(n) => {
                 let m = &line.math[*n];
                 cx.ctl.para_math(&m.tex);
-                match cx.math.get(&m.tex, m.display, px, t.ink).map(|r| r.size) {
+                match cx.math.get(&m.tex, m.display, px * KATEX_EM, t.ink).map(|r| r.size) {
                     Some(sz) => {
                         it.push(flow::Item { w: sz.x + 4.0, h: sz.y + 2.0, trail: 0.0, brk: false });
                         atoms.push(Atom::Math { tex: m.tex.clone(), display: m.display });
@@ -1449,7 +1542,7 @@ fn unit(ui: &mut Ui, cx: &mut Cx, s: &Session, p: &Page, line: &Line, items: &[w
                 }
             }
             Atom::Math { tex, display } => {
-                paint_math(ui, cx, tex, *display, px, pos2(x, top));
+                paint_math(ui, cx, tex, *display, px * KATEX_EM, pos2(x, top));
             }
             Atom::Chip { id, label, g, kind, checked, selected, key } => {
                 let chip = Rect::from_min_size(pos2(x, origin.y + pl.line_top + (lh - CHIP_H) / 2.0), vec2(item.w, CHIP_H));
@@ -1457,11 +1550,18 @@ fn unit(ui: &mut Ui, cx: &mut Cx, s: &Session, p: &Page, line: &Line, items: &[w
                 let hit = Rect::from_center_size(chip.center(), vec2(chip.width().max(TARGET), TARGET));
                 let r = ui.interact(hit, ui.id().with(id.as_str()), Sense::click());
                 paint_chip(ui, t, chip, g, *kind, *checked, *selected, r.hovered());
+                if *selected && cx.scroll_sel {
+                    // `scrollIntoView({ block: 'nearest' })`: the whole 44pt target, a little air above and below
+                    ui.scroll_to_rect(hit.expand2(vec2(0.0, 6.0)), None);
+                }
                 if cx.ctl.reg(ui, &r, C::new(id, label, TEXT)) {
                     cx.acts.push(Act::Pick(p.id().to_string(), key.clone()));
                 }
             }
         }
+    }
+    if reading && cx.scroll_read {
+        ui.scroll_to_rect(rect, None);
     }
     if reading {
         // `text-decoration: underline 3px accent; text-underline-offset: 7px` on every visual line
@@ -1527,30 +1627,89 @@ fn paint_chip(ui: &mut Ui, t: &Tokens, chip: Rect, g: &std::sync::Arc<egui::Gall
     ui.painter().galley(chip.center() - g.size() / 2.0, g.clone(), color);
 }
 
+enum FootItem {
+    Text(String),
+    Btn { id: &'static str, label: &'static str, look: Look, act: Act },
+}
+
+/// `.tx-foot`: the token stat, the hint and the buttons as one flex-wrap row, left aligned. A hint that does
+/// not fit beside the stat takes a row of its own (it is never split to fill the rest of a row).
 fn foot(ui: &mut Ui, cx: &mut Cx, s: &Session, p: &Page, has_words: bool) {
     let t = cx.t;
     ui.add_space(28.0);
-    ui.horizontal_wrapped(|ui| {
-        ui.spacing_mut().item_spacing = vec2(16.0, 4.0);
-        let tokens = p.get("timings").and_then(|x| x.get("tokens")).and_then(|v| v.as_f64()).unwrap_or(0.0);
-        if tokens > 0.0 {
-            let ms = p.get("timings").and_then(|x| x.get("ms")).and_then(|v| v.as_f64()).unwrap_or(0.0);
-            ui.label(RichText::new(format!("{} tokens in {:.1}s", tokens, ms / 1000.0)).font(theme::sans(13.0)).color(t.muted));
-        }
-        if !s.text_raw && s.selected.as_ref().and_then(|id| s.read_line.get(id)).is_none() {
-            ui.label(RichText::new("Click a line, or use the up and down arrow keys, to underline where you are.").font(theme::sans(13.0)).color(t.muted));
-        }
-        if has_words && !s.tray_open && widgets::button(cx.ctl, ui, t, C::new("tray-open", "Check words", TEXT), "Check words", Look::Outline, 0.0) {
-            cx.acts.push(Act::Tray(true));
-        }
-        let (label, id) = if s.text_raw { ("Show formatted text", "text-view") } else { ("Show plain text", "text-view") };
-        if widgets::button(cx.ctl, ui, t, C::new(id, label, TEXT), label, Look::Ghost, 0.0) {
-            cx.acts.push(Act::TextView(!s.text_raw));
-        }
-        if widgets::button(cx.ctl, ui, t, C::new("transcribe-again", "Transcribe this page again", TEXT), "Transcribe this page again", Look::Ghost, 0.0) {
-            cx.acts.push(Act::Transcribe(p.id().to_string(), true));
-        }
+    ui.spacing_mut().item_spacing.y = 0.0;
+    let avail = ui.available_width();
+    let mut items: Vec<FootItem> = vec![];
+    let tokens = p.get("timings").and_then(|x| x.get("tokens")).and_then(|v| v.as_f64()).unwrap_or(0.0);
+    if tokens > 0.0 {
+        let ms = p.get("timings").and_then(|x| x.get("ms")).and_then(|v| v.as_f64()).unwrap_or(0.0);
+        items.push(FootItem::Text(format!("{} tokens in {:.1}s", tokens, ms / 1000.0)));
+    }
+    if !s.text_raw && s.selected.as_ref().and_then(|id| s.read_line.get(id)).is_none() {
+        items.push(FootItem::Text("Click a line, or use the up and down arrow keys, to underline where you are.".into()));
+    }
+    if has_words && !s.tray_open {
+        items.push(FootItem::Btn { id: "tray-open", label: "Check words", look: Look::Outline, act: Act::Tray(true) });
+    }
+    items.push(FootItem::Btn {
+        id: "text-view",
+        label: if s.text_raw { "Show formatted text" } else { "Show plain text" },
+        look: Look::Ghost,
+        act: Act::TextView(!s.text_raw),
     });
+    items.push(FootItem::Btn { id: "transcribe-again", label: "Transcribe this page again", look: Look::Ghost, act: Act::Transcribe(p.id().to_string(), true) });
+
+    const GAP: f32 = 16.0;
+    let width = |ui: &Ui, it: &FootItem| match it {
+        FootItem::Text(x) => tw(ui, x, theme::sans(13.0)).min(avail),
+        FootItem::Btn { label, .. } => tw(ui, label, theme::sans_semi(14.0)) + 36.0,
+    };
+    let mut rows: Vec<Vec<FootItem>> = vec![];
+    let mut used = 0.0;
+    for it in items {
+        let w = width(ui, &it);
+        match rows.last_mut() {
+            Some(row) if used + GAP + w <= avail + 0.5 => {
+                row.push(it);
+                used += GAP + w;
+            }
+            _ => {
+                rows.push(vec![it]);
+                used = w;
+            }
+        }
+    }
+    let n_rows = rows.len();
+    for (ri, row) in rows.into_iter().enumerate() {
+        let has_btn = row.iter().any(|i| matches!(i, FootItem::Btn { .. }));
+        let h = if has_btn { TARGET } else { 13.0 * 1.4 };
+        let single_wide = row.len() == 1 && matches!(&row[0], FootItem::Text(x) if tw(ui, x, theme::sans(13.0)) > avail);
+        let mut clicked: Vec<Act> = vec![];
+        let body = |ui: &mut Ui, cx: &mut Cx, clicked: &mut Vec<Act>| {
+            ui.spacing_mut().item_spacing.x = GAP;
+            for it in row {
+                match it {
+                    FootItem::Text(x) => {
+                        ui.add(egui::Label::new(RichText::new(x).font(theme::sans(13.0)).color(t.muted)).wrap());
+                    }
+                    FootItem::Btn { id, label, look, act } => {
+                        if widgets::button(cx.ctl, ui, t, C::new(id, label, TEXT), label, look, 0.0) {
+                            clicked.push(act);
+                        }
+                    }
+                }
+            }
+        };
+        if single_wide {
+            ui.with_layout(Layout::top_down(Align::Min), |ui| body(ui, cx, &mut clicked));
+        } else {
+            ui.allocate_ui_with_layout(vec2(avail, h), Layout::left_to_right(Align::Center), |ui| body(ui, cx, &mut clicked));
+        }
+        if ri + 1 < n_rows {
+            ui.add_space(4.0);
+        }
+        cx.acts.extend(clicked);
+    }
 }
 
 // ------------------------------------------------------------------ tray
@@ -1604,31 +1763,39 @@ fn tray(ui: &mut Ui, cx: &mut Cx, s: &Session, entries: &[Entry]) {
         ui.add_space(8.0);
 
         let crop = page.and_then(|p| crop_for(p, &cur, cx.images));
-        let stack = ui.available_width() < 560.0;
-        let mut body = |ui: &mut Ui| {
+        // `.tray-body { display: flex; flex-wrap: wrap; gap: 20px }`: the crop is `0 1 280px`, the options
+        // `1 1 300px`, so they sit side by side only when 280 + 20 + 300 fit; otherwise the crop comes first
+        // and the options take the whole row.
+        let total = ui.available_width();
+        let stack = crop.is_none() || total < 280.0 + 20.0 + 300.0;
+        let mut body = |ui: &mut Ui, alts_w: f32| {
             if let Some((tex, uv, size)) = crop {
-                ui.vertical(|ui| {
-                    ui.set_width(size.x);
-                    let (r, _) = ui.allocate_exact_size(size, Sense::hover());
-                    ui.painter().rect_filled(r.expand(4.0), 6.0, t.paper);
-                    ui.painter().image(tex, r, uv, Color32::WHITE);
+                let col_w = 280.0f32.min(total);
+                ui.allocate_ui_with_layout(vec2(col_w, 0.0), Layout::top_down(Align::Min), |ui| {
+                    ui.spacing_mut().item_spacing.y = 6.0;
+                    let dh = size.y.max(56.0);
+                    let (r, _) = ui.allocate_exact_size(vec2(col_w, dh), Sense::hover());
+                    ui.painter().rect_filled(r, 6.0, t.paper);
+                    let im = Rect::from_center_size(r.center(), size.min(vec2(col_w, 120.0)));
+                    ui.painter().image(tex, im, uv, Color32::WHITE);
                     ui.label(RichText::new("This line, as the student wrote it").font(theme::sans(13.0)).color(t.muted));
                 });
             }
-            ui.vertical(|ui| {
+            ui.allocate_ui_with_layout(vec2(alts_w, 0.0), Layout::top_down(Align::Min), |ui| {
+                ui.set_width(alts_w);
                 ui.spacing_mut().item_spacing.y = 8.0;
-                if !stack {
-                    ui.set_min_width(240.0);
-                }
                 alternatives(ui, cx, s, &cur);
             });
         };
         if stack {
-            ui.vertical(|ui| body(ui));
+            ui.vertical(|ui| {
+                ui.spacing_mut().item_spacing.y = 20.0;
+                body(ui, total);
+            });
         } else {
             ui.horizontal_top(|ui| {
                 ui.spacing_mut().item_spacing = vec2(20.0, 8.0);
-                body(ui);
+                body(ui, total - 280.0 - 20.0);
             });
         }
     });
@@ -1637,24 +1804,29 @@ fn tray(ui: &mut Ui, cx: &mut Cx, s: &Session, entries: &[Entry]) {
 fn alternatives(ui: &mut Ui, cx: &mut Cx, s: &Session, cur: &Entry) {
     let t = cx.t;
     let w = ui.available_width();
-    for (i, a) in s.alts(cur).iter().enumerate() {
-        let r = ui.allocate_response(vec2(w, 52.0), Sense::click());
+    for a in s.alts(cur).iter() {
+        // `.alt { padding: 6px 14px; gap: 12px }` with the radio (16px) before the text; the text wraps in the card
+        let text_x = 14.0 + 16.0 + 12.0;
+        let wrap = (w - text_x - 14.0 - 2.0).max(40.0);
+        let main = ui.painter().layout(a.label.clone(), theme::serif_semi(19.0), t.ink, wrap);
+        let hint = ui.painter().layout(a.hint.clone(), theme::sans(13.0), t.muted, wrap);
+        // css line boxes: 19px at 1.4 and 13px at 1.4 (a wrapped line adds its own)
+        let main_h = main.size().y.max(19.0 * 1.4);
+        let hint_h = hint.size().y.max(13.0 * 1.4);
+        let h = (2.0 + 12.0 + main_h + hint_h).max(TARGET).round();
+        let r = ui.allocate_response(vec2(w, h), Sense::click());
         let fill = if a.on { t.ok_bg } else if r.hovered() { t.sunken } else { t.surface };
         let line = if a.on { t.ok } else { t.line2 };
         ui.painter().rect_filled(r.rect, 8.0, fill);
         ui.painter().rect_stroke(r.rect, 8.0, Stroke::new(1.0, line));
         let c = pos2(r.rect.left() + 14.0 + 8.0, r.rect.center().y);
         ui.painter().circle(c, 8.0, t.surface, Stroke::new(if a.on { 5.0 } else { 2.0 }, if a.on { t.ok } else { t.faint }));
-        let main = ui.painter().layout_no_wrap(a.label.clone(), theme::serif_semi(19.0), t.ink);
-        let hint = ui.painter().layout_no_wrap(a.hint.clone(), theme::sans(13.0), t.muted);
-        let x = r.rect.left() + 14.0 + 16.0 + 12.0;
-        let top = r.rect.center().y - (main.size().y + hint.size().y) / 2.0;
-        let hy = top + main.size().y;
-        ui.painter().galley(pos2(x, top), main, t.ink);
-        ui.painter().galley(pos2(x, hy), hint, t.muted);
+        let x = r.rect.left() + text_x;
+        let top = (r.rect.center().y - (main_h + hint_h) / 2.0).round();
+        ui.painter().galley(pos2(x, (top + (main_h - main.size().y) / 2.0).round()), main, t.ink);
+        ui.painter().galley(pos2(x, (top + main_h + (hint_h - hint.size().y) / 2.0).round()), hint, t.muted);
         let label = format!("{}. {}", a.label, a.hint);
-        let _ = i;
-        if cx.ctl.reg(ui, &r, C::new(&format!("alt-{}", a.via), &label, TRAY).pressed(a.on)) {
+        if cx.ctl.reg(ui, &r, C::new(&a.id, &label, TRAY).pressed(a.on)) {
             cx.acts.push(Act::Choose(a.via, a.text.clone()));
         }
     }
@@ -1689,8 +1861,9 @@ fn alternatives(ui: &mut Ui, cx: &mut Cx, s: &Session, cur: &Entry) {
 fn crop_for(p: &Page, e: &Entry, images: &HashMap<String, Slot>) -> Option<(egui::TextureId, Rect, egui::Vec2)> {
     let Some(Slot::Ready(im)) = images.get(&e.page) else { return None };
     let n = vishion_core::render::units(p.raw()).len();
-    let (boxes, approx) = state::geometry(p, n)?;
-    if approx {
+    // only when the page has its own boxes and the ink scan found exactly as many lines as the transcript has
+    let boxes = state::stored_boxes(p);
+    if n == 0 || boxes.len() != n || im.bands.len() != n {
         return None;
     }
     let idx = state::unit_of(p, &e.item)?;

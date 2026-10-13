@@ -137,17 +137,35 @@ pub fn serif(size: f32) -> FontId {
 pub fn serif_semi(size: f32) -> FontId {
     FontId::new(size, named(SERIF_SEMI))
 }
+pub fn mono_bold(size: f32) -> FontId {
+    FontId::new(size, named(MONO_BOLD))
+}
 pub fn serif_italic(size: f32) -> FontId {
     FontId::new(size, named(SERIF_ITALIC))
 }
 
 pub const MONO: &str = "mono-400";
+pub const MONO_BOLD: &str = "mono-700";
+
+pub const FALLBACK: &str = "fallback-cjk-emoji";
+
+/// The CJK / Hangul / emoji fallback (Noto Sans JP, SC, KR and Noto Emoji, 4 MB). Native links it in; the web
+/// build fetches it on demand (`Cmd::LoadFallbackFont`) so it is not part of the wasm.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn bundled_fallback() -> Option<&'static [u8]> {
+    Some(include_bytes!("../assets/fonts/fallback-cjk-emoji.ttf"))
+}
+#[cfg(target_arch = "wasm32")]
+pub fn bundled_fallback() -> Option<&'static [u8]> {
+    None
+}
 
 /// Our faces only. egui's own fonts are not linked (see crates/vendor/PATCHES.md); Hack (Latin, Greek,
-/// operators) is the monospace face and the last fallback for glyphs the two main families lack.
-pub fn fonts() -> FontDefinitions {
+/// operators) is the monospace face, and `fallback` (when present) is the last resort for scripts the
+/// Latin faces do not have (CJK, Hangul, emoji: student writing is in any script).
+pub fn fonts(fallback: Option<&'static [u8]>) -> FontDefinitions {
     let mut f = FontDefinitions::empty();
-    let files: [(&str, &'static [u8]); 7] = [
+    let files: [(&str, &'static [u8]); 8] = [
         ("Instrument Sans", include_bytes!("../assets/fonts/instrument-sans-latin-400-normal.ttf")),
         (SANS_MEDIUM, include_bytes!("../assets/fonts/instrument-sans-latin-500-normal.ttf")),
         (SANS_SEMI, include_bytes!("../assets/fonts/instrument-sans-latin-600-normal.ttf")),
@@ -155,27 +173,39 @@ pub fn fonts() -> FontDefinitions {
         (SERIF_SEMI, include_bytes!("../assets/fonts/source-serif-4-latin-600-normal.ttf")),
         (SERIF_ITALIC, include_bytes!("../assets/fonts/source-serif-4-latin-400-italic.ttf")),
         (MONO, include_bytes!("../assets/fonts/hack-latin-400-normal.ttf")),
+        (MONO_BOLD, include_bytes!("../assets/fonts/hack-latin-700-normal.ttf")),
     ];
     for (name, bytes) in files {
         f.font_data.insert(name.to_string(), FontData::from_static(bytes));
     }
+    if let Some(bytes) = fallback {
+        f.font_data.insert(FALLBACK.to_string(), FontData::from_static(bytes));
+    }
     let with = |first: &str| -> Vec<String> {
-        if first == MONO {
-            vec![MONO.to_string()]
-        } else {
-            vec![first.to_string(), MONO.to_string()]
+        let mut v = if first == MONO { vec![MONO.to_string()] } else { vec![first.to_string(), MONO.to_string()] };
+        if fallback.is_some() {
+            v.push(FALLBACK.to_string());
         }
+        v
     };
     f.families.insert(FontFamily::Proportional, with("Instrument Sans"));
     for n in [SANS_MEDIUM, SANS_SEMI, SERIF, SERIF_SEMI, SERIF_ITALIC] {
         f.families.insert(named(n), with(n));
     }
     f.families.insert(FontFamily::Monospace, with(MONO));
+    f.families.insert(named(MONO_BOLD), with(MONO_BOLD));
     f
 }
 
-/// Install fonts and the visuals of `t`. Cheap enough to call when the theme changes.
+/// Coverage gamma of the font atlas per theme (see crates/vendor/PATCHES.md): dark text on light matches the
+/// browser at 1.0, light text on dark needs a boost to read as heavy as the browser draws it.
+pub const GAMMA_LIGHT: f32 = 1.0;
+pub const GAMMA_DARK: f32 = 0.5;
+
+/// Install fonts and the visuals of `t`. Cheap enough to call when the theme changes. The caller sets the
+/// fonts again afterwards (`set_fonts`) so the atlas is rebuilt with the theme's gamma.
 pub fn apply(ctx: &egui::Context, t: &Tokens) {
+    eframe::egui_glow::set_font_gamma(if t.dark { GAMMA_DARK } else { GAMMA_LIGHT });
     let mut v = if t.dark { Visuals::dark() } else { Visuals::light() };
     v.override_text_color = Some(t.ink);
     v.panel_fill = t.bg;
@@ -203,10 +233,13 @@ pub fn apply(ctx: &egui::Context, t: &Tokens) {
 }
 
 pub fn install(ctx: &egui::Context) {
-    ctx.set_fonts(fonts());
+    ctx.set_fonts(fonts(bundled_fallback()));
     let mut style = (*ctx.style()).clone();
     style.spacing.interact_size.y = 44.0;
     style.spacing.button_padding = egui::vec2(14.0, 6.0);
+    // overlay scrollbars that are not drawn at rest (the page pane has none until it is scrolled or hovered)
+    style.spacing.scroll.dormant_handle_opacity = 0.0;
+    style.spacing.scroll.dormant_background_opacity = 0.0;
     style.spacing.item_spacing = egui::vec2(8.0, 8.0);
     style.text_styles.insert(egui::TextStyle::Body, sans(14.0));
     style.text_styles.insert(egui::TextStyle::Button, sans_semi(14.0));

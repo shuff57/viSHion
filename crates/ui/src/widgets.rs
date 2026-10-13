@@ -2,7 +2,7 @@
 //! is at least 44 x 44 points and goes through `Ctl::reg`.
 use crate::theme::{self, Tokens};
 use crate::{Ctl, C};
-use egui::{pos2, vec2, Color32, FontFamily, FontId, Rect, Response, Sense, Shape, Stroke, Ui};
+use egui::{pos2, vec2, Color32, Rect, Response, Sense, Shape, Stroke, Ui};
 
 pub const TARGET: f32 = 44.0;
 
@@ -46,12 +46,31 @@ pub fn button(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, c: C, text: &str, look: Lo
     let w = (g.size().x + 36.0).max(min_w);
     let sense = if c.disabled { Sense::hover() } else { Sense::click() };
     let r = ui.allocate_response(vec2(w, TARGET), sense);
-    paint_look(ui, &r, t, look, false, c.disabled);
+    paint_button(ui, &r, t, &c, g, look);
+    ctl.reg(ui, &r, c)
+}
+
+fn paint_button(ui: &Ui, r: &Response, t: &Tokens, c: &C, g: std::sync::Arc<egui::Galley>, look: Look) {
+    let fg = match look {
+        Look::Primary => t.on_ink,
+        _ => if c.disabled { t.faint } else { t.ink },
+    };
+    paint_look(ui, r, t, look, false, c.disabled);
     let pos = r.rect.center() - g.size() / 2.0;
     ui.painter().galley(pos, g, fg);
+}
+
+/// A text button drawn at `at` (its top left) without moving the layout cursor: for the design's negative
+/// margins (`margin: 4px 0 0 -16px`). The caller reserves the space it wants itself.
+pub fn button_at(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, c: C, text: &str, look: Look, at: egui::Pos2) -> bool {
+    let fg = if c.disabled { t.faint } else { t.ink };
+    let g = ui.painter().layout_no_wrap(text.to_string(), theme::sans_semi(14.0), fg);
+    let rect = Rect::from_min_size(at, vec2(g.size().x + 36.0, TARGET));
+    let sense = if c.disabled { Sense::hover() } else { Sense::click() };
+    let r = ui.interact(rect, ui.id().with(("button-at", c.id)), sense);
+    paint_button(ui, &r, t, &c, g, look);
     let disabled = c.disabled;
-    let on = ctl.reg(ui, &r, c);
-    on && !disabled
+    ctl.reg(ui, &r, c) && !disabled
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -73,94 +92,64 @@ pub enum Icon {
     Check,
 }
 
-/// Line icons in the style of js/ui/icons.js (2px strokes, round caps). `size` is the glyph box, 20 to 40.
-pub fn paint_icon(ui: &Ui, rect: Rect, icon: Icon, color: Color32) {
-    let c = rect.center();
-    let k = rect.width().min(rect.height()) / 24.0; // 24-unit design grid
-    let s = Stroke::new((1.8 * k).max(1.5), color);
-    let p = ui.painter();
-    let at = |x: f32, y: f32| pos2(c.x + x * k, c.y + y * k);
-    let line = |pts: &[(f32, f32)]| {
-        p.add(Shape::line(pts.iter().map(|(x, y)| at(*x, *y)).collect(), s));
-    };
+/// The 24 x 24 stroke paths of js/ui/icons.js, verbatim (circles and the dashed rect written as paths).
+fn icon_path(icon: Icon) -> &'static str {
     match icon {
-        Icon::Left => line(&[(3.0, -7.0), (-3.5, 0.0), (3.0, 7.0)]),
-        Icon::Right => line(&[(-3.0, -7.0), (3.5, 0.0), (-3.0, 7.0)]),
-        Icon::Close => {
-            line(&[(-6.0, -6.0), (6.0, 6.0)]);
-            line(&[(6.0, -6.0), (-6.0, 6.0)]);
+        Icon::Gear => "M9 12a3 3 0 1 0 6 0a3 3 0 1 0-6 0M19.4 15a1.7 1.7 0 00.3 1.8l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.7 1.7 0 00-1.8-.3 1.7 1.7 0 00-1 1.5V21a2 2 0 11-4 0v-.1a1.7 1.7 0 00-1.1-1.5 1.7 1.7 0 00-1.8.3l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.7 1.7 0 00.3-1.8 1.7 1.7 0 00-1.5-1H3a2 2 0 110-4h.1a1.7 1.7 0 001.5-1.1 1.7 1.7 0 00-.3-1.8l-.1-.1a2 2 0 112.8-2.8l.1.1a1.7 1.7 0 001.8.3H9a1.7 1.7 0 001-1.5V3a2 2 0 114 0v.1a1.7 1.7 0 001 1.5 1.7 1.7 0 001.8-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.7 1.7 0 00-.3 1.8V9a1.7 1.7 0 001.5 1H21a2 2 0 110 4h-.1a1.7 1.7 0 00-1.5 1z",
+        Icon::Left => "M15 18l-6-6 6-6",
+        Icon::Right => "M9 18l6-6-6-6",
+        Icon::Check => "M5 12.5l4.5 4.5L19 7.5",
+        Icon::Close => "M6 6l12 12M18 6L6 18",
+        Icon::Plus => "M12 5v14M5 12h14",
+        Icon::Trash => "M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 002 2h6a2 2 0 002-2l1-12M9 7V4h6v3",
+        Icon::Warn => "M12 3l10 18H2L12 3zM12 10v5M12 18v.01",
+        Icon::Rotate => "M20 12a8 8 0 11-2.6-5.9M20 4v5h-5",
+        Icon::Swap => "M4 8h13l-3-3M20 16H7l3 3",
+        Icon::Boxes => "M6 4h12a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z",
+        Icon::Page => "M7 3h7l5 5v13H7zM14 3v5h5",
+        Icon::Level => "M4 9l16-3M4 14l16-3M4 19l16-3",
+        Icon::ZoomIn => "M4 11a7 7 0 1 0 14 0a7 7 0 1 0-14 0M20 20l-4-4M11 8v6M8 11h6",
+        Icon::ZoomOut => "M4 11a7 7 0 1 0 14 0a7 7 0 1 0-14 0M20 20l-4-4M8 11h6",
+    }
+}
+
+thread_local! {
+    static ICONS: std::cell::RefCell<std::collections::HashMap<&'static str, std::rc::Rc<Vec<crate::svgpath::Sub>>>> = Default::default();
+}
+
+fn icon_subs(icon: Icon) -> std::rc::Rc<Vec<crate::svgpath::Sub>> {
+    let d = icon_path(icon);
+    ICONS.with(|m| m.borrow_mut().entry(d).or_insert_with(|| std::rc::Rc::new(crate::svgpath::parse(d))).clone())
+}
+
+/// The line icons of js/ui/icons.js: the same paths, `stroke-width: 2` on the 24-unit grid, scaled to
+/// `rect` (the glyph box, 20 to 40).
+pub fn paint_icon(ui: &Ui, rect: Rect, icon: Icon, color: Color32) {
+    let k = rect.width().min(rect.height()) / 24.0;
+    let c = rect.center();
+    let s = Stroke::new((2.0 * k).max(1.5), color);
+    let p = ui.painter();
+    let map = |q: &[f32; 2]| pos2(c.x + (q[0] - 12.0) * k, c.y + (q[1] - 12.0) * k);
+    for sub in icon_subs(icon).iter() {
+        let mut pts: Vec<egui::Pos2> = sub.pts.iter().map(map).collect();
+        if sub.closed && pts.len() > 1 {
+            pts.push(pts[0]);
         }
-        Icon::Boxes => {
-            for dy in [-6.0, 0.0, 6.0] {
-                line(&[(-8.0, dy), (8.0, dy)]);
+        if pts.len() == 2 && pts[0] == pts[1] {
+            p.circle_filled(pts[0], s.width / 2.0, color);
+        } else if icon == Icon::Boxes {
+            p.add(Shape::dashed_line(&pts, s, 3.0 * k, 3.0 * k));
+        } else {
+            p.add(Shape::line(pts, s));
+            // round joins and caps: a dot at every vertex of a thick stroke
+            if s.width > 1.6 {
+                let r = s.width / 2.0;
+                let first = map(&sub.pts[0]);
+                let last = map(sub.pts.last().unwrap());
+                p.circle_filled(first, r, color);
+                p.circle_filled(last, r, color);
             }
-            for x in [-10.0f32, 10.0] {
-                p.add(Shape::dashed_line(&[at(x, -10.0), at(x, 10.0)], Stroke::new(1.5 * k, color), 3.0 * k, 3.0 * k));
-            }
         }
-        Icon::Gear => {
-            p.circle_stroke(c, 3.0 * k, s);
-            p.circle_stroke(c, 7.5 * k, s);
-            for i in 0..8 {
-                let a = i as f32 * std::f32::consts::FRAC_PI_4;
-                let (sn, cs) = a.sin_cos();
-                p.line_segment([at(cs * 7.5, sn * 7.5), at(cs * 10.0, sn * 10.0)], Stroke::new(2.6 * k, color));
-            }
-        }
-        Icon::ZoomIn | Icon::ZoomOut => {
-            p.circle_stroke(at(-2.0, -2.0), 7.0 * k, s);
-            line(&[(3.0, 3.0), (9.0, 9.0)]);
-            line(&[(-5.5, -2.0), (1.5, -2.0)]);
-            if icon == Icon::ZoomIn {
-                line(&[(-2.0, -5.5), (-2.0, 1.5)]);
-            }
-        }
-        Icon::Rotate => {
-            // three quarters of a circle with an arrow head
-            let pts: Vec<(f32, f32)> = (0..=18)
-                .map(|i| {
-                    let a = -0.3 + i as f32 * (std::f32::consts::PI * 1.5) / 18.0;
-                    (a.cos() * 7.5, a.sin() * 7.5)
-                })
-                .collect();
-            line(&pts);
-            let (ex, ey) = pts[pts.len() - 1];
-            line(&[(ex - 1.0, ey - 4.5), (ex, ey), (ex + 4.5, ey - 1.5)]);
-        }
-        Icon::Level => {
-            line(&[(-9.0, 4.0), (9.0, -4.0)]);
-            p.circle_stroke(at(0.0, 5.5), 2.2 * k, s);
-            line(&[(-9.0, 9.0), (9.0, 9.0)]);
-        }
-        Icon::Swap => {
-            line(&[(-8.0, -4.0), (8.0, -4.0)]);
-            line(&[(4.0, -8.0), (8.0, -4.0), (4.0, 0.0)]);
-            line(&[(8.0, 5.0), (-8.0, 5.0)]);
-            line(&[(-4.0, 1.0), (-8.0, 5.0), (-4.0, 9.0)]);
-        }
-        Icon::Trash => {
-            line(&[(-8.0, -5.0), (8.0, -5.0)]);
-            line(&[(-3.0, -5.0), (-3.0, -8.0), (3.0, -8.0), (3.0, -5.0)]);
-            line(&[(-6.0, -5.0), (-5.0, 9.0), (5.0, 9.0), (6.0, -5.0)]);
-            line(&[(-2.0, -1.0), (-2.0, 5.0)]);
-            line(&[(2.0, -1.0), (2.0, 5.0)]);
-        }
-        Icon::Plus => {
-            line(&[(-7.0, 0.0), (7.0, 0.0)]);
-            line(&[(0.0, -7.0), (0.0, 7.0)]);
-        }
-        Icon::Page => {
-            line(&[(-7.0, -10.0), (2.0, -10.0), (7.0, -5.0), (7.0, 10.0), (-7.0, 10.0), (-7.0, -10.0)]);
-            line(&[(2.0, -10.0), (2.0, -5.0), (7.0, -5.0)]);
-            line(&[(-3.0, 1.0), (3.0, 1.0)]);
-            line(&[(-3.0, 5.0), (3.0, 5.0)]);
-        }
-        Icon::Warn => {
-            line(&[(0.0, -9.0), (9.0, 7.0), (-9.0, 7.0), (0.0, -9.0)]);
-            line(&[(0.0, -3.0), (0.0, 2.0)]);
-            line(&[(0.0, 5.0), (0.0, 5.2)]);
-        }
-        Icon::Check => line(&[(-6.0, 0.5), (-2.0, 5.0), (7.0, -5.0)]),
     }
 }
 
@@ -197,17 +186,21 @@ pub fn crumb(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, c: C, name: &str, max_w: f3
     ctl.reg(ui, &r, c)
 }
 
-/// The wordmark: "vi" "SH" "ion", a button that returns to the assignment.
+/// The wordmark at rest (header.js `logo`): "vi" "SH" "ion" in 600 weight monospace, the SH in the accent,
+/// in an svg 32px high (viewBox 312 x 84), so 119px wide with the text stretched to 114px.
+pub const BRAND_W: f32 = 119.0;
+
 pub fn brand(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, c: C) -> bool {
-    let font = FontId::new(17.0, FontFamily::Monospace);
+    let font = theme::mono_bold(26.5);
     let parts = [("vi", t.ink), ("SH", t.accent), ("ion", t.ink)];
-    let gs: Vec<_> = parts.iter().map(|(s, col)| ui.painter().layout_no_wrap((*s).to_string(), font.clone(), *col)).collect();
-    let w: f32 = gs.iter().map(|g| g.size().x).sum::<f32>() + 16.0;
-    let r = ui.allocate_response(vec2(w, TARGET), Sense::click());
-    let mut x = r.rect.left() + 8.0;
-    for (g, (_, col)) in gs.into_iter().zip(parts) {
+    let r = ui.allocate_response(vec2(BRAND_W, TARGET), Sense::click());
+    let hover = if r.hovered() { Some(t.accent) } else { None };
+    let gs: Vec<_> = parts.iter().map(|(s, col)| ui.painter().layout_no_wrap((*s).to_string(), font.clone(), hover.unwrap_or(*col))).collect();
+    let total: f32 = gs.iter().map(|g| g.size().x).sum();
+    let mut x = r.rect.left() + 2.0 + (114.0 - total) / 2.0;
+    for g in gs {
         let sz = g.size();
-        ui.painter().galley(pos2(x, r.rect.center().y - sz.y / 2.0), g, col);
+        ui.painter().galley(pos2(x, r.rect.center().y - sz.y / 2.0 - 1.0), g, Color32::PLACEHOLDER);
         x += sz.x;
     }
     ctl.reg(ui, &r, c)
@@ -260,17 +253,22 @@ pub fn seg(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, region: u8, group: &str, item
     clicked
 }
 
-/// A rounded status pill (not interactive).
-pub fn pill(ui: &mut Ui, t: &Tokens, kind: crate::state::Kind, text: &str) -> Rect {
-    use crate::state::Kind::*;
-    let (bg, fg) = match kind {
-        Warn => (t.warn, t.ink),
-        Ok => (t.ok_bg, t.ok),
-        Bad => (t.bad_bg, t.bad),
+/// A rounded status pill (not interactive): `.pill` in css/base.css.
+pub fn pill(ui: &mut Ui, t: &Tokens, kind: crate::state::PillKind, text: &str) -> Rect {
+    use crate::state::PillKind::*;
+    let (bg, fg, outline) = match kind {
+        Warn => (t.warn, t.ink, false),
+        Ok => (t.ok_bg, t.ok, false),
+        Bad => (t.bad_bg, t.bad, false),
+        Busy => (t.hover, t.ink, false),
+        Queued => (Color32::TRANSPARENT, t.muted, true),
     };
     let g = ui.painter().layout_no_wrap(text.to_string(), theme::sans_semi(14.0), fg);
     let (rect, _) = ui.allocate_exact_size(g.size() + vec2(28.0, 12.0), Sense::hover());
     ui.painter().rect_filled(rect, 999.0, bg);
+    if outline {
+        ui.painter().rect_stroke(rect, 999.0, Stroke::new(1.0, t.line2));
+    }
     ui.painter().galley(rect.center() - g.size() / 2.0, g, fg);
     rect
 }

@@ -43,6 +43,8 @@ if (!debug && !process.argv.includes('--no-opt') && fs.existsSync(optBin)) {
 // The math font is not linked into the wasm (it would be 840 KB of the download): ui::math asks the host for
 // it the first time a page has a formula, and the host fetches this file.
 fs.copyFileSync(path.join(repo, 'crates/vendor/latex-rust/fonts/stix-two-math/STIXTwoMath-Regular.otf'), path.join(dist, 'stix-two-math.otf'));
+// Same for the CJK / Hangul / emoji fallback face (4 MB): fetched only when a page has such text.
+fs.copyFileSync(path.join(repo, 'crates/ui/assets/fonts/fallback-cjk-emoji.ttf'), path.join(dist, 'fallback-cjk-emoji.ttf'));
 fs.copyFileSync(path.join(here, 'index.html'), path.join(dist, 'index.html'));
 fs.copyFileSync(path.join(repo, 'favicon.svg'), path.join(dist, 'favicon.svg'));
 
@@ -66,6 +68,9 @@ const headers = `/*
   Cache-Control: public, max-age=0, must-revalidate
 
 /stix-two-math.otf
+  Cache-Control: public, max-age=31536000, immutable
+
+/fallback-cjk-emoji.ttf
   Cache-Control: public, max-age=31536000, immutable
 `;
 fs.writeFileSync(path.join(dist, '_headers'), headers);

@@ -16,6 +16,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+mod bands;
 mod dialog;
 mod flow;
 pub mod host;
@@ -25,6 +26,7 @@ pub mod state;
 pub mod theme;
 pub mod transcript;
 pub mod twin;
+mod svgpath;
 mod widgets;
 
 #[cfg(target_arch = "wasm32")]
@@ -68,7 +70,11 @@ pub struct KeyEv {
 /// The control layer: activation, twin focus and the node list of this frame.
 #[derive(Default)]
 pub struct Ctl {
-    act: HashSet<String>,
+    /// Activations from the twin, oldest first. A control takes one per frame, so several quick activations
+    /// of the same button (key repeat, a script) are each applied instead of coalescing into one.
+    act: Vec<String>,
+    /// Ids that took an activation this frame (the rest of their queue waits for the next frame).
+    consumed: HashSet<String>,
     focus: Option<String>,
     /// Text typed into a twin textbox, by id (consumed by the widget that owns it).
     typed: HashMap<String, String>,
@@ -139,7 +145,14 @@ impl Ctl {
             size: (r.rect.width().round() as u16, r.rect.height().round() as u16),
         });
         self.track_focus(ui, r, c.id, c.region);
-        let from_dom = self.act.remove(c.id);
+        let from_dom = match self.act.iter().position(|a| a == c.id) {
+            Some(i) => {
+                self.act.remove(i);
+                self.consumed.insert(c.id.to_string());
+                true
+            }
+            None => false,
+        };
         !c.disabled && (r.clicked() || from_dom)
     }
 
@@ -228,7 +241,7 @@ impl Ctl {
         let msgs: Vec<String> = std::mem::take(&mut *q.lock().unwrap());
         for m in msgs {
             if let Some(id) = m.strip_prefix("act:") {
-                self.act.insert(id.into());
+                self.act.push(id.into());
             } else if let Some(id) = m.strip_prefix("focus:") {
                 self.focus = Some(id.into());
             } else if let Some(id) = m.strip_prefix("blur:") {
@@ -256,6 +269,8 @@ pub(crate) struct Img {
     pub thumb: egui::TextureHandle,
     /// Pixel size of the full image.
     pub size: (u32, u32),
+    /// Ink bands of the picture (`image.js lineBands`): where the writing is, for pages without stored boxes.
+    pub bands: Vec<bands::Band>,
 }
 
 pub(crate) enum Slot {
@@ -300,6 +315,11 @@ pub struct App {
     /// Scroll position and size of the page stage, kept so zoom can hold the middle of the view.
     stage: review::Stage,
     font_requested: bool,
+    /// The fallback font is installed / was asked for / the text last checked for glyphs it needs.
+    fallback_loaded: bool,
+    fallback_font: Option<&'static [u8]>,
+    fallback_requested: bool,
+    fallback_seen: Option<(String, usize)>,
     theme_name: String,
     theme_override: Option<String>,
     dark_applied: Option<bool>,
@@ -339,6 +359,10 @@ impl App {
             dialog: None,
             stage: review::Stage::default(),
             font_requested: false,
+            fallback_loaded: theme::bundled_fallback().is_some(),
+            fallback_font: theme::bundled_fallback(),
+            fallback_requested: false,
+            fallback_seen: None,
             theme_name: "auto".into(),
             theme_override: None,
             dark_applied: None,
@@ -491,6 +515,14 @@ impl App {
                     }
                 }
                 Event::MathFont(bytes) => self.math.set_font(bytes),
+                Event::FallbackFont(bytes) => {
+                    if !bytes.is_empty() {
+                        let leaked: &'static [u8] = Box::leak(bytes.into_boxed_slice());
+                        self.fallback_font = Some(leaked);
+                        self.ctx.set_fonts(theme::fonts(Some(leaked)));
+                        self.fallback_loaded = true;
+                    }
+                }
             }
         }
     }
@@ -544,6 +576,35 @@ impl App {
         }
     }
 
+    /// Web: ask for the fallback font once the open page has a character none of the bundled faces can draw.
+    fn check_fallback_font(&mut self, ctx: &egui::Context) {
+        if self.fallback_loaded || self.fallback_requested {
+            return;
+        }
+        let Some(s) = &self.session else { return };
+        let Some(p) = s.current() else { return };
+        let key = (p.id().to_string(), p.raw().len());
+        if self.fallback_seen.as_ref() == Some(&key) {
+            return;
+        }
+        let missing = ctx.fonts(|f| {
+            let probe = theme::serif(22.0);
+            let mut absent = false;
+            for c in p.raw().chars().chain(s.group().map(|g| g.name).unwrap_or_default().chars()) {
+                if !c.is_control() && !c.is_whitespace() && c as u32 >= 0x2E80 && !f.has_glyph(&probe, c) {
+                    absent = true;
+                    break;
+                }
+            }
+            absent
+        });
+        self.fallback_seen = Some(key);
+        if missing {
+            self.fallback_requested = true;
+            self.send(Cmd::LoadFallbackFont);
+        }
+    }
+
     fn ui_frame(&mut self, ctx: &egui::Context, system_dark: bool) {
         // theme
         let name = self
@@ -555,6 +616,8 @@ impl App {
         let t = theme::pick(&self.theme_name, system_dark);
         if self.dark_applied != Some(t.dark) {
             theme::apply(ctx, t);
+            // a new font atlas, with this theme's coverage gamma
+            ctx.set_fonts(theme::fonts(self.fallback_font));
             self.dark_applied = Some(t.dark);
         }
         self.ctl.ring = t.ink;
@@ -564,17 +627,30 @@ impl App {
     }
 }
 
+/// `lineBands` on a 420 pixel wide copy of the page, as the JS canvas does.
+fn scan_bands(im: &image::DynamicImage) -> Vec<bands::Band> {
+    let w = bands::SCAN_W;
+    let h = 40.max((im.height() as f64 * w as f64 / im.width().max(1) as f64).round() as u32);
+    let small = im.resize_exact(w, h, image::imageops::FilterType::Triangle).to_rgba8();
+    let lum: Vec<u8> = small
+        .pixels()
+        .map(|p| ((p[0] as u32 * 299 + p[1] as u32 * 587 + p[2] as u32 * 114) / 1000) as u8)
+        .collect();
+    bands::line_bands(&lum, w as usize, h as usize)
+}
+
 fn decode_image(ctx: &egui::Context, id: &str, bytes: &[u8]) -> Option<Img> {
     let im = image::load_from_memory(bytes).ok()?;
     let im = if im.width().max(im.height()) > 3000 { im.thumbnail(3000, 3000) } else { im };
     let size = (im.width(), im.height());
+    let bands = scan_bands(&im);
     let rgba = im.to_rgba8();
     let ci = egui::ColorImage::from_rgba_unmultiplied([size.0 as usize, size.1 as usize], rgba.as_raw());
     let full = ctx.load_texture(format!("page-{id}"), ci, egui::TextureOptions::LINEAR);
     let th = im.thumbnail(132, 168).to_rgba8();
     let ti = egui::ColorImage::from_rgba_unmultiplied([th.width() as usize, th.height() as usize], th.as_raw());
     let thumb = ctx.load_texture(format!("thumb-{id}"), ti, egui::TextureOptions::LINEAR);
-    Some(Img { full, thumb, size })
+    Some(Img { full, thumb, size, bands })
 }
 
 impl eframe::App for App {
@@ -592,8 +668,13 @@ impl App {
         self.handle_events();
         self.ctl.focused = None;
         self.ui_frame(ctx, system_dark);
-        // an activation or typed text whose control was not on screen this frame is dropped, not kept
-        self.ctl.act.clear();
+        // an activation or typed text whose control was not on screen this frame is dropped, not kept; what a
+        // control has queued beyond the one it took this frame waits for the next frame
+        let consumed = std::mem::take(&mut self.ctl.consumed);
+        self.ctl.act.retain(|id| consumed.contains(id));
+        if !self.ctl.act.is_empty() {
+            ctx.request_repaint();
+        }
         self.ctl.typed.clear();
         self.ctl.keys.clear();
 
@@ -615,6 +696,7 @@ impl App {
             #[cfg(not(target_arch = "wasm32"))]
             let _ = id;
         }
+        self.check_fallback_font(ctx);
         if self.math.wants_font() && !self.font_requested {
             self.font_requested = true;
             self.send(Cmd::LoadMathFont);

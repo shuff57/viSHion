@@ -19,3 +19,12 @@ output is byte-identical (checked by `ui::math` tests).
 
 Wired in with `[patch.crates-io]`. Drop it when latex-rust makes the egui features default-less upstream or when
 the pin to egui 0.28 is lifted.
+
+## egui_glow 0.28.1
+
+Copy of the crates.io release (src, README, `Cargo.toml` without the examples) with one addition in
+`src/painter.rs`: the font atlas is converted with a coverage gamma the app sets (`egui_glow::set_font_gamma`,
+default 1.0) instead of egui's fixed 0.55. At 0.55 dark text on the light theme is visibly heavier than the
+browser's rendering of the same face at the same size (the review screen's transcript is the compared
+surface), while light text on the dark theme wants a boost, so `ui::theme` sets the gamma per theme and sets
+the fonts again to rebuild the atlas. Wired in with `[patch.crates-io]`. Drop it when egui exposes the gamma.

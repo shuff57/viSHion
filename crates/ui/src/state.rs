@@ -11,6 +11,8 @@ use vishion_core::model::{Assignment, Page, Settings};
 use vishion_core::words::{self, Item};
 use vishion_core::{jsx, render};
 
+pub use crate::bands::Band;
+
 /// What the page overlay shows: nothing, the lines that hold a flagged word, or every line as well.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum BoxMode {
@@ -36,6 +38,19 @@ pub enum Kind {
     Ok,
 }
 
+/// The look of a status pill (`.pill.*` in css/base.css).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PillKind {
+    /// Words to check: the yellow pill.
+    Warn,
+    Ok,
+    Bad,
+    /// Transcribing: a neutral filled pill.
+    Busy,
+    /// Waiting for its turn: neutral and outlined, not a problem state.
+    Queued,
+}
+
 /// One row of the tray: a flagged word of the current student, on some page.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Entry {
@@ -49,6 +64,8 @@ pub struct Alt {
     pub label: String,
     pub hint: String,
     pub via: &'static str,
+    /// Control id in the twin: unique per option (every model guess has `via` "typed").
+    pub id: String,
     /// Text handed to `choose` (typed guesses only).
     pub text: String,
     pub on: bool,
@@ -238,18 +255,18 @@ impl Session {
         words::marked(p, self.original && !self.versions_same())
     }
 
-    pub fn pill(&self, g: &Group) -> (Kind, String) {
+    pub fn pill(&self, g: &Group) -> (PillKind, String) {
         match g.status {
-            Status::Failed => (Kind::Bad, "Couldn\u{2019}t transcribe".into()),
-            Status::Processing => (Kind::Warn, "Transcribing".into()),
-            Status::Queued | Status::Waiting => (Kind::Warn, "Waiting".into()),
+            Status::Failed => (PillKind::Bad, "Couldn\u{2019}t transcribe".into()),
+            Status::Processing => (PillKind::Busy, "Transcribing".into()),
+            Status::Queued | Status::Waiting => (PillKind::Queued, "Waiting".into()),
             _ => {
                 let n: usize = g.pages.iter().filter_map(|id| self.a.page(id)).map(words::count).sum();
                 if n > 0 {
-                    return (Kind::Warn, format!("{} to check", plural(n, "word", "words")));
+                    return (PillKind::Warn, format!("{} to check", plural(n, "word", "words")));
                 }
                 let any = g.pages.iter().filter_map(|id| self.a.page(id)).any(|p| !words::items(p).is_empty());
-                (Kind::Ok, if any { "All words checked" } else { "No words to check" }.into())
+                (PillKind::Ok, if any { "All words checked" } else { "No words to check" }.into())
             }
         }
     }
@@ -283,6 +300,7 @@ impl Session {
                     label: term.clone(),
                     hint: format!("Course word, {}% match", jsx::round(conf * 100.0)),
                     via: "suggested",
+                    id: "alt-suggested".into(),
                     text: String::new(),
                     on: it.via.as_deref() == Some("suggested"),
                 },
@@ -290,6 +308,7 @@ impl Session {
                     label: word_str(it),
                     hint: "Keep it as read from the page".into(),
                     via: "written",
+                    id: "alt-written".into(),
                     text: String::new(),
                     on: it.via.as_deref() == Some("written"),
                 },
@@ -297,7 +316,7 @@ impl Session {
         }
         let mut out = vec![];
         let guesses = self.a.page(&e.page).and_then(|p| p.get("guesses")).and_then(|g| g.get(&it.key)).and_then(Value::as_array);
-        for g in guesses.map(|v| v.as_slice()).unwrap_or(&[]) {
+        for (n, g) in guesses.map(|v| v.as_slice()).unwrap_or(&[]).iter().enumerate() {
             let text = g.get("text").and_then(Value::as_str).unwrap_or("").to_string();
             if text.is_empty() {
                 continue;
@@ -308,6 +327,7 @@ impl Session {
                 label: text.clone(),
                 hint: format!("{}% likely", jsx::round(pct)),
                 via: "typed",
+                id: format!("alt-guess-{n}"),
                 text,
             });
         }
@@ -315,6 +335,7 @@ impl Session {
             label: "[illegible]".into(),
             hint: "Keep the marker so you can find it later".into(),
             via: "marked",
+            id: "alt-marked".into(),
             text: String::new(),
             on: it.via.as_deref() == Some("marked"),
         });
@@ -836,23 +857,15 @@ pub struct BBox {
     pub h: f32,
 }
 
-/// Where each of the `n` transcript lines sits on the page. Exact when the scan found as many lines as the
-/// transcript has (`approx = false`); otherwise the lines are spread evenly over the writing area so a page
-/// always gets its underline (`approx = true`), as review.js `geometry` does when the ink scan is unusable.
-pub fn geometry(p: &Page, n: usize) -> Option<(Vec<BBox>, bool)> {
+/// Where each of the `n` transcript lines sits on the page, as review.js `geometry` decides it: the stored
+/// boxes when there are exactly `n` and they are spread over the page; else the ink bands scanned from the
+/// picture (`bands`) when there are `n`, or a few strays more (the weakest are dropped); else the lines are
+/// spread evenly over the area where writing was found (`approx = true`), so a page always gets its underline.
+pub fn geometry(p: &Page, n: usize, bands: &[Band]) -> Option<(Vec<BBox>, bool)> {
     if n == 0 || p.status() != "done" {
         return None;
     }
-    let boxes: Vec<BBox> = match p.get("boxes") {
-        Some(Value::Array(a)) => a
-            .iter()
-            .filter_map(|b| {
-                let f = |k: &str| b.get(k).and_then(Value::as_f64).map(|v| v as f32);
-                Some(BBox { x: f("x")?, y: f("y")?, w: f("w")?, h: f("h")? })
-            })
-            .collect(),
-        _ => vec![],
-    };
+    let boxes = stored_boxes(p);
     let spread = |b: &[BBox]| {
         if b.len() < 2 {
             return b.len() == 1;
@@ -864,7 +877,31 @@ pub fn geometry(p: &Page, n: usize) -> Option<(Vec<BBox>, bool)> {
     if boxes.len() == n && spread(&boxes) {
         return Some((boxes, false));
     }
-    let (top, bottom, left, right) = (0.08f32, 0.92f32, 0.08f32, 0.92f32);
+    let scanned: Vec<BBox> = bands.iter().map(|b| BBox { x: b.x, y: b.y, w: b.w, h: b.h }).collect();
+    if scanned.len() == n && spread(&scanned) {
+        return Some((scanned, false));
+    }
+    let tol = 2usize.max(jsx::round(n as f64 * 0.35) as usize);
+    if scanned.len() > n && scanned.len() - n <= tol && spread(&scanned) {
+        // drop the strays: map_bands removes the weakest band until there are n
+        let vals: Vec<Value> = bands.iter().map(|b| json!({"x": b.x, "y": b.y, "w": b.w, "h": b.h, "r": 0, "s": b.s})).collect();
+        let f = |v: &Value, k: &str| v.get(k).and_then(Value::as_f64).unwrap_or(0.0) as f32;
+        let out: Vec<BBox> = render::map_bands(&vals, n)
+            .iter()
+            .map(|v| BBox { x: f(v, "x"), y: f(v, "y"), w: f(v, "w"), h: f(v, "h") })
+            .collect();
+        return Some((out, false));
+    }
+    let (top, bottom, left, right) = if scanned.len() >= 2 {
+        (
+            scanned.iter().map(|b| b.y).fold(f32::MAX, f32::min),
+            scanned.iter().map(|b| b.y + b.h).fold(f32::MIN, f32::max),
+            scanned.iter().map(|b| b.x).fold(f32::MAX, f32::min),
+            scanned.iter().map(|b| b.x + b.w).fold(f32::MIN, f32::max),
+        )
+    } else {
+        (0.08, 0.92, 0.08, 0.92)
+    };
     let step = (bottom - top) / n as f32;
     Some((
         (0..n)
@@ -872,6 +909,20 @@ pub fn geometry(p: &Page, n: usize) -> Option<(Vec<BBox>, bool)> {
             .collect(),
         true,
     ))
+}
+
+/// The line boxes stored on the page (`p.boxes`).
+pub fn stored_boxes(p: &Page) -> Vec<BBox> {
+    match p.get("boxes") {
+        Some(Value::Array(a)) => a
+            .iter()
+            .filter_map(|b| {
+                let f = |k: &str| b.get(k).and_then(Value::as_f64).map(|v| v as f32);
+                Some(BBox { x: f("x")?, y: f("y")?, w: f("w")?, h: f("h")? })
+            })
+            .collect(),
+        _ => vec![],
+    }
 }
 
 /// The line (transcript unit) a flagged word sits on, for cropping the handwriting into the tray.
@@ -987,7 +1038,7 @@ mod tests {
         assert_eq!(g.name, "Maya R.");
         assert_eq!(s.student_pos(), Some((1, 2)));
         let (k, label) = s.pill(&g);
-        assert_eq!((k, label.as_str()), (Kind::Warn, "3 words to check"));
+        assert_eq!((k, label.as_str()), (PillKind::Warn, "3 words to check"));
         // first undecided word on the page that is open
         let (e, i, n) = s.open_entry().unwrap();
         assert_eq!((i, n), (0, 3));
@@ -1081,5 +1132,56 @@ mod tests {
         assert_eq!(ui["layout"], "text");
         assert_eq!(ui["selectedId"], "m1");
         assert!(s.dirty.meta);
+    }
+}
+
+#[cfg(test)]
+mod geometry_tests {
+    use super::fixture::session;
+    use super::*;
+
+    fn band(y: f32, s: f32) -> Band {
+        Band { x: 0.1, y, w: 0.7, h: 0.04, s }
+    }
+
+    fn page_without_boxes() -> Session {
+        let mut s = session();
+        s.a.pages.get_mut("m1").unwrap().set("boxes", json!([]));
+        s
+    }
+
+    #[test]
+    fn scanned_bands_stand_in_for_missing_boxes() {
+        let s = page_without_boxes();
+        let p = s.page("m1").unwrap();
+        let bands = [band(0.10, 5.0), band(0.40, 5.0), band(0.70, 5.0)];
+        let (b, approx) = geometry(p, 3, &bands).unwrap();
+        assert!(!approx);
+        assert_eq!(b.iter().map(|x| x.y).collect::<Vec<_>>(), vec![0.10, 0.40, 0.70]);
+    }
+
+    #[test]
+    fn a_few_stray_bands_are_dropped_weakest_first() {
+        let s = page_without_boxes();
+        let p = s.page("m1").unwrap();
+        let bands = [band(0.02, 0.5), band(0.10, 5.0), band(0.40, 6.0), band(0.70, 5.0)];
+        let (b, approx) = geometry(p, 3, &bands).unwrap();
+        assert!(!approx);
+        assert_eq!(b.iter().map(|x| x.y).collect::<Vec<_>>(), vec![0.10, 0.40, 0.70]);
+    }
+
+    #[test]
+    fn otherwise_lines_spread_over_the_ink_extent_not_the_whole_page() {
+        let s = page_without_boxes();
+        let p = s.page("m1").unwrap();
+        // two bands for three lines: spread over where the writing was found
+        let bands = [band(0.20, 5.0), band(0.60, 5.0)];
+        let (b, approx) = geometry(p, 3, &bands).unwrap();
+        assert!(approx);
+        assert!(b[0].y >= 0.20 && b[2].y + b[2].h <= 0.64 + 1e-4, "{b:?}");
+        // nothing found at all: the fixed margins
+        let (b, approx) = geometry(p, 3, &[]).unwrap();
+        assert!(approx);
+        assert!((b[0].x - 0.08).abs() < 1e-6);
     }
 }

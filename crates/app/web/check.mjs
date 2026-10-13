@@ -330,6 +330,8 @@ try {
   {
     const ctx3 = await browser.newContext({ viewport: { width: 1280, height: 800 } });
     const p3 = await ctx3.newPage();
+    const fontReqs = [];
+    p3.on('request', r => { if (r.url().includes('fallback-cjk')) fontReqs.push(r.url()); });
     await p3.addInitScript(track);
     await p3.goto(base + '/?theme=light', { waitUntil: 'load' });
     await settled(p3);
@@ -355,13 +357,29 @@ try {
       const page = { id: 'p1', name: 'p1.jpg', order: 0, status: 'done', raw: 'The confidance interval is wide.', corrected: 'The confidance interval is wide.',
         corrections: [{ applied: false, word: 'confidance', term: 'confidence', conf: 0.9 }], boxes: [], timings: { ms: 1000, tokens: 10 },
         error: '', rotation: 0, student: { name: 'Ana L.' }, reviewed: false, resolved: {}, edits: [], guesses: {} };
-      const meta = { schemaVersion: 1, name: 'Unit 5', topic: 'General', prompt: '', order: ['p1'], created: 1, updated: 1, ui: {}, stats: { pages: 1, done: 1 } };
+      // a second page: CJK and emoji text, an unreadable word with two guesses, and no stored boxes (marks must find the ink)
+      const c2 = document.createElement('canvas');
+      c2.width = 840; c2.height = 1120;
+      const g2 = c2.getContext('2d');
+      g2.fillStyle = '#fcfcf8'; g2.fillRect(0, 0, 840, 1120);
+      g2.fillStyle = '#26358f';
+      for (const y of [200, 520, 840]) for (let x = 100; x < 700; x += 24) g2.fillRect(x, y, 10, 40);
+      const jpg2 = await new Promise(r => c2.toBlob(r, 'image/jpeg', 0.8));
+      const page2 = { id: 'p2', name: 'p2.jpg', order: 1, status: 'done',
+        raw: 'The sample mean is [illegible] here.\n\u65e5\u672c\u8a9e\u306e\u30c6\u30ad\u30b9\u30c8 \ud55c\uad6d\uc5b4 \ud83d\ude00\nThird line of writing.',
+        corrected: '', corrections: [], boxes: [], timings: { ms: 1000, tokens: 10 },
+        error: '', rotation: 0, student: { name: 'Ana L.' }, reviewed: false, resolved: {}, edits: [],
+        guesses: { 'i:0': [{ text: 'intervals', percent: 62 }, { text: 'intervening', percent: 21 }] } };
+      page2.corrected = page2.raw;
+      const meta = { schemaVersion: 1, name: 'Unit 5', topic: 'General', prompt: '', order: ['p1', 'p2'], created: 1, updated: 1, ui: {}, stats: { pages: 2, done: 2 } };
       await new Promise((res, rej) => {
         const t = db.transaction('files', 'readwrite');
         const s = t.objectStore('files');
         s.put(JSON.stringify(meta, null, 2), 'unit-5/project.json');
         s.put(JSON.stringify(page), 'unit-5/pages/p1.json');
         s.put(jpg, 'unit-5/images/p1.jpg');
+        s.put(JSON.stringify(page2), 'unit-5/pages/p2.json');
+        s.put(jpg2, 'unit-5/images/p2.jpg');
         t.oncomplete = res; t.onerror = () => rej(t.error);
       });
       db.close();
@@ -389,6 +407,21 @@ try {
       'accepting a suggestion is written back to IndexedDB as the same page document: ' + saved.slice(0, 160));
     const reopened = JSON.parse(saved);
     expect(reopened.reviewed === false && reopened.id === 'p1' && reopened.guesses && Array.isArray(reopened.edits), 'unknown and untouched fields survive the round trip');
+    // page 2: one control per guess (each twin id unique), CJK text asks for the fallback font, quick repeats all count
+    await p3.evaluate(() => document.querySelector('#controls [data-id="page-p2"]').click());
+    await empty();
+    await p3.waitForSelector('#controls [data-id="word-p2-i:0"]', { timeout: 10000 });
+    await p3.evaluate(() => document.querySelector('#controls [data-id="word-p2-i:0"]').click());
+    await empty();
+    await p3.waitForSelector('#controls [data-id="alt-marked"]', { timeout: 10000 });
+    const alts = await p3.evaluate(() => [...document.querySelectorAll('#controls [data-id^="alt-"]')].map(b => b.dataset.id + ' | ' + (b.getAttribute('aria-label') || b.textContent)));
+    expect(alts.length === 3 && new Set(alts.map(a => a.split(' | ')[0])).size === 3 && alts.some(a => a.includes('intervals. 62% likely')) && alts.some(a => a.includes('intervening. 21% likely')),
+      'each guess of an unreadable word is its own twin control: ' + JSON.stringify(alts));
+    expect(fontReqs.some(u => u.endsWith('/fallback-cjk-emoji.ttf')), 'CJK text makes the app fetch the fallback font on demand');
+    await p3.evaluate(() => { for (let i = 0; i < 4; i++) document.querySelector('#controls [data-id="zoom-in"]').click(); });
+    let maxed = false;
+    for (let i = 0; i < 30 && !maxed; i++) { await empty(); maxed = await p3.evaluate(() => document.querySelector('#controls [data-id="zoom-in"]').disabled); }
+    expect(maxed, 'four zoom-in activations in one tick reach 400% (none are dropped)');
     expect((await p3.evaluate(() => window.__violations)).length === 0, 'zero CSP violations with real storage');
     await ctx3.close();
   }

@@ -279,7 +279,7 @@ impl Backend {
                 Err(e) => Event::Notice { text: format!("Could not export: {e}"), error: true },
             },
             // answered by the web executor, which owns `fetch`; the native app never asks
-            Cmd::LoadMathFont => Event::Notice { text: String::new(), error: false },
+            Cmd::LoadMathFont | Cmd::LoadFallbackFont => Event::Notice { text: String::new(), error: false },
             Cmd::LoadImage { slug, id } => match self.projects.load_image(&slug, &id).await {
                 Ok(bytes) => Event::Image { id, bytes },
                 Err(_) => Event::Image { id, bytes: None },

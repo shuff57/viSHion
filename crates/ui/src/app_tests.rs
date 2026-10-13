@@ -873,3 +873,220 @@ fn critic_cjk_text_has_a_fallback_font() {
     let ok = h.ctx.fonts(|f| f.has_glyph(&theme::serif(22.0), '\u{65e5}'));
     assert!(ok, "no glyph for U+65E5 in the serif family: CJK transcripts render as boxes");
 }
+
+// ---------------------------------------------------------------------------------------------------------
+// Blind critic round 2 fixes: tray layout, activations that arrive together, plain text, footer, fonts.
+// ---------------------------------------------------------------------------------------------------------
+
+/// A PNG page with grain and dark writing on the given pixel rows (what `lineBands` is meant to find).
+fn page_png(w: u32, h: u32, rows: &[(u32, u32)]) -> Vec<u8> {
+    let mut im = image::RgbImage::from_pixel(w, h, image::Rgb([235, 235, 232]));
+    for y in 0..h {
+        for x in 0..w {
+            if (x * 7 + y * 13) % 29 == 0 {
+                im.put_pixel(x, y, image::Rgb([120, 120, 120]));
+            }
+        }
+    }
+    for &(a, b) in rows {
+        for y in a..b {
+            for x in 80..(w - 120) {
+                if (x / 8) % 5 == 0 {
+                    im.put_pixel(x, y, image::Rgb([40, 40, 60]));
+                }
+            }
+        }
+    }
+    let mut out = std::io::Cursor::new(vec![]);
+    image::DynamicImage::ImageRgb8(im).write_to(&mut out, image::ImageFormat::Png).unwrap();
+    out.into_inner()
+}
+
+impl H {
+    /// Give page `m1` a picture with three lines of writing and the boxes of those lines.
+    fn with_picture(&mut self) {
+        let png = page_png(840, 1120, &[(160, 220), (460, 520), (760, 820)]);
+        let boxes = serde_json::json!([
+            {"x": 0.09, "y": 0.13, "w": 0.75, "h": 0.05, "r": 0},
+            {"x": 0.09, "y": 0.40, "w": 0.75, "h": 0.05, "r": 0},
+            {"x": 0.09, "y": 0.67, "w": 0.75, "h": 0.05, "r": 0},
+        ]);
+        self.sess().a.pages.get_mut("m1").unwrap().set("boxes", boxes);
+        self.app.host.as_ref().unwrap().1.push(Event::Image { id: "m1".into(), bytes: Some(png) });
+        self.frames(3);
+    }
+}
+
+/// css/components.css `.tray-body { flex-wrap: wrap }` with `.crop { flex: 0 1 280px }` and `.alts { flex: 1 1 300px }`:
+/// side by side only when 280 + 20 + 300 fit, otherwise the options take the whole row under the crop.
+#[test]
+fn critic_tray_body_wraps_like_the_design() {
+    let mut h = H::new("m1");
+    h.with_picture();
+    let w = h.word_id("i:0");
+    h.act(&w);
+    // 1280 split: the text pane is 640 wide, so the tray content is 560: stacked, options full width
+    let alt = h.ctl("alt-marked").unwrap().size.0;
+    assert_eq!(alt, 560, "options use the whole row when the crop wraps above them");
+    let typed = h.ctl("typed-word").unwrap().size.0;
+    assert!(typed >= 400, "typed input keeps its width ({typed})");
+    // text only: 680 inside the tray, 280 + 20 for the crop leaves 380 for the options
+    h.act("layout-text");
+    let alt = h.ctl("alt-marked").unwrap().size.0;
+    assert_eq!(alt, 380, "crop beside the options");
+}
+
+/// review.js: every option card's text stays inside the card, whatever its width.
+#[test]
+fn critic_option_hint_stays_inside_its_card() {
+    let mut h = H::new("m1");
+    h.size = (390.0, 800.0);
+    h.frames(3);
+    let w = h.word_id("i:0");
+    h.act(&w);
+    let c = h.ctl("alt-marked").unwrap();
+    assert!(c.size.0 <= 390, "{:?}", c.size);
+    assert!(c.size.1 >= 44);
+}
+
+/// Several activations of one control that reach the app in the same frame are each applied (JS: three clicks
+/// on Zoom in give 300%), as is a held key repeating Enter or Space on a focused button.
+#[test]
+fn critic_activations_that_arrive_together_are_not_coalesced() {
+    let mut h = H::new("m1");
+    for _ in 0..3 {
+        h.app.queue.lock().unwrap().push("act:zoom-in".into());
+    }
+    h.frames(8);
+    assert_eq!(h.s().zoom, 3.0);
+}
+
+/// js/ui/review.js pillFor: a queued group is the neutral outlined `.pill.queued`, not the yellow warning.
+#[test]
+fn critic_waiting_is_a_quiet_pill_not_a_warning() {
+    let mut s = state::fixture::session();
+    s.select("m2");
+    s.a.pages.get_mut("m2").unwrap().set("status", serde_json::json!("pending"));
+    let g = s.group().unwrap();
+    let (kind, label) = s.pill(&g);
+    assert_eq!(label, "Waiting");
+    assert_eq!(kind, state::PillKind::Queued);
+    s.a.pages.get_mut("m2").unwrap().set("status", serde_json::json!("transcribing"));
+    let g = s.group().unwrap();
+    assert_eq!(s.pill(&g).0, state::PillKind::Busy);
+}
+
+/// `.tx-text.plain`: left aligned, in the same column as the heading.
+#[test]
+fn critic_plain_text_is_left_aligned_in_the_column() {
+    let mut h = H::new("m1");
+    h.act("text-view");
+    let name_x = h.app.nodes().iter().find_map(|n| match n {
+        Node::Heading { id, pos, .. } if id == "student-name" => Some(pos.1),
+        _ => None,
+    });
+    let plain_x = h.app.nodes().iter().find_map(|n| match n {
+        Node::Text { id, pos, .. } if id.starts_with("plain-") => Some(pos.1),
+        _ => None,
+    });
+    assert!(name_x.is_some() && plain_x.is_some());
+    assert_eq!(name_x, plain_x, "the plain text starts at the column's left edge");
+}
+
+/// `.tx-foot`: the buttons are left aligned under the transcript, in the column of the heading.
+#[test]
+fn critic_footer_is_left_aligned_and_stacked() {
+    let h = H::new("m1");
+    let x = |id: &str| h.ctl(id).map(|c| c.pos.1);
+    let name = h.app.nodes().iter().find_map(|n| match n {
+        Node::Heading { id, pos, .. } if id == "student-name" => Some(pos.1),
+        _ => None,
+    });
+    assert_eq!(x("text-view"), name, "Show plain text starts at the column edge");
+    // Transcribe again follows it on the same row (flex-wrap)
+    assert_eq!(h.ctl("transcribe-again").map(|c| c.pos.0), h.ctl("text-view").map(|c| c.pos.0));
+    // Change student sits 16px left of the name so its text lines up with it
+    let cs = x("change-student").unwrap();
+    assert!(cs < name.unwrap(), "{cs} {name:?}");
+}
+
+/// css/layout.css `.brand` holds the 119 x 32 logo svg.
+#[test]
+fn critic_wordmark_has_the_logo_width() {
+    let h = H::new("m1");
+    assert_eq!(h.ctl("brand").unwrap().size.0, 119);
+}
+
+/// Student text can be in any script. The web build fetches the fallback font when the open page has a
+/// character the bundled faces lack, and installs it when it arrives.
+#[test]
+fn critic_fallback_font_is_requested_on_demand_and_covers_cjk() {
+    let mut h = H::new("m1");
+    // as the web build starts: no fallback yet
+    h.ctx.set_fonts(theme::fonts(None));
+    h.app.fallback_loaded = false;
+    h.app.fallback_requested = false;
+    h.app.fallback_seen = None;
+    h.frames(2);
+    assert!(!h.ctx.fonts(|f| f.has_glyph(&theme::serif(22.0), '\u{65e5}')));
+    h.sess().a.pages.get_mut("m1").unwrap().set(
+        "raw",
+        serde_json::json!("The 95% interval.\n\u{65e5}\u{672c}\u{8a9e}\u{306e}\u{30c6}\u{30ad}\u{30b9}\u{30c8} \u{d55c}\u{ad6d}\u{c5b4} \u{1f600}"),
+    );
+    h.take_cmds();
+    h.frames(3);
+    assert!(h.take_cmds().iter().any(|c| matches!(c, Cmd::LoadFallbackFont)), "asked for the fallback font");
+    let bytes = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/fonts/fallback-cjk-emoji.ttf")).unwrap();
+    h.app.host.as_ref().unwrap().1.push(Event::FallbackFont(bytes));
+    h.frames(3);
+    for c in ['\u{65e5}', '\u{672c}', '\u{30c6}', '\u{d55c}', '\u{4e2d}', '\u{1f600}'] {
+        assert!(h.ctx.fonts(|f| f.has_glyph(&theme::serif(22.0), c)), "no glyph for {c:?}");
+    }
+}
+
+/// A page without usable stored boxes gets its marks where the ink is (image.js lineBands), not spread
+/// over a fixed 8%..92%.
+#[test]
+fn critic_marks_land_on_the_ink_when_boxes_are_missing() {
+    let mut h = H::new("m1");
+    h.sess().a.pages.get_mut("m1").unwrap().set("boxes", serde_json::json!([]));
+    h.app.host.as_ref().unwrap().1.push(Event::Image {
+        id: "m1".into(),
+        bytes: Some(page_png(840, 1120, &[(160, 220), (460, 520), (760, 820)])),
+    });
+    h.frames(3);
+    let Some(Slot::Ready(im)) = h.app.images.get("m1") else { panic!("image not decoded") };
+    assert_eq!(im.bands.len(), 3, "{:?}", im.bands);
+    let p = h.s().page("m1").unwrap();
+    let (boxes, approx) = state::geometry(p, 3, &im.bands).unwrap();
+    assert!(!approx);
+    for (b, y) in boxes.iter().zip([190.0, 490.0, 790.0]) {
+        let mid = (b.y + b.h / 2.0) * 1120.0;
+        assert!((mid - y).abs() < 25.0, "mark at {mid}, ink at {y}");
+    }
+}
+
+/// The tray grows when the page picture arrives (its crop appears): the word being decided is brought back
+/// above it instead of staying behind it.
+#[test]
+fn critic_word_stays_above_the_tray_when_the_crop_arrives() {
+    let mut h = H::new("m1");
+    h.size = (1280.0, 460.0);
+    h.frames(3);
+    let w = h.word_id("i:0");
+    h.act(&w);
+    h.frames(10);
+    h.with_picture();
+    h.frames(10);
+    let tray_top = h
+        .app
+        .nodes()
+        .iter()
+        .find_map(|n| match n {
+            Node::Heading { id, pos, .. } if id == "tray-title" => Some(pos.0 * 16),
+            _ => None,
+        })
+        .expect("tray title");
+    let word = h.ctl(&w).expect("word control");
+    assert!(word.pos.0 * 16 + 22 <= tray_top, "the word ends at {} but the tray starts at {tray_top}", word.pos.0 * 16 + 22);
+}
