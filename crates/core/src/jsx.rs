@@ -304,7 +304,7 @@ fn unit_unsafe(u: u16) -> bool {
 /// contraction/digit run when the next code unit on either side is "unsafe backward". A lead surrogate of a
 /// "safe" block (U+1CCxx, U+1D7xx, U+1FBxx Nd) is not unsafe, so a digit run before it is cut and the tails are
 /// compared alone. ICU4X always merges, so strip exactly the prefix ICU strips (the back-up loop only inspects
-/// code units of the common prefix). `fa`/`fb` are the char-for-char Han-folded forms of `a`/`b`.
+/// code units of the common prefix). `fa`/`fb` are the Han-folded forms of `a`/`b`.
 fn icu_equal_prefix_skip<'a>(a: &str, b: &str, fa: &'a str, fb: &'a str) -> (&'a str, &'a str) {
     let ua: Vec<u16> = a.encode_utf16().collect();
     let ub: Vec<u16> = b.encode_utf16().collect();
@@ -323,17 +323,12 @@ fn icu_equal_prefix_skip<'a>(a: &str, b: &str, fa: &'a str, fb: &'a str) -> (&'a
     if eq == 0 {
         return (fa, fb);
     }
-    // eq is on a code point boundary here; convert the UTF-16 offset to a char count, then to a byte offset.
-    let (mut units, mut chars) = (0usize, 0usize);
-    for c in a.chars() {
-        if units >= eq {
-            break;
-        }
-        units += c.len_utf16();
-        chars += 1;
-    }
-    let off = |s: &'a str| s.char_indices().nth(chars).map_or(s.len(), |(i, _)| i);
-    (&fa[off(fa)..], &fb[off(fb)..])
+    // eq is on a code point boundary here. `fold` works char by char (possibly expanding one char), so the
+    // folded prefix of `a` is exactly the common prefix of `fa` and `fb`.
+    let mut units = 0usize;
+    let pb = a.char_indices().find(|&(_, c)| { if units >= eq { return true; } units += c.len_utf16(); false }).map_or(a.len(), |(i, _)| i);
+    let n = crate::hanfold::fold(&a[..pb]).len();
+    (&fa[n..], &fb[n..])
 }
 
 /// ICU4X root collation without the Han reordering of `hanfold` (used by the table generator).

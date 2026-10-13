@@ -15,7 +15,15 @@ fn gen_han() {
         Ordering::Equal => a.cmp(b),
         o => o,
     });
-    let mut pairs: Vec<(u32, u32)> = node.iter().zip(icu.iter()).filter(|(a, b)| a != b).map(|(a, b)| (*a, *b)).collect();
+    // Every member of a base-equal group maps to the char ICU4X ranks where the group sits.
+    let mut pairs: Vec<(u32, u32)> = vec![];
+    for (g, b) in groups.iter().zip(icu.iter()) {
+        for a in g {
+            if a != b {
+                pairs.push((*a, *b));
+            }
+        }
+    }
     pairs.sort();
     // Runs: (start, len, mapped_start) with both sides consecutive.
     let mut runs: Vec<(u32, u32, u32)> = vec![];
@@ -35,7 +43,34 @@ fn gen_han() {
         out += &format!("    (0x{:X}, {}, 0x{:X}),\n", a, l, b);
     }
     out += "];\n\nfn map(c: char) -> char {\n    let u = c as u32;\n    match RUNS.binary_search_by(|r| if u < r.0 { Ordering::Greater } else if u >= r.0 + r.1 { Ordering::Less } else { Ordering::Equal }) {\n        Ok(i) => char::from_u32(RUNS[i].2 + (u - RUNS[i].0)).unwrap_or(c),\n        Err(_) => c,\n    }\n}\n\nuse std::cmp::Ordering;\n\n";
-    out += "pub fn fold(s: &str) -> Cow<'_, str> {\n    if s.chars().all(|c| (c as u32) < 0x2E80) {\n        return Cow::Borrowed(s);\n    }\n    Cow::Owned(s.chars().map(map).collect())\n}\n";
+    out += r#"/// Han ideographs (the blocks ICU's radical-stroke reordering applies to, plus the compatibility ideographs).
+fn is_han(c: char) -> bool {
+    matches!(c as u32, 0x2E80..=0x2FDF | 0x3005 | 0x3007 | 0x3021..=0x3029 | 0x3038..=0x303B | 0x3400..=0x4DBF
+        | 0x4E00..=0x9FFF | 0xF900..=0xFAFF | 0x20000..=0x323AF)
+}
+
+/// Fold for node's Han order. Characters whose compatibility decomposition contains an ideograph (Kangxi and CJK
+/// radicals, circled/parenthesized/telegraph ideographs) are primary-equal to that decomposition in ICU, so they are
+/// replaced by their NFKC form before the char-for-char Han mapping (this can change the char count).
+pub fn fold(s: &str) -> Cow<'_, str> {
+    if s.chars().all(|c| (c as u32) < 0x2E80) {
+        return Cow::Borrowed(s);
+    }
+    use unicode_normalization::UnicodeNormalization;
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        if (c as u32) >= 0x2E80 {
+            let n: Vec<char> = std::iter::once(c).nfkc().collect();
+            if n.as_slice() != [c] && n.iter().any(|&x| is_han(x)) && !n.iter().any(|x| x.is_numeric()) {
+                out.extend(n.into_iter().map(map));
+                continue;
+            }
+        }
+        out.push(map(c));
+    }
+    Cow::Owned(out)
+}
+"#;
     std::fs::write(root.join("src/hanfold.rs"), out).unwrap();
     println!("runs {}", runs.len());
 }

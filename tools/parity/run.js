@@ -364,6 +364,23 @@ function natCases() {
       wp.push([a, b]);
     }
   }
+  // Round-5 gaps: Han compatibility chars (Kangxi/CJK radicals, circled/parenthesized/telegraph ideographs) are
+  // primary-equal to their NFKC ideograph and order with it; plus Latin letters NFD does not decompose.
+  {
+    const blocks = [[0x2e80, 0x33ff], [0xf900, 0xfaff], [0xfe30, 0xfe4f], [0xff00, 0xffef], [0x3400, 0x4dbf], [0x4e00, 0x9fff], [0x20000, 0x2a6df], [0x2f800, 0x2fa1f], [0x3200, 0x32ff], [0x1f200, 0x1f2ff]];
+    const pool = []; for (const [lo, hi] of blocks) for (let cp = lo; cp <= hi; cp++) pool.push(cp);
+    const S = (cp) => String.fromCodePoint(cp);
+    const compat = pool.filter((cp) => S(cp).normalize('NFKC') !== S(cp));
+    const han = [0x4e28, 0x4e2d, 0x5200, 0x65e0, 0x6c14, 0x6bcd, 0x9f8d, 0x9f9f, 0x4e00, 0x23394];
+    for (const cp of compat) { const n = S(cp).normalize('NFKC'); wp.push([S(cp), n], [S(cp), n + 'a'], ['1' + S(cp), '1' + n]); for (const h of han) wp.push([S(cp), S(h)]); }
+    for (const [a, b] of [[0x2f01, 0x4e28], [0x2f46, 0x5200], [0x2f46, 0x65e0], [0x2e9f, 0x6bcd], [0x2ef3, 0x9f9f], [0x32a5, 0x4e2d], [0x2f53, 0x9f8d], [0x2f53, 0x6c14], [0x3281, 0x4e2d], [0x328b, 0x23394], [0x33ff, 0x4e2d]]) wp.push([S(a), S(b)], [S(b), S(a)]);
+    let s3 = 777; const r3 = () => (s3 = (s3 * 1103515245 + 12345) % 2147483648) / 2147483648;
+    const pc = () => { const p = r3() < 0.5 ? compat : pool; return S(p[Math.floor(r3() * p.length)]); };
+    for (let i = 0; i < 20000; i++) { let a = pc(), b = pc(); if (r3() < 0.3) { a += pc(); b += pc(); } wp.push([a, b]); }
+    const lat = ['Đ', 'đ', 'Ł', 'ł', 'Ø', 'ø', 'Æ', 'æ', 'Œ', 'œ', 'ð', 'þ', 'ı', 'ß', 'Ħ', 'ħ', 'ŋ', 'ƀ', 'Ｄ', 'ｌ', 'ｏ', 'ｚ'];
+    for (const a of lat) for (const b of 'abcdefghijklmnopqrstuvwxyz'.split('').concat(lat)) wp.push([a, b], [a + 'x', b + 'x']);
+    for (const w of ['Đorđe', 'Łódź', 'Øre', 'Æble', 'Þór', 'Straße', 'Hærvejen', 'Ðaco']) for (const x of ['d', 'dz', 'e', 'l', 'm', 'o', 'p', 'ae', 'a', 'b', 's', 'ss', 't', 'th', 'z']) wp.push([w, x], [w, x + 'x']);
+  }
   const allPairs = pairs.concat(wp);
   add('nat', { pairs: allPairs }, allPairs.map(([a, b]) => Math.sign(j.OCR.natCompare(a, b))));
   const slugs = ['Period 3 Quiz', '  --Hello, World!--  ', 'Café Ünal', 'ÀÉÎÕÜ', '', '!!!', 'a'.repeat(60), 'Ab-Cd_Ef', 'ﬁne ﬀ', '①②③', '日本語 test', 'x'.repeat(47) + ' y z', 'x'.repeat(47) + '--y', 'ǅ', 'ＡＢＣ'];

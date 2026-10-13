@@ -14,7 +14,7 @@ arr.sort((a, b) => col.compare(a, b) || a.codePointAt(0) - b.codePointAt(0));
 const groups = [];
 for (const ch of arr) {
   const g = groups[groups.length - 1];
-  if (g && col.compare(g[0], ch) === 0) g.push(ch.codePointAt(0)); else groups.push([ch.codePointAt(0)]);
+  if (g && col.compare(String.fromCodePoint(g[0]), ch) === 0) g.push(ch.codePointAt(0)); else groups.push([ch.codePointAt(0)]);
 }
 fs.writeFileSync(path.join(__dirname, 'han_order.json'), JSON.stringify(groups));
 console.log('han chars', arr.length, 'groups', groups.length);

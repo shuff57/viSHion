@@ -21,7 +21,20 @@ fn nat_random_pairs() {
 /// node (primary strength) but not in Rust, because hanfold maps char-for-char and does not follow the expansion.
 #[test]
 fn nat_han_compat_equals_ideograph() {
-    let cases: &[(&str, &str)] = &[("\u{2F01}", "\u{4E28}"), ("\u{2F46}", "\u{5200}"), ("\u{2E9F}", "\u{6BCD}"), ("\u{32A5}", "\u{4E2D}"), ("\u{2F53}", "\u{9F8D}"), ("\u{2EF3}", "\u{9F9F}")];
+    let cases: &[(&str, &str)] = &[("\u{2F01}", "\u{4E28}"), ("\u{2F46}", "\u{65E0}"), ("\u{2E9F}", "\u{6BCD}"), ("\u{32A5}", "\u{4E2D}"), ("\u{2F53}", "\u{6C14}"), ("\u{2FD3}", "\u{9F8D}"), ("\u{2EF3}", "\u{9F9F}")];
     let bad: Vec<_> = cases.iter().filter(|(a, b)| vishion_core::jsx::nat_compare(a, b) != Ordering::Equal).collect();
     assert!(bad.is_empty(), "{:?}", bad);
+}
+
+/// Same cause, ordering against other Han (expected values from node: 2F46 vs 5200 is 1, 2F53 vs 9F8D is -1).
+#[test]
+fn nat_han_compat_order() {
+    let c = |a: u32, b: u32| match vishion_core::jsx::nat_compare(&char::from_u32(a).unwrap().to_string(), &char::from_u32(b).unwrap().to_string()) {
+        Ordering::Less => -1,
+        Ordering::Equal => 0,
+        _ => 1,
+    };
+    for (a, b, e) in [(0x2F46, 0x5200, 1), (0x2F53, 0x9F8D, -1), (0x3281, 0x4E2D, 1), (0x328B, 0x23394, 1), (0x33FF, 0x4E2D, -1), (0x32A5, 0x4E2D, 0)] {
+        assert_eq!(c(a, b), e, "{a:X} vs {b:X}");
+    }
 }
