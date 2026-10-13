@@ -30,15 +30,19 @@ cargo run -p vishion-app --bin vishion --release
 #   --exit-after-ms N      close the window cleanly after N ms (smoke tests; exit code 0)
 #   --screenshot FILE.png  write the first settled frame and close
 #   --size WxH             window size, e.g. 390x844 for the phone layout
+#   --inbox                open on the assignment overview (tabs, run bar, rows) instead of the review screen
+#   --page ID              open with that page selected (e.g. p-omar-1 in the demo)
 #   --dump-controls        print the control list (id, role, label, size) as JSON lines on close
 
 # web build into crates/app/dist (index.html, wasm, JS glue, _headers with CSP + 'wasm-unsafe-eval' + hash).
-# Web URL options: ?demo=1 (sample assignment, nothing stored), ?project=<slug>, ?theme=light|dark
+# Web URL options: ?demo=1 (sample assignment, nothing stored), ?project=<slug>, ?theme=light|dark,
+# ?view=inbox (assignment overview), ?page=<page id>
 cd crates/app/web
 npm ci
 node build.mjs            # add --debug for a debug wasm, --no-opt to skip wasm-opt
-#   wasm-opt -Oz runs from the `wasm-opt` npm package; the STIX math font is copied next to the wasm and
-#   fetched the first time a page has a formula (the wasm is about 4.0 MB, 1.7 MB gzipped, without it)
+#   wasm-opt -Oz runs from the `wasm-opt` npm package; the STIX math font, the CJK fallback face and the
+#   Twemoji colour emoji face are copied next to the wasm and fetched the first time a page needs them
+#   (the wasm is about 4.1 MB, 1.8 MB gzipped, without them)
 
 # serve it under the production CSP with wrangler dev (http://127.0.0.1:8788/)
 node serve.mjs
@@ -125,3 +129,18 @@ closing it returns focus to what opened it. The line being read is `data-reading
 - Every interactive widget goes through `App::ctl()` so web gets a twin, focus ring and keyboard activation.
 - Do not use `std::time::Instant` or `SystemTime` in code that runs on wasm32 (it panics); use egui time.
 - `cargo test` must pass natively; wasm builds with `--target wasm32-unknown-unknown` (CI does both).
+
+## Demo mode and reading pages
+
+`--demo`, `?demo=1` and the `demo` setting answer Retry, Transcribe, Transcribe again and the inbox's Resume
+with the sample transcripts of js/ocr.js (`core::demo`), run the offline judge over them, and add the sample
+guesses for unreadable words, exactly as the JS app's demo mode does. Without demo mode the host says the OCR
+connection is not there yet (phase 3) and leaves the page alone. Straighten is a port of js/deskew.js
+(`app::pictures::deskew`), also applied to pictures picked with Replace and Add page.
+
+## Review-screen tests
+
+* `crates/ui/src/app_tests.rs`: frame-level tests of the screen over a recorder host.
+* `crates/app/src/rig.rs`: the same screen over the real `Backend` and the demo assignment, so a click goes to
+  the host and the answer comes back. `cargo test -p vishion-app dump_layout -- --ignored --nocapture` prints
+  where every text and control sits (`VIEW=inbox`, `W=390 H=844` change the screen).

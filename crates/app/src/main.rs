@@ -88,7 +88,8 @@ fn main() -> eframe::Result<()> {
                 let backend = if let Some(dir) = &seed_to {
                     let fs = AnyStore::Fs(FsStore::new(dir));
                     match block_on(vishion_app::demo::seed_into(fs, now())) {
-                        Ok((store, _)) => Backend::new(store, "Saved to your folder"),
+                        // the sample assignment: reading a page answers with the sample text
+                        Ok((store, _)) => Backend::new_demo(store, "Saved to your folder"),
                         Err(e) => {
                             worker_inbox.push(vishion_ui::Event::Failed(e.to_string()));
                             return;

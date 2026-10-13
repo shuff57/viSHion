@@ -292,10 +292,3 @@ pub fn pill_at(ui: &Ui, t: &Tokens, kind: crate::state::PillKind, text: &str, mi
     ui.painter().galley(centered(rect, g.size()), g, fg);
     rect
 }
-
-/// `pill_at` in the layout flow.
-pub fn pill(ui: &mut Ui, t: &Tokens, kind: crate::state::PillKind, text: &str) -> Rect {
-    let w = ui.painter().layout_no_wrap(text.to_string(), theme::sans_semi(14.0), t.ink).size().x + 28.0;
-    let (rect, _) = ui.allocate_exact_size(vec2(w, PILL_H), Sense::hover());
-    pill_at(ui, t, kind, text, rect.min)
-}

@@ -8,7 +8,7 @@
 use crate::dialog::{self, After, Dialog};
 use crate::emoji;
 use crate::flow;
-use crate::state::{self, BoxMode, Entry, Kind, PillKind, Session, View};
+use crate::state::{self, BoxMode, Entry, Kind, Session, View};
 use crate::theme::{self, Tokens};
 use crate::transcript::{self, Line, Run, Style};
 use crate::twin::{HEADER, SCAN, TEXT, TRAY};
