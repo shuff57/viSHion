@@ -1347,6 +1347,15 @@ fn review(ctx: &egui::Context, cx: &mut Cx, s: &Session, narrow: bool) {
     }
 }
 
+/// The page scrolled the DOM transcript (find-in-page, a drag-selection at its edge): the scroll area follows.
+fn take_scroll_by(ui: &mut Ui, cx: &mut Cx) {
+    let d = std::mem::take(&mut cx.ctl.scroll_by);
+    if d.abs() > 0.01 {
+        ui.scroll_with_delta(vec2(0.0, -d));
+        ui.ctx().request_repaint();
+    }
+}
+
 fn review_panes(ctx: &egui::Context, cx: &mut Cx, s: &Session, narrow: bool) {
     let t = cx.t;
     let g = s.group();
@@ -1366,6 +1375,7 @@ fn review_panes(ctx: &egui::Context, cx: &mut Cx, s: &Session, narrow: bool) {
         let tray_h = if sticky { cx.stage.tray_box_h } else { 0.0 };
         let central = egui::CentralPanel::default().frame(egui::Frame::none().fill(t.surface)).show(ctx, |ui| {
             egui::ScrollArea::vertical().auto_shrink([false, false]).animated(false).id_source("review-scroll").show(ui, |ui| {
+                take_scroll_by(ui, cx);
                 // the panes of `.review` are stacked boxes with nothing between them
                 ui.spacing_mut().item_spacing.y = 0.0;
                 if cx.inline_header {
@@ -1430,6 +1440,9 @@ fn review_panes(ctx: &egui::Context, cx: &mut Cx, s: &Session, narrow: bool) {
                     });
                 });
             let r = inner.response.rect;
+            // the whole sheet is what DOM text must not show through (not just the controls in it)
+            #[cfg(target_arch = "wasm32")]
+            crate::web::set_sheet(Some((r.left().floor() as i32, r.top().floor() as i32, (r.right().ceil() - r.left().floor()) as i32, (r.bottom().ceil() - r.top().floor()) as i32)));
             ctx.layer_painter(egui::LayerId::new(egui::Order::Middle, egui::Id::new("tray-top-line")))
                 .hline(r.x_range(), r.top() + 0.5, Stroke::new(1.0, t.line));
             if (cx.stage.tray_box_h - r.height()).abs() > 0.5 {
@@ -1475,6 +1488,7 @@ fn review_panes(ctx: &egui::Context, cx: &mut Cx, s: &Session, narrow: bool) {
                     }
                 }
                 let out = area.show(ui, |ui| {
+                    take_scroll_by(ui, cx);
                     text_column(ui, cx, s, g.as_ref(), &entries);
                     cx.ctl.flush_scroll(ui, &[TEXT, SCAN]);
                 });

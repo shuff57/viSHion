@@ -27,7 +27,7 @@ accesskit = "0.12"
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"
 js-sys = "0.3"
-web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlElement", "HtmlInputElement", "Node", "Event", "EventTarget", "HtmlCollection", "KeyboardEvent", "NodeList", "CssStyleDeclaration", "MediaQueryList", "ResizeObserver", "ResizeObserverEntry", "WheelEvent", "WheelEventInit", "MouseEvent", "TouchEvent", "TouchList", "Touch", "Selection", "HtmlHeadElement", "DomRect", "HtmlScriptElement", "DomTokenList", "UiEvent"] }
+web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlElement", "HtmlInputElement", "Node", "Event", "EventTarget", "HtmlCollection", "KeyboardEvent", "NodeList", "CssStyleDeclaration", "MediaQueryList", "ResizeObserver", "ResizeObserverEntry", "WheelEvent", "WheelEventInit", "MouseEvent", "TouchEvent", "TouchList", "Touch", "Selection", "HtmlHeadElement", "DomRect", "HtmlScriptElement", "DomTokenList", "UiEvent", "ClipboardEvent", "DataTransfer", "Range", "DocumentFragment", "Text"] }
 
 [dev-dependencies]
 # What a platform adapter does with the tree update: the tests feed it the same updates.

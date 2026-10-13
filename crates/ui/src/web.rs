@@ -97,6 +97,7 @@ pub fn install(q: Queue, ctx: egui::Context) {
     };
     listen("click", "act");
     forward_scroll(&h);
+    install_transcript(&h, q.clone(), ctx.clone());
     observe_sizes(ctx.clone());
     // focus arriving by keyboard (`:focus-visible`: Tab, or a script while the keyboard is in use) brings up
     // the rings of regions that hide theirs for a mouse click
@@ -297,6 +298,163 @@ fn forward_scroll(h: &web_sys::Element) {
     });
     let _ = h.add_event_listener_with_callback("touchmove", on_move.as_ref().unchecked_ref());
     on_move.forget();
+}
+
+/// How far the lines of a `.tx-clip` sit below its top edge at rest: the box scrolls (`overflow: hidden`, so the
+/// browser can bring a find-in-page hit or a focused control into view, which `overflow: clip` and `hidden` never do), but a
+/// box cannot scroll above its content. Resting at this offset leaves room to scroll up as well; every scroll
+/// the browser makes is handed to the canvas (which owns the position) and the box goes back to rest.
+const TX_BIAS: i32 = 100_000;
+const BIAS_F: f64 = TX_BIAS as f64;
+
+fn now_ms() -> f64 {
+    web_sys::window().and_then(|w| w.performance()).map_or(0.0, |p| p.now())
+}
+
+/// Find-in-page, focus and selection on the DOM transcript: the scroll the browser makes of the box is the
+/// canvas's to make (`scrollby:`), a copy gives formulas as TeX, and a drag-selection held at the foot or head of
+/// the box scrolls it.
+fn install_transcript(h: &web_sys::Element, q: Queue, ctx: egui::Context) {
+    let focused_at = std::rc::Rc::new(std::cell::Cell::new(f64::NEG_INFINITY));
+    // a control in the box that took focus: the screen reveals it by itself (`reveal:`), so the scroll the browser
+    // made for the focus is not forwarded as well
+    {
+        let f = focused_at.clone();
+        let cb = Closure::<dyn FnMut(web_sys::Event)>::new(move |e: web_sys::Event| {
+            let inside = e.target().and_then(|t| t.dyn_into::<web_sys::Element>().ok()).is_some_and(|el| el.closest(".tx-clip").ok().flatten().is_some());
+            if inside {
+                f.set(now_ms());
+            }
+        });
+        let _ = h.add_event_listener_with_callback("focusin", cb.as_ref().unchecked_ref());
+        cb.forget();
+    }
+    // `scroll` does not bubble: seen in the capture phase
+    {
+        let (q, ctx, f) = (q.clone(), ctx.clone(), focused_at.clone());
+        let cb = Closure::<dyn FnMut(web_sys::Event)>::new(move |e: web_sys::Event| {
+            let Some(el) = e.target().and_then(|t| t.dyn_into::<web_sys::Element>().ok()) else { return };
+            if !el.class_list().contains("tx-clip") {
+                return;
+            }
+            let d = (el.scroll_top() - BIAS_F).round() as i32;
+            if el.scroll_left() != 0.0 {
+                el.set_scroll_left(0.0);
+            }
+            if d == 0 {
+                return;
+            }
+            el.set_scroll_top(BIAS_F);
+            if now_ms() - f.replace(f64::NEG_INFINITY) < 400.0 {
+                return;
+            }
+            q.lock().unwrap().push(format!("scrollby:{d}"));
+            ctx.request_repaint();
+        });
+        let _ = h.add_event_listener_with_callback_and_bool("scroll", cb.as_ref().unchecked_ref(), true);
+        cb.forget();
+    }
+    // The selection moved into view-less text (find-in-page: `window.find` selects its hit and the browser does not
+    // scroll a box inside a page that cannot scroll): the screen scrolls to it, unless a drag is making the
+    // selection (it is the person's pointer that decides what is in view then)
+    if let Some(doc) = document() {
+        let down = std::rc::Rc::new(std::cell::Cell::new(false));
+        for (kind, v) in [("mousedown", true), ("mouseup", false), ("dragend", false)] {
+            let d = down.clone();
+            let cb = Closure::<dyn FnMut(web_sys::Event)>::new(move |_: web_sys::Event| d.set(v));
+            let _ = doc.add_event_listener_with_callback_and_bool(kind, cb.as_ref().unchecked_ref(), true);
+            cb.forget();
+        }
+        let (q, ctx) = (q.clone(), ctx.clone());
+        let cb = Closure::<dyn FnMut(web_sys::Event)>::new(move |_: web_sys::Event| {
+            if down.get() {
+                return;
+            }
+            if let Some(d) = selection_offscreen() {
+                q.lock().unwrap().push(format!("scrollby:{d}"));
+                ctx.request_repaint();
+            }
+        });
+        let _ = doc.add_event_listener_with_callback("selectionchange", cb.as_ref().unchecked_ref());
+        cb.forget();
+    }
+    // Ctrl+C / the context menu's Copy: the lines apart, a formula as the TeX it is written in
+    if let Some(doc) = document() {
+        let cb = Closure::<dyn FnMut(web_sys::ClipboardEvent)>::new(move |e: web_sys::ClipboardEvent| {
+            if let Some(text) = selected_text() {
+                if let Some(dt) = e.clipboard_data() {
+                    if dt.set_data("text/plain", &text).is_ok() {
+                        e.prevent_default();
+                    }
+                }
+            }
+        });
+        let _ = doc.add_event_listener_with_callback("copy", cb.as_ref().unchecked_ref());
+        cb.forget();
+    }
+}
+
+/// How far the transcript has to scroll for the end of a selection made inside it to be in the box (0 when it is).
+fn selection_offscreen() -> Option<i32> {
+    let doc = document()?;
+    let sel = web_sys::window()?.get_selection().ok().flatten()?;
+    if sel.is_collapsed() || sel.range_count() == 0 {
+        return None;
+    }
+    let (a, f) = (sel.anchor_node()?, sel.focus_node()?);
+    let clip_of = |n: &web_sys::Node| -> Option<web_sys::Element> {
+        let e = if n.node_type() == web_sys::Node::ELEMENT_NODE { n.clone().dyn_into::<web_sys::Element>().ok()? } else { n.parent_element()? };
+        e.closest(".tx-clip").ok().flatten()
+    };
+    let clip = clip_of(&a)?;
+    clip_of(&f)?;
+    let bounds = clip.get_bounding_client_rect();
+    // the end the selection grew to (a collapsed range has a box when it is in a text node), else the whole range
+    let mut r = None;
+    if let Ok(c) = doc.create_range() {
+        if c.set_start(&f, sel.focus_offset()).is_ok() {
+            c.collapse_with_to_start(true);
+            let b = c.get_bounding_client_rect();
+            if b.height() > 0.0 {
+                r = Some(b);
+            }
+        }
+    }
+    let r = r.or_else(|| sel.get_range_at(0).ok().map(|g| g.get_bounding_client_rect()))?;
+    if r.height() <= 0.0 || (r.top() >= bounds.top() && r.bottom() <= bounds.bottom()) {
+        return None;
+    }
+    let (rc, bc) = ((r.top() + r.bottom()) / 2.0, (bounds.top() + bounds.bottom()) / 2.0);
+    Some((rc - bc).round() as i32)
+}
+
+/// What a selection that starts or ends in the DOM transcript copies: its text, a formula as its TeX (`$...$`,
+/// `$$...$$` for display) instead of the typeset symbols.
+fn selected_text() -> Option<String> {
+    let doc = document()?;
+    let sel = web_sys::window()?.get_selection().ok().flatten()?;
+    if sel.is_collapsed() || sel.range_count() == 0 {
+        return None;
+    }
+    let inside = |n: Option<web_sys::Node>| {
+        n.and_then(|n| if n.node_type() == web_sys::Node::ELEMENT_NODE { n.dyn_into::<web_sys::Element>().ok() } else { n.parent_element() })
+            .is_some_and(|e| e.closest(".tx-clip").ok().flatten().is_some())
+    };
+    if !(inside(sel.anchor_node()) || inside(sel.focus_node())) {
+        return None;
+    }
+    let frag = sel.get_range_at(0).ok()?.clone_contents().ok()?;
+    let list = frag.query_selector_all(".tx-math").ok()?;
+    for i in 0..list.length() {
+        let Some(m) = list.item(i).and_then(|n| n.dyn_into::<web_sys::Element>().ok()) else { continue };
+        let tex = m.get_attribute("data-tex").unwrap_or_default();
+        let d = if m.class_list().contains("disp") { "$$" } else { "$" };
+        let t = doc.create_text_node(&format!("{d}{tex}{d}"));
+        if let Some(parent) = m.parent_node() {
+            let _ = parent.replace_child(&t, &m);
+        }
+    }
+    frag.text_content()
 }
 
 /// The event is over a formula that is wider than its box (it scrolls sideways).
@@ -732,6 +890,12 @@ fn clip_holes(mut c: Spec, holes: &[(i32, i32, i32, i32)]) -> Spec {
         Some(format!("polygon(evenodd, {})", pts.join(", ")))
     };
     c.props.push(("clip-path", v));
+    // content below the box's own height, so that it can rest at `TX_BIAS` when the lines are short
+    let mut pad = Spec::new("tx-pad", "div").attr("aria-hidden", "true");
+    pad.rect = Some((cx, cy + ch, 1, 1));
+    if let Some(k) = c.children.as_mut() {
+        k.push(pad);
+    }
     c
 }
 
@@ -800,6 +964,7 @@ fn structure(nodes: &[Node]) -> Vec<Spec> {
 /// Rectangles egui draws over the page that DOM text must not cover: the toast, and the word panel (a tray
 /// that rides over the transcript on a narrow screen).
 fn overlays(nodes: &[Node]) -> Vec<(i32, i32, i32, i32)> {
+    let sheet = SHEET.with(|s| s.take());
     let mut out = vec![];
     let mut tray: Option<(i32, i32, i32, i32)> = None;
     for n in nodes {
@@ -824,8 +989,19 @@ fn overlays(nodes: &[Node]) -> Vec<(i32, i32, i32, i32)> {
             });
         }
     }
-    out.extend(tray);
+    // the whole sheet when the screen says where it is (it has padding and a background the controls in it
+    // do not cover), else what the controls in it span
+    out.extend(sheet.or(tray));
     out
+}
+
+thread_local! {
+    /// Where the word panel's sheet is this frame (x, y, w, h), set by the review screen when it rides over the page.
+    static SHEET: std::cell::Cell<Option<(i32, i32, i32, i32)>> = const { std::cell::Cell::new(None) };
+}
+
+pub fn set_sheet(r: Option<(i32, i32, i32, i32)>) {
+    SHEET.with(|s| s.set(r));
 }
 
 /// Give every container without a rectangle of its own the union of its children's, and return the union of
@@ -983,8 +1159,15 @@ fn reconcile(doc: &web_sys::Document, parent: &web_sys::Element, specs: &[Spec],
             }
         }
         if let Some(kids) = &sp.children {
-            let o = sp.rect.map_or(origin, |r| (r.0, r.1));
+            let mut o = sp.rect.map_or(origin, |r| (r.0, r.1));
+            let clip = sp.key == "tx-clip";
+            if clip {
+                o.1 -= TX_BIAS;
+            }
             reconcile(doc, &el, kids, o);
+            if clip && (el.scroll_top() - BIAS_F).abs() > 0.5 {
+                el.set_scroll_top(BIAS_F);
+            }
         }
         let in_place = match &prev {
             None => el.previous_element_sibling().is_none() && el.parent_element().is_some_and(|p| p.is_same_node(Some(parent))),
@@ -1316,7 +1499,16 @@ pub fn measure() -> bool {
             .and_then(|cs| cs.get_property_value("padding-bottom").ok())
             .and_then(|v| v.trim_end_matches("px").parse::<f64>().ok())
             .map_or(0.0, |pb| (pb - 1.0).max(0.0));
-        now.h.insert(id, (r.height() / k - reach) as f32);
+        // margins of the line (a user stylesheet's paragraph spacing, WCAG 1.4.12) are room the screen makes: the
+        // lines are placed by the screen, so the browser has no neighbour to push away
+        let (mt, mb) = web_sys::window()
+            .and_then(|w| w.get_computed_style(&p).ok().flatten())
+            .map(|cs| {
+                let px = |n: &str| cs.get_property_value(n).ok().and_then(|v| v.trim_end_matches("px").parse::<f64>().ok()).unwrap_or(0.0);
+                (px("margin-top"), px("margin-bottom"))
+            })
+            .unwrap_or((0.0, 0.0));
+        now.h.insert(id, ((r.height() / k + mt + mb) - reach).max(0.0) as f32);
         // a formula wider than the line is a box of the column's width that scrolls (WCAG 1.4.10: it is not
         // cut off); one that fits is left as inline math is laid out
         if let Ok(ms) = p.query_selector_all(".tx-math") {
@@ -1336,6 +1528,16 @@ pub fn measure() -> bool {
                     let _ = if wide { m.set_attribute("data-wide", "") } else { m.remove_attribute("data-wide") };
                     now.relaid = true;
                 }
+                // the TeX laid over the formula (what a find hit selects) is squeezed to the formula's width, so a
+                // hit anywhere in it is a box on the formula, not off its end
+                if let (Ok(Some(hit)), Some(style)) = (m.query_selector(".tx-hit"), m.query_selector(".tx-hit").ok().flatten().and_then(|e| e.dyn_into::<web_sys::HtmlElement>().ok()).map(|e| e.style())) {
+                    let (nat, w) = (hit.scroll_width() as f64, hit.client_width() as f64);
+                    let t = if nat > w && w > 0.0 { format!("scaleX({:.3})", w / nat) } else { String::new() };
+                    if style.get_property_value("transform").ok().as_deref() != Some(t.as_str()) {
+                        let _ = style.set_property("transform-origin", "0 0");
+                        let _ = style.set_property("transform", &t);
+                    }
+                }
                 // a box that scrolls is reached with the keyboard (WCAG 2.1.1) and says what it is
                 let scrolls = m.scroll_width() > m.client_width() + 1;
                 if scrolls != m.has_attribute("tabindex") {
@@ -1348,7 +1550,7 @@ pub fn measure() -> bool {
                 let Some(b) = ws.item(j).and_then(|n| n.dyn_into::<web_sys::Element>().ok()) else { continue };
                 let Some(bid) = b.get_attribute("data-id") else { continue };
                 let br = b.get_bounding_client_rect();
-                now.chips.insert(bid, [((br.x() - r.x()) / k) as f32, ((br.y() - r.y()) / k) as f32, (br.width() / k) as f32, (br.height() / k) as f32]);
+                now.chips.insert(bid, [((br.x() - r.x()) / k) as f32, ((br.y() - r.y()) / k + mt) as f32, (br.width() / k) as f32, (br.height() / k) as f32]);
             }
         }
     }
@@ -1418,39 +1620,59 @@ fn render_math(el: &web_sys::Element, tex: &str, display: bool) {
     match render {
         Some(f) => {
             let opts = js_sys::Object::new();
-            let _ = js_sys::Reflect::set(&opts, &"output".into(), &"mathml".into());
+let _ = js_sys::Reflect::set(&opts, &"output".into(), &"mathml".into());
             let _ = js_sys::Reflect::set(&opts, &"displayMode".into(), &JsValue::from_bool(display));
             let _ = js_sys::Reflect::set(&opts, &"throwOnError".into(), &JsValue::FALSE);
             match f.call2(&JsValue::NULL, &JsValue::from_str(tex), &opts).ok().and_then(|v| v.as_string()) {
                 Some(html) => {
                     el.set_inner_html(&html);
                     let _ = el.class_list().remove_1("src");
-                    // the formula is spoken from the element's label (`tex_speech`): the typeset copy is not read
-                    // as well, and the TeX stays in the tree as its text
+                    // its TeX annotation is a second copy of the text, a hit of `window.find` that selects nothing
+                    if let Ok(Some(a)) = el.query_selector("annotation") {
+                        a.remove();
+                    }
+                    // the formula is spoken once, from the element's label (`tex_speech`): the typeset copy is
+                    // for the eye (and for find-in-page and selection); a copy gives its TeX (`install_copy`)
                     if let Some(m) = el.first_element_child() {
                         let _ = m.set_attribute("aria-hidden", "true");
                     }
-                    if let Some(src) = document().and_then(|d| d.create_element("span").ok()) {
-                        let _ = src.set_attribute("class", "tx-tex");
-                        // what a selection or a copy gives for the formula: its TeX, in the dollars it is written in
+                    // What find-in-page hits and a selection holds (the typeset formula is `user-select: none`:
+                    // its symbols are blocks, which a selection reads one per line): the TeX, as text laid over
+                    // the formula, transparent, so a hit is painted on the formula where it is
+                    if let Some(hit) = document().and_then(|d| d.create_element("span").ok()) {
+                        let _ = hit.set_attribute("class", "tx-hit");
+                        let _ = hit.set_attribute("aria-hidden", "true");
                         let d = if display { "$$" } else { "$" };
-                        src.set_text_content(Some(&format!("{d}{tex}{d}")));
-                        let _ = el.append_child(&src);
+                        hit.set_text_content(Some(&format!("{d}{tex}{d}")));
+                        // before the typeset formula: `window.find` takes the first hit it can read, and the
+                        // formula's own text is not selectable (it would be a hit that selects nothing)
+                        let first = el.first_child();
+                        let _ = el.insert_before(&hit, first.as_ref());
                     }
                 }
                 None => {
-                    el.set_text_content(Some(tex));
-                    let _ = el.class_list().add_1("src");
+                    src_text(el, tex);
                 }
             }
         }
         None => {
-            el.set_text_content(Some(tex));
-            let _ = el.class_list().add_1("src");
+            src_text(el, tex);
             ensure_katex();
         }
     }
     let _ = el.set_attribute("data-done", &state);
+}
+
+/// The TeX as monospace text while there is no typesetter (plan rule 4), hidden from a reader: the element is
+/// named from its label.
+fn src_text(el: &web_sys::Element, tex: &str) {
+    el.set_text_content(None);
+    if let Some(span) = document().and_then(|d| d.create_element("span").ok()) {
+        let _ = span.set_attribute("aria-hidden", "true");
+        span.set_text_content(Some(tex));
+        let _ = el.append_child(&span);
+    }
+    let _ = el.class_list().add_1("src");
 }
 
 fn css(c: egui::Color32) -> String {

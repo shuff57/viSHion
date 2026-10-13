@@ -29,7 +29,7 @@
   @font-face { font-family: "Source Serif 4"; font-weight: 400; font-style: italic; font-display: swap; src: url("fonts/source-serif-4-latin-400-italic.woff2") format("woff2"); }
   @font-face { font-family: "Hack"; font-weight: 400; font-display: swap; src: url("fonts/hack-latin-400-normal.ttf") format("truetype"); }
   @font-face { font-family: "STIX Two Math"; font-display: swap; src: url("stix-two-math.otf") format("opentype"); }
-  #controls .tx-clip { position: absolute; overflow: clip; pointer-events: none; }
+  #controls .tx-clip { position: absolute; overflow: auto; scrollbar-width: none; overscroll-behavior: none; pointer-events: none; }
   #controls [inert] .tx-clip { visibility: hidden; }
   #controls p.tx {
     position: absolute; margin: 0; padding: 1px 0; pointer-events: auto; cursor: text; touch-action: pinch-zoom;
@@ -49,19 +49,21 @@
   #controls p.tx .lead { color: var(--ink, #1B2230); font-weight: 600; }
   #controls p.tx del { color: var(--muted, #5A6478); }
   #controls p.tx.display { text-align: center; }
-  #controls p.tx .tx-math { font-size: 1.21em; }
+  #controls p.tx .tx-math { font-size: 1.21em; position: relative; }
   /* a formula wider than the column (400% zoom, a narrow window) scrolls inside its own box instead of being cut
      off by the clip (WCAG 1.4.10); `data-wide` is set by the page when it measures. A formula that fits is
      inline math, laid out as before. */
   #controls p.tx .tx-math.disp { display: block; margin: 22px 0; max-width: 100%; overflow-x: auto; overflow-y: hidden; }
   #controls p.tx .tx-math[data-wide] { display: inline-block; max-width: 100%; overflow-x: auto; overflow-y: hidden; vertical-align: middle; }
-  /* what a selection or a copy gives for a formula is its TeX ($...$, one line); the typeset MathML is for the eye */
+  /* what a selection or a find-in-page holds of a formula: its TeX, transparent text laid over it (the typeset
+     MathML is for the eye: a selection reads its symbols one per line) */
   #controls p.tx .tx-math math { user-select: none; }
-  #controls p.tx .tx-tex { position: absolute; left: 0; top: 0; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; user-select: text; }
+  #controls p.tx .tx-hit { position: absolute; left: 0; top: 0; bottom: 0; right: 0; overflow: hidden; white-space: nowrap; color: transparent;
+    font: 10px/1.2 "Hack", ui-monospace, Consolas, monospace; user-select: text; pointer-events: none; }
   /* the end of a line: a break in the text a selection gives, no height */
   #controls p.tx .tx-nl { display: block; height: 0; overflow: hidden; white-space: pre; }
-  #controls p.tx .tx-math.src, #controls p.tx .katex-error { font: 0.85em "Hack", ui-monospace, Consolas, monospace; color: var(--bad, #B3261E); }
   #controls p.tx math { font-family: "STIX Two Math", "Cambria Math", math; }
+  #controls p.tx .tx-math.src, #controls p.tx .katex-error { font: 0.85em "Hack", ui-monospace, Consolas, monospace; color: var(--bad, #B3261E); }
   /* flagged words (css/components.css `.w`): the painted word is 4px of padding round the text as in the JS app; the
      button itself reaches 8px further up and down (44px high, the same margin takes it back: the line is not taller) */
   #controls p.tx .w {

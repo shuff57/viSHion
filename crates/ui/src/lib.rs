@@ -93,6 +93,9 @@ pub struct Ctl {
     /// A transcript line to bring into view (`reveal:<line id>` from the page: a formula that scrolls sideways
     /// took keyboard focus).
     pub(crate) reveal: Option<String>,
+    /// Points the page asks the transcript to scroll by (`scrollby:<dy>`: find-in-page or a drag-selection
+    /// at the edge moved the DOM text, which the canvas's scroll area has to follow).
+    pub(crate) scroll_by: f32,
     /// Native: the control that had the keyboard focus last (see `track_focus`).
     restore_kb: Option<String>,
     /// Text typed into a twin textbox, by id (consumed by the widget that owns it).
@@ -602,6 +605,8 @@ impl Ctl {
             } else if let Some(id) = m.strip_prefix("focus:") {
                 self.focus = Some(id.into());
                 self.focus_fresh = true;
+            } else if let Some(d) = m.strip_prefix("scrollby:") {
+                self.scroll_by += d.parse::<f32>().unwrap_or(0.0);
             } else if let Some(id) = m.strip_prefix("reveal:") {
                 self.reveal = Some(id.into());
             } else if let Some(id) = m.strip_prefix("blur:") {

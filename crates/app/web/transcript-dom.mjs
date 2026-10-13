@@ -230,6 +230,99 @@ try {
     expect(/^It does not mean/.test(await page.evaluate(() => getSelection().toString())), 'and it selects it');
     await ctx.close();
   }
+  // 9. The word panel is a sheet over the page on a phone and a tablet: no transcript text shows or takes the pointer
+  //    through any part of it (its padding too, not only the controls in it)
+  for (const [w, h, fixed] of [[390, 844, 3], [768, 1024, 0]]) {
+    const { ctx, page, pump } = await open({ width: w, height: h });
+    for (let k = 0; k < fixed; k++) { await page.mouse.move(200, 500); await page.mouse.wheel(0, 350); await pump(4); await page.waitForTimeout(300); }
+    for (let k = 0; k < (fixed ? 0 : 8); k++) {
+      const seen = await page.evaluate(() => { const b = document.querySelector('#controls p.tx button.w'); const r = b.getBoundingClientRect(); const c = document.querySelector('#controls .tx-clip').getBoundingClientRect(); return r.top > c.top + 20 && r.bottom < c.bottom - 20; });
+      if (seen) break;
+      await page.mouse.move(w / 2, h / 2); await page.mouse.wheel(0, 300); await pump(3); await page.waitForTimeout(250);
+    }
+    const at = await page.evaluate(() => { const r = document.querySelector('#controls p.tx button.w').getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; });
+    await page.mouse.click(at[0], at[1]);
+    await pump(4); await page.waitForTimeout(1200); await pump(3);
+    const r = await page.evaluate(() => {
+      const t = document.querySelector('#controls [data-id="tray-title"]');
+      if (!t) return { none: true };
+      const y0 = Math.max(0, t.getBoundingClientRect().top - 4);
+      let leak = 0, n = 0;
+      for (let x = 4; x < innerWidth - 4; x += 6) for (let y = y0; y < innerHeight - 2; y += 6) { n++; const e = document.elementFromPoint(x, y); if (e && e.closest && e.closest('p.tx')) leak++; }
+      return { leak, n, y0 };
+    });
+    expect(!r.none && r.leak === 0, `${w}x${h}: transcript text does not show through the word panel: ` + JSON.stringify(r));
+    await ctx.close();
+  }
+
+  // 10. Find-in-page: a hit below the fold is scrolled to, and a formula's text is found on the formula itself
+  {
+    const { ctx, page, pump } = await open({ width: 1280, height: 450 });
+    const geo = (t) => page.evaluate((t) => {
+      const p = [...document.querySelectorAll('#controls p.tx')].find((e) => e.textContent.includes(t));
+      const r = p.getBoundingClientRect(); const c = document.querySelector('#controls .tx-clip').getBoundingClientRect();
+      return { top: r.top, bottom: r.bottom, clipTop: c.top, clipBottom: c.bottom };
+    }, t);
+    const before = await geo('likely wide');
+    await page.evaluate(() => { getSelection().removeAllRanges(); window.find('likely wide'); });
+    await pump(10); await page.waitForTimeout(800);
+    const after = await geo('likely wide');
+    expect(before.top > before.clipBottom && after.bottom <= after.clipBottom && after.top >= after.clipTop, `a find hit below the fold is scrolled into view: ${Math.round(before.top)} -> ${Math.round(after.top)}`);
+    // back to the top, then a formula's own text
+    await page.mouse.move(640, 200); await page.mouse.wheel(0, -2000); await pump(6); await page.waitForTimeout(400);
+    for (const needle of ['1.96', '40']) {
+      const hit = await page.evaluate((n) => {
+        getSelection().removeAllRanges();
+        const found = window.find(n);
+        const s = getSelection();
+        if (!found || !s.rangeCount) return { found };
+        const r = s.getRangeAt(0).getBoundingClientRect();
+        const m = (s.anchorNode.nodeType === 1 ? s.anchorNode : s.anchorNode.parentElement).closest('.tx-math');
+        const mr = m && m.getBoundingClientRect();
+        return { found, w: r.width, h: r.height, inMath: !!m && r.left >= mr.left - 1 && r.right <= mr.right + 1 && r.top >= mr.top - 1 && r.bottom <= mr.bottom + 1, tex: !!(m && s.anchorNode.parentElement.closest('[aria-hidden]')) };
+      }, needle);
+      expect(hit.found && hit.w >= 8 && hit.h >= 8 && hit.inMath, `find '${needle}' selects text laid over the typeset formula (a box you can see): ` + JSON.stringify(hit));
+    }
+    await ctx.close();
+  }
+
+  // 11. A drag-selection held at the foot of the transcript scrolls it
+  {
+    const { ctx, page } = await open({ width: 1280, height: 450 });
+    const p0 = await page.evaluate(() => { const r = document.querySelectorAll('#controls p.tx')[0].getBoundingClientRect(); return [r.left + 4, r.top + 10, r.top]; });
+    await page.mouse.move(p0[0], p0[1]); await page.mouse.down();
+    await page.mouse.move(900, 440, { steps: 5 });
+    for (let i = 0; i < 20; i++) { await page.mouse.move(900, 449 - (i % 2)); await page.waitForTimeout(100); }
+    await page.mouse.up();
+    const t1 = await page.evaluate(() => document.querySelectorAll('#controls p.tx')[0].getBoundingClientRect().top);
+    expect(t1 < p0[2] - 40, `a drag-selection held at the foot scrolls the transcript: ${Math.round(p0[2])} -> ${Math.round(t1)}`);
+    await ctx.close();
+  }
+
+  // 12. A formula is spoken once: nothing under role=math is in the accessibility tree, only its label
+  {
+    const { ctx, page } = await open({ width: 1280, height: 800 });
+    const cdp = await ctx.newCDPSession(page);
+    const { nodes } = await cdp.send('Accessibility.getFullAXTree');
+    const byId = new Map(nodes.map((n) => [n.nodeId, n]));
+    const exposed = []; let maths = 0;
+    const walk = (n) => { for (const id of n.childIds || []) { const k = byId.get(id); if (!k) continue; if (!k.ignored && k.role?.value === 'StaticText') exposed.push(k.name?.value); walk(k); } };
+    for (const n of nodes) if (!n.ignored && n.role?.value === 'math') { maths++; walk(n); }
+    expect(maths >= 2 && exposed.length === 0, `a formula is one named math node with no text under it (${maths} formulas): ` + JSON.stringify(exposed));
+    await ctx.close();
+  }
+
+  // 13. Paragraph spacing (WCAG 1.4.12) from the person's stylesheet makes room between lines
+  for (const css of ['#controls p.tx { margin-bottom: 24px !important; }', '* { margin-bottom: 1em !important; }']) {
+    const { ctx, page, pump } = await open({ width: 1280, height: 800 });
+    const gaps = () => page.evaluate(() => { const ls = [...document.querySelectorAll('#controls p.tx[data-line]')].map((p) => p.getBoundingClientRect()); return ls.slice(1).map((r, i) => Math.round(r.top - ls[i].bottom)); });
+    const g0 = await gaps();
+    await page.addStyleTag({ content: css });
+    await pump(10); await page.waitForTimeout(800); await pump(4);
+    const g1 = await gaps();
+    expect(g1.every((g, i) => g >= g0[i] + 16), `${css}: each line has at least 16px more room: ` + JSON.stringify([g0, g1]));
+    await ctx.close();
+  }
 } catch (e) {
   failures.push(String(e.stack || e));
   console.error(e);

@@ -104,7 +104,7 @@ try {
     has(/- paragraph: 4 words to check/, 'the count of words to check is read in place (not a live region: one utterance per action)');
     has(/- paragraph: Spelling to check, Couldn.t read, You checked it/, 'the legend of the colours is text');
     expect(/- math "x bar plus or minus 1\.96 times the fraction s over square root of n end fraction equals/.test(snap)
-      && /\\\\bar\{x\} \\\\pm/.test(snap), 'math: role=math, spoken name from TeX, and the TeX as its text');
+      && !snap.includes('\\\\' + 'bar{x}'), 'math: role=math with its spoken name, and no text under it (the TeX is not read a second time)');
     const sentenceOrder = await page.evaluate(() => [...document.querySelectorAll('#controls p[data-id^="line-"]')].map(p => p.textContent.trim()).filter(Boolean).slice(0, 3));
     expect(/^The 95%/.test(sentenceOrder[0]), 'the text twin reads the transcript in line order: ' + JSON.stringify(sentenceOrder[0]));
     // every control has a name and nothing focusable is aria-hidden
