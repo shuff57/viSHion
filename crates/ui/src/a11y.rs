@@ -1431,4 +1431,33 @@ mod tests {
         assert_eq!(landmark(TRAY, &[]).map(|l| l.0), Some("complementary"));
         assert!(in_main(SCAN) && !in_main(TRAY));
     }
+
+    // blind-critic round 10: spoken-math misreads found by reading ~150 invented expressions.
+    // Ignored so the workspace stays green: cargo test -p vishion-ui critic_round10 -- --ignored
+    #[test]
+    #[ignore = "open a11y gap: spoken math"]
+    fn critic_round10_spoken_math_gaps() {
+        let cases: [(&str, &str); 14] = [
+            (r"\left(\frac{1}{2}\right)^3", "evaluated at"),
+            (r"\left[a+b\right]^2", "evaluated at"),
+            (r"\int_C f\,ds", "from C"),
+            (r"\exists! x", "factorial"),
+            (r"\overleftrightarrow{AB}", "overleftrightarrow"),
+            (r"\oplus", "oplus"),
+            (r"\otimes", "otimes"),
+            (r"\vdots", "vdots"),
+            (r"\ddot{x}", "ddot"),
+            (r"\underline{x}", "underline"),
+            (r"\measuredangle ABC", "measured angle"),
+            (r"\odot O", "odot"),
+            (r"{}_nC_r", "sub n C"),
+            (r"y^{\prime\prime}", "to the power of prime"),
+        ];
+        let found: Vec<String> = cases
+            .iter()
+            .filter(|(t, w)| tex_speech(t).contains(w))
+            .map(|(t, _)| format!("{t} => {}", tex_speech(t)))
+            .collect();
+        assert!(found.is_empty(), "misreads:\n{}", found.join("\n"));
+    }
 }
