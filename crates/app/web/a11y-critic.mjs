@@ -200,6 +200,61 @@ try {
     expect(px === canvas, 'forced-colors: the text pane is drawn in the system Canvas colour ' + canvas + ', not ' + px);
     await ctx.close();
   }
+  // ---- round 6 (blind critic): gaps against the JS app that round 5 left
+  {
+    // g. while the wasm downloads (1.8 MB gzipped) the page is empty: the JS app is DOM and has its text at once
+    const b = await chromium.launch({ executablePath: exe });
+    const ctx = await b.newContext({ bypassCSP: true });
+    const page = await ctx.newPage();
+    await page.route('**/*.wasm', async (r) => { await new Promise((x) => setTimeout(x, 3000)); r.continue(); });
+    page.goto(`http://127.0.0.1:${port}/?demo=1`, { waitUntil: 'domcontentloaded' }).catch(() => {});
+    await page.waitForTimeout(1200);
+    const txt = await page.evaluate(() => document.body.innerText.trim() + '|' + [...document.querySelectorAll('[role=status],[role=alert],[aria-live]')].map((e) => e.textContent).join(''));
+    expect(/load|start|open|wait|read/i.test(txt), 'while the app downloads, a screen reader finds a status ("Loading viSHion...") instead of an empty page: ' + JSON.stringify(txt));
+    await b.close();
+  }
+  {
+    // h. no WebGL (remote desktop, blocklisted GPU, locked-down browser): the JS app is DOM and works; this page must say why
+    const b = await chromium.launch({ executablePath: exe, args: ['--disable-gpu', '--disable-3d-apis', '--disable-webgl', '--disable-software-rasterizer'] });
+    const ctx = await b.newContext({ bypassCSP: true });
+    const page = await ctx.newPage();
+    await page.goto(`http://127.0.0.1:${port}/?demo=1`, { waitUntil: 'load' });
+    await page.waitForTimeout(5000);
+    const r = await page.evaluate(() => ({ err: window.__error || null, text: (document.body.innerText + [...document.querySelectorAll('[role=alert],[role=status]')].map((e) => e.textContent).join('')).trim() }));
+    expect(!r.err || r.text.length > 0, 'when the app cannot start (' + r.err + ') the page says so in text; it is blank today: ' + JSON.stringify(r.text));
+    await b.close();
+  }
+  {
+    // i. the twin is laid over the canvas "at the rectangle it is drawn in": headings, lines and math too (touch exploration,
+    // Narrator and magnifier cursors). Today only buttons and inputs have a rectangle; text nodes are stacked at x=0, full width.
+    const { ctx, page } = await open({ width: 1280, height: 800 });
+    const r = await page.evaluate(() => {
+      const q = (i) => document.querySelector('#controls [data-id="' + i + '"]')?.getBoundingClientRect();
+      return { h1: q('student-name'), line: q('line-p-maya-1-0'), t: q('transcript'), vw: innerWidth };
+    });
+    expect(r.h1.left >= r.t.left - 4 && r.h1.width < r.vw * 0.8, `the h1 "Maya R." rectangle is where it is drawn (left ${Math.round(r.h1.left)}, width ${Math.round(r.h1.width)}; the transcript pane starts at ${Math.round(r.t.left)})`);
+    expect(r.line.left >= r.t.left - 4 && r.line.width <= r.t.width + 8, `a transcript line's rectangle is inside the transcript pane (left ${Math.round(r.line.left)}, width ${Math.round(r.line.width)})`);
+    await ctx.close();
+  }
+  {
+    // j. multi-select of pages from the keyboard: JS reads ctrlKey/shiftKey of the click, so Shift+Enter on a page selects it
+    const { ctx, page, pump } = await open({ width: 1280, height: 800 });
+    const focus = async (id) => { await page.evaluate((i) => document.querySelector('#controls [data-id="' + i + '"]')?.focus(), id); await pump(3); };
+    await focus('page-p-maya-1'); await page.keyboard.press('Shift+Enter'); await pump(5);
+    await focus('page-p-maya-2'); await page.keyboard.press('Shift+Enter'); await pump(5);
+    const snap = await page.locator('body').ariaSnapshot();
+    expect(/Export 2 selected/.test(snap), 'Shift+Enter on two pages selects them: "Export 2 selected", "Review again" and "Clear" appear (JS)');
+    await ctx.close();
+  }
+  {
+    // k. Transcribe this page again replaces the transcript: say that it started or finished (JS: the status pill)
+    const { ctx, page, pump } = await open({ width: 1280, height: 800 });
+    await page.evaluate(() => document.querySelector('#controls [data-id="transcribe-again"]').focus()); await pump(3);
+    await page.keyboard.press('Enter'); await pump(10); await page.waitForTimeout(800); await pump(4);
+    const said = await page.evaluate(() => document.getElementById('announce').textContent + document.getElementById('announce-alert').textContent);
+    expect(said.trim() !== '', 'Transcribe this page again says it started or finished (the transcript was replaced in silence): ' + JSON.stringify(said));
+    await ctx.close();
+  }
 } catch (e) {
   console.error(e);
   failures.push('exception: ' + (e && e.message));
