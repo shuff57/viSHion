@@ -522,6 +522,8 @@ fn apply(
             s.tray_open = open;
             if open {
                 s.sync_tray();
+                ctl.say(format!("Word panel opened. {}", s.next_word_phrase()));
+                ctl.want_focus = Some("prev-word".into());
             } else if let Some((p, k)) = s.sel_word.clone() {
                 // focus returns to the word, as `close()` in review.js does
                 ctl.want_focus = Some(format!("word-{p}-{k}"));
@@ -546,11 +548,19 @@ fn apply(
             }
         }
         Act::ReadClear => s.set_read_line(None),
-        Act::Zoom(d) => s.step_zoom(d),
-        Act::ZoomSet(z) => s.set_zoom(z),
+        Act::Zoom(d) => {
+            s.step_zoom(d);
+            ctl.say(format!("Zoom {}%", (s.zoom * 100.0).round() as i32));
+        }
+        Act::ZoomSet(z) => {
+            s.set_zoom(z);
+            ctl.say(format!("Zoom {}%", (s.zoom * 100.0).round() as i32));
+        }
         Act::Pan(p) => ctl.pan = Some(p),
         Act::Rotate => {
-            s.rotate_current();
+            if s.rotate_current() {
+                ctl.say("Page turned 90 degrees.");
+            }
         }
         Act::Level => {
             if let Some(id) = s.selected.clone() {
@@ -581,7 +591,11 @@ fn apply(
             }
         }
         Act::ChangeStudent => *dialog = Some(Dialog::change_student()),
-        Act::TextView(raw) => s.text_raw = raw,
+        Act::TextView(raw) => {
+            s.text_raw = raw;
+            ctl.say(if raw { "Showing plain text." } else { "Showing formatted text." });
+            ctl.want_focus = Some("text-view".into());
+        }
         Act::Transcribe(id, again) => {
             let touched = s.page(&id).is_some_and(|p| s.has_decisions(p));
             if again && touched {
