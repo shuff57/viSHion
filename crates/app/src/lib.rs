@@ -55,6 +55,7 @@ mod web {
         let want = get("project");
         let theme = get("theme").filter(|t| t == "light" || t == "dark");
         let inbox_first = get("view").is_some_and(|v| v == "inbox");
+        let page = get("page");
 
         let now = || js_sys::Date::now() as i64;
         let backend: Rc<Backend> = Rc::new(if demo {
@@ -103,6 +104,9 @@ mod web {
                     let mut app = vishion_ui::App::new(cc.egui_ctx.clone()).with_host(dispatch, inbox).inbox(inbox_first);
                     if let Some(t) = theme {
                         app = app.theme(&t);
+                    }
+                    if let Some(p) = &page {
+                        app = app.page(p);
                     }
                     Ok(Box::new(app))
                 }),

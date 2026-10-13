@@ -1583,10 +1583,13 @@ fn transcript_pane(ui: &mut Ui, cx: &mut Cx, s: &Session, g: Option<&vishion_cor
     // body by page state
     match p.status() {
         "transcribing" => {
-            ui.add_space(18.0);
-            ui.label(RichText::new(p.raw()).font(theme::serif(TEXT_PX)).color(t.ink));
-            ui.add_space(8.0);
-            ui.label(RichText::new("Reading this page. The text appears as it is read.").font(theme::sans(13.0)).color(t.muted));
+            // `.stream { margin-top: 24px; max-width: 31em; white-space: pre-wrap; font: 20px/1.7 serif }`, then
+            // `.tx-foot { margin-top: 28px }`
+            ui.add_space(24.0);
+            let wrap = ui.available_width().min(31.0 * 20.0);
+            css_text(ui, p.raw(), theme::serif(20.0), t.ink, 20.0 * 1.7, wrap, false);
+            ui.add_space(28.0);
+            css_text(ui, "Reading this page. The text appears as it is read.", theme::sans(13.0), t.muted, 13.0 * 1.4, ui.available_width(), false);
         }
         "pending" if p.raw().is_empty() => {
             let id = p.id().to_string();
@@ -1630,25 +1633,46 @@ fn transcript_pane(ui: &mut Ui, cx: &mut Cx, s: &Session, g: Option<&vishion_cor
     }
 }
 
+/// `.state-pane`: a centred column (icon 40, h3 18px, a paragraph at most 34ch wide, an optional button) with
+/// a 10px gap, at least 280 high with 24 of padding. The icon takes the text colour (no `.ico` rule mutes it).
 fn state_block(ui: &mut Ui, cx: &mut Cx, title: &str, text: &str, button: Option<(&str, &str, Act)>) {
     let t = cx.t;
-    ui.vertical_centered(|ui| {
-        ui.add_space(40.0);
-        let (ir, _) = ui.allocate_exact_size(vec2(40.0, 40.0), Sense::hover());
-        widgets::paint_icon(ui, ir, Icon::Page, t.muted);
-        ui.add_space(6.0);
-        let r = ui.label(RichText::new(title).font(theme::sans_semi(18.0)).color(t.ink));
-        cx.ctl.heading("state-title", 3, title, TEXT, r.rect.min);
-        let r = ui.add(egui::Label::new(RichText::new(text).color(t.muted)).wrap());
-        cx.ctl.text("state-text", text, TEXT, r.rect.min);
-        if let Some((id, label, act)) = button {
-            ui.add_space(8.0);
-            if widgets::button(cx.ctl, ui, t, C::new(id, label, TEXT), label, Look::Primary, 0.0) {
-                cx.acts.push(act);
-            }
+    let w = ui.available_width();
+    // `max-width: 34ch`: ch is the width of "0" in the paragraph's font
+    let ch = tw(ui, "0", theme::sans(14.0));
+    let max_p = (34.0 * ch).min((w - 48.0).max(80.0));
+    let mut job = egui::text::LayoutJob::single_section(
+        text.to_string(),
+        egui::TextFormat { font_id: theme::sans(14.0), color: t.muted, line_height: Some(14.0 * 1.4), ..Default::default() },
+    );
+    job.wrap.max_width = max_p;
+    job.halign = Align::Center;
+    let pg = ui.painter().layout_job(job);
+    let rows = pg.rows.len().max(1) as f32;
+    let h3_h = 18.0 * 1.4;
+    let content_h = 40.0 + 10.0 + h3_h + 10.0 + rows * 14.0 * 1.4 + if button.is_some() { 10.0 + TARGET } else { 0.0 };
+    let height = (content_h + 48.0).max(280.0);
+    let (rect, _) = ui.allocate_exact_size(vec2(w, height), Sense::hover());
+    let cxm = rect.center().x;
+    let mut y = rect.center().y - content_h / 2.0;
+    widgets::paint_icon(ui, Rect::from_center_size(pos2(cxm, y + 20.0), vec2(40.0, 40.0)), Icon::Page, t.ink);
+    y += 50.0;
+    let tg = ui.painter().layout_no_wrap(title.to_string(), theme::sans_semi(18.0), t.ink);
+    let dy = ((h3_h - tg.size().y) / 2.0 + 0.2).round();
+    ui.painter().galley(pos2(cxm - tg.size().x / 2.0, y + dy), tg.clone(), t.ink);
+    cx.ctl.heading("state-title", 3, title, TEXT, pos2(cxm - tg.size().x / 2.0, y));
+    y += h3_h + 10.0;
+    let ny = ((14.0 * 1.4 - ui.painter().layout_no_wrap("Hg".into(), theme::sans(14.0), t.muted).size().y) / 2.0 + 0.2).round();
+    ui.painter().galley(pos2(cxm, y + ny), pg, t.muted);
+    cx.ctl.text("state-text", text, TEXT, pos2(cxm - max_p / 2.0, y));
+    y += rows * 14.0 * 1.4 + 10.0;
+    if let Some((id, label, act)) = button {
+        let bw = tw(ui, label, theme::sans_semi(14.0)) + 36.0;
+        let at = pos2(cxm - bw / 2.0, y);
+        if widgets::button_at(cx.ctl, ui, t, C::new(id, label, TEXT), label, Look::Primary, at) {
+            cx.acts.push(act);
         }
-        ui.add_space(24.0);
-    });
+    }
 }
 
 fn legend(ui: &mut Ui, t: &Tokens) {

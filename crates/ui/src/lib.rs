@@ -343,6 +343,8 @@ pub struct App {
     theme_override: Option<String>,
     /// Open on the assignment overview instead of the review screen (`--inbox`, `?view=inbox`).
     start_inbox: bool,
+    /// Select this page when the assignment opens (`--page`, `?page=`).
+    start_page: Option<String>,
     dark_applied: Option<bool>,
     exit_after: Option<Duration>,
     #[cfg(not(target_arch = "wasm32"))]
@@ -388,6 +390,7 @@ impl App {
             theme_name: "auto".into(),
             theme_override: None,
             start_inbox: false,
+            start_page: None,
             dark_applied: None,
             exit_after: None,
             #[cfg(not(target_arch = "wasm32"))]
@@ -408,6 +411,12 @@ impl App {
     /// Force a theme (`"light"` or `"dark"`) over `settings.theme`.
     pub fn theme(mut self, name: &str) -> Self {
         self.theme_override = Some(name.into());
+        self
+    }
+
+    /// Open with this page selected.
+    pub fn page(mut self, id: &str) -> Self {
+        self.start_page = Some(id.to_string());
         self
     }
 
@@ -504,6 +513,9 @@ impl App {
                     self.notice = msg;
                     self.images.clear();
                     let mut sess = state::Session::new(slug, *assignment, *settings, now_ms());
+                    if let Some(id) = &self.start_page {
+                        sess.select(id);
+                    }
                     if self.start_inbox {
                         sess.view = state::View::Inbox;
                     }

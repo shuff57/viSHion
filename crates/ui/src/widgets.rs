@@ -69,7 +69,10 @@ fn paint_button(ui: &Ui, r: &Response, t: &Tokens, c: &C, g: std::sync::Arc<egui
 /// A text button drawn at `at` (its top left) without moving the layout cursor: for the design's negative
 /// margins (`margin: 4px 0 0 -16px`). The caller reserves the space it wants itself.
 pub fn button_at(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, c: C, text: &str, look: Look, at: egui::Pos2) -> bool {
-    let fg = if c.disabled { t.faint } else { t.ink };
+    let fg = match look {
+        Look::Primary => t.on_ink,
+        _ => if c.disabled { t.faint } else { t.ink },
+    };
     let g = ui.painter().layout_no_wrap(text.to_string(), theme::sans_semi(14.0), fg);
     let rect = Rect::from_min_size(at, vec2(g.size().x + 36.0, TARGET));
     let sense = if c.disabled { Sense::hover() } else { Sense::click() };
