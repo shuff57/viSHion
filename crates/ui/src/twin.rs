@@ -37,6 +37,8 @@ pub struct Reg {
 pub enum Part {
     Text(String),
     Math(String),
+    /// Struck-through text (`~~probably~~`): a deletion, so it is not read as if it were still there.
+    Del(String),
     Control(Reg),
 }
 
@@ -53,6 +55,8 @@ pub enum Node {
     /// `at`/`size`: its rectangle in points; the web twin is laid over the canvas there.
     Group { id: String, label: String, keys: &'static str, region: u8, pos: (i32, i32), at: (i32, i32), size: (u16, u16) },
     Control(Reg),
+    /// A picture with a text alternative (`role=img`), laid over the canvas where it is drawn.
+    Image { id: String, label: String, region: u8, pos: (i32, i32), at: (i32, i32), size: (u16, u16) },
 }
 
 impl Node {
@@ -62,7 +66,8 @@ impl Node {
             | Node::Status { region, pos, .. }
             | Node::Text { region, pos, .. }
             | Node::Para { region, pos, .. }
-            | Node::Group { region, pos, .. } => (*region, *pos),
+            | Node::Group { region, pos, .. }
+            | Node::Image { region, pos, .. } => (*region, *pos),
             Node::Control(c) => (c.region, c.pos),
         };
         (r, p.0, p.1)
@@ -70,7 +75,7 @@ impl Node {
 
     pub fn id(&self) -> &str {
         match self {
-            Node::Heading { id, .. } | Node::Status { id, .. } | Node::Text { id, .. } | Node::Para { id, .. } | Node::Group { id, .. } => id,
+            Node::Heading { id, .. } | Node::Status { id, .. } | Node::Text { id, .. } | Node::Para { id, .. } | Node::Group { id, .. } | Node::Image { id, .. } => id,
             Node::Control(c) => &c.id,
         }
     }

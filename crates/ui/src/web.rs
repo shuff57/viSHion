@@ -9,7 +9,7 @@
 //!   Tab away from eframe and lets the browser move focus: no keyboard trap;
 //! - eframe's IME text agent `<input>` is named and removed from the Tab order.
 use crate::a11y;
-use crate::twin::{Node, Part, Reg};
+use crate::twin::{Node, Part, Reg, DIALOG};
 use crate::Queue;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
@@ -54,6 +54,20 @@ pub fn install(q: Queue, ctx: egui::Context) {
         cb.forget();
     };
     listen("click", "act");
+    // focus arriving by keyboard (`:focus-visible`: Tab, or a script while the keyboard is in use) brings up
+    // the rings of regions that hide theirs for a mouse click
+    {
+        let (q, ctx) = (q.clone(), ctx.clone());
+        let cb = Closure::<dyn FnMut(web_sys::Event)>::new(move |e: web_sys::Event| {
+            let Some(el) = e.target().and_then(|t| t.dyn_into::<web_sys::Element>().ok()) else { return };
+            if el.matches(":focus-visible").unwrap_or(true) {
+                q.lock().unwrap().push("kbd:1".to_string());
+                ctx.request_repaint();
+            }
+        });
+        let _ = h.add_event_listener_with_callback("focusin", cb.as_ref().unchecked_ref());
+        cb.forget();
+    }
     listen("focusin", "focus");
     listen("focusout", "blur");
     // text typed into a twin textbox goes to the egui buffer; Enter in it presses its `data-enter` control
@@ -112,6 +126,29 @@ pub fn install(q: Queue, ctx: egui::Context) {
     });
     let _ = h.add_event_listener_with_callback("keydown", on_region_key.as_ref().unchecked_ref());
     on_region_key.forget();
+
+    // A modal dialog keeps Tab inside it (WCAG: focus is not left behind the scrim); Escape always closes it,
+    // so it is never a trap.
+    let on_dialog_tab = Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(move |e: web_sys::KeyboardEvent| {
+        if e.key() != "Tab" {
+            return;
+        }
+        let Some(el) = e.target().and_then(|t| t.dyn_into::<web_sys::Element>().ok()) else { return };
+        let Some(dialog) = el.closest("[role=dialog]").ok().flatten() else { return };
+        let list = focusables(&dialog);
+        let (Some(first), Some(last)) = (list.first(), list.last()) else { return };
+        let on_first = first.is_same_node(Some(&el));
+        let on_last = last.is_same_node(Some(&el));
+        if e.shift_key() && on_first {
+            e.prevent_default();
+            let _ = last.focus();
+        } else if !e.shift_key() && on_last {
+            e.prevent_default();
+            let _ = first.focus();
+        }
+    });
+    let _ = h.add_event_listener_with_callback("keydown", on_dialog_tab.as_ref().unchecked_ref());
+    on_dialog_tab.forget();
 
     // Escape when nothing in the twin has focus (a dialog just replaced the control that did): the page
     // body gets the key. The canvas and eframe's text agent deliver Escape to egui themselves.
@@ -298,6 +335,13 @@ fn spec_of(n: &Node) -> Spec {
             s
         }
         Node::Text { id, text, .. } => Spec::new(id, "p").text(text),
+        Node::Image { id, label, at, size, .. } => {
+            let mut s = Spec::new(id, "div").attr("role", "img").attr("aria-label", label.clone());
+            if size.0 > 0 && size.1 > 0 {
+                s.rect = Some((at.0, at.1, size.0 as i32, size.1 as i32));
+            }
+            s
+        }
         Node::Para { id, parts, reading, .. } => {
             let mut p = Spec::new(id, "p");
             // always listed, so the attribute is removed again when the underline moves on
@@ -311,6 +355,7 @@ fn spec_of(n: &Node) -> Spec {
                         .attr("role", "math")
                         .attr("aria-label", a11y::tex_speech(t))
                         .text(t),
+                    Part::Del(t) => Spec::new(&format!("{id}#d{i}"), "del").text(t),
                     Part::Control(r) => control(r),
                 });
             }
@@ -364,10 +409,22 @@ fn region_specs(nodes: &[&Node]) -> Vec<Spec> {
     out
 }
 
+fn main_spec(kids: Vec<Spec>, modal: bool) -> Spec {
+    let m = Spec::new("main", "div").attr("role", "main");
+    let mut m = m;
+    m.attrs.push(("inert", modal.then(String::new)));
+    m.attrs.push(("aria-hidden", modal.then(|| "true".to_string())));
+    m.kids(kids)
+}
+
 /// The whole twin: banner, `<main>` (page image, transcript), the word panel and a dialog, each a landmark.
 fn structure(nodes: &[Node]) -> Vec<Spec> {
     let mut regions: Vec<(u8, Vec<&Node>)> = vec![];
     for n in nodes {
+        // the toast is spoken through the live region; as a paragraph it would sit inside the transcript
+        if matches!(n, Node::Status { id, .. } if id == "toast") {
+            continue;
+        }
         let r = n.key().0;
         match regions.last_mut() {
             Some((k, v)) if *k == r => v.push(n),
@@ -376,9 +433,14 @@ fn structure(nodes: &[Node]) -> Vec<Spec> {
     }
     let mut top: Vec<Spec> = vec![];
     let mut main: Vec<Spec> = vec![];
+    // a modal dialog: the screen behind it is out of the tree and out of the Tab order (`inert`), with
+    // aria-hidden for readers that do not know `inert`. It stays in the DOM so focus can come back to it.
+    let modal = regions.iter().any(|(r, _)| *r == DIALOG);
     for (region, list) in &regions {
         let kids = region_specs(list);
         let mut s = Spec::new(&format!("region-{region}"), "div").attr("data-region", region.to_string());
+        s.attrs.push(("inert", (modal && *region != DIALOG).then(String::new)));
+        s.attrs.push(("aria-hidden", (modal && *region != DIALOG).then(|| "true".to_string())));
         if let Some((role, label)) = a11y::landmark(*region, list) {
             s = s.attr("role", role);
             if !label.is_empty() {
@@ -394,13 +456,13 @@ fn structure(nodes: &[Node]) -> Vec<Spec> {
         } else {
             // `main` goes where its first region is, between the banner and the word panel
             if !main.is_empty() {
-                top.push(Spec::new("main", "div").attr("role", "main").kids(std::mem::take(&mut main)));
+                top.push(main_spec(std::mem::take(&mut main), modal));
             }
             top.push(s);
         }
     }
     if !main.is_empty() {
-        top.push(Spec::new("main", "div").attr("role", "main").kids(main));
+        top.push(main_spec(main, modal));
     }
     top
 }
@@ -529,6 +591,63 @@ fn h1_ids(h: &web_sys::Element) -> Vec<String> {
 /// Without this it would fall to `<body>` and the next Tab would start from the top of the page.
 pub fn sync(nodes: &[Node]) {
     let (Some(h), Some(doc)) = (host(), document()) else { return };
+    reconcile_into(&h, &doc, nodes);
+}
+
+/// Keep an egui point equal to a CSS pixel. egui draws `pixels_per_point` canvas pixels per point and the
+/// page lays the twin out in CSS pixels; they agree when the canvas backing store is `devicePixelRatio` times
+/// its CSS size. When a browser sizes the backing store otherwise (device-pixel size not reported, as in
+/// emulated scale factors) the page would be laid out for a screen several times narrower than the window.
+/// The zoom factor corrects the points so the layout is always for the window's CSS size.
+pub fn fit_scale(ctx: &egui::Context) {
+    let Some(w) = web_sys::window() else { return };
+    let Some(canvas) = document().and_then(|d| d.get_element_by_id("c")).and_then(|c| c.dyn_into::<web_sys::HtmlCanvasElement>().ok()) else { return };
+    let css = canvas.client_width() as f32;
+    let native = w.device_pixel_ratio() as f32;
+    if css < 1.0 || canvas.width() == 0 || native <= 0.0 {
+        return;
+    }
+    let want = (canvas.width() as f32 / css / native).clamp(0.1, 4.0);
+    // within a rounding error of 1 is 1 (a canvas one pixel off the exact size)
+    let want = if (want - 1.0).abs() < 0.02 { 1.0 } else { want };
+    if (ctx.zoom_factor() - want).abs() > 0.005 {
+        ctx.set_zoom_factor(want);
+    }
+}
+
+/// The twin's rectangles are in egui points. Points are CSS pixels when the canvas is sized as the page
+/// reports it; when a browser sizes the canvas differently (a backing store that does not follow
+/// `devicePixelRatio`) a point is some other number of CSS pixels. The twin is a box `screen` points
+/// across, scaled to fill the canvas, so every control stays on the widget it describes.
+pub fn place(screen: (f32, f32)) {
+    let (Some(h), Some(doc)) = (host(), document()) else { return };
+    let Some(canvas) = doc.get_element_by_id("c") else { return };
+    let Some(style) = h.dyn_ref::<web_sys::HtmlElement>().map(|e| e.style()) else { return };
+    let css_w = canvas.client_width() as f32;
+    if screen.0 < 1.0 || css_w < 1.0 {
+        return;
+    }
+    let k = css_w / screen.0;
+    if (k - 1.0).abs() < 0.002 {
+        for p in ["width", "height", "transform", "transform-origin", "right", "bottom"] {
+            let _ = style.remove_property(p);
+        }
+    } else {
+        for (p, v) in [
+            ("right", "auto".to_string()),
+            ("bottom", "auto".to_string()),
+            ("width", format!("{}px", screen.0)),
+            ("height", format!("{}px", screen.1)),
+            ("transform-origin", "0 0".to_string()),
+            ("transform", format!("scale({k})")),
+        ] {
+            let _ = style.set_property(p, &v);
+        }
+    }
+}
+
+fn reconcile_into(h: &web_sys::Element, doc: &web_sys::Document, nodes: &[Node]) {
+    let (h, doc) = (h.clone(), doc.clone());
     let was = doc.active_element().filter(|a| h.contains(Some(a)) && !a.is_same_node(Some(&h)));
     // where the focused control was: its region and place among that region's focusable controls
     let was_at = was.as_ref().and_then(|a| {

@@ -453,6 +453,27 @@ impl Session {
         }
     }
 
+    /// What a listener needs to hear once a decision moved the open word on: the word now open, its place and
+    /// whether anything is chosen for it yet (focus lands on its first option, which names only itself).
+    pub fn next_word_phrase(&self) -> String {
+        let Some(g) = self.group() else { return String::new() };
+        let list = self.entries(&g);
+        if !list.iter().any(|e| e.item.via.is_none()) {
+            return "All words checked.".into();
+        }
+        let Some((e, i, n)) = self.open_entry() else {
+            let left = list.iter().filter(|e| e.item.via.is_none()).count();
+            return format!("{} left to check.", plural(left, "word", "words"));
+        };
+        let what = match (e.item.via.as_deref(), e.item.kind) {
+            (Some(_), _) => format!("a word you checked, {}", shown_str(&e.item)),
+            (None, "illegible") => "a word that could not be read".to_string(),
+            _ => format!("spelling to check, {}", word_str(&e.item)),
+        };
+        let state = if e.item.via.is_some() { "Already chosen." } else { "Nothing is chosen for it yet." };
+        format!("Next, word {} of {}: {what}. {state}", i + 1, n)
+    }
+
     /// Transcript line (unit index) of every flagged word on a page, with its strongest kind:
     /// `flaggedLines` of review.js. Also the unit of the open word.
     pub fn flagged_lines(&self, p: &Page) -> (HashMap<usize, Kind>, Option<usize>) {

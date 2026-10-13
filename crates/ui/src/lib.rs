@@ -102,6 +102,17 @@ pub struct Ctl {
     /// The last input was the keyboard, so a focused non-text region shows its ring (`:focus-visible`: a mouse
     /// click on the transcript focuses it without a ring; the first arrow key brings the ring up).
     pub(crate) kbd: bool,
+    /// Twin focus arrived since the control last drew: bring it into view (browsers scroll focus into view;
+    /// the twin is `overflow: clip`, so the canvas has to do it).
+    focus_fresh: bool,
+    /// Which regions sit inside a scroll area this frame (`ui.scroll_to_rect` outside one would leak to the
+    /// next scroll area drawn). Set by the screen, indexed by region.
+    pub(crate) scrolls: [bool; 5],
+    /// Height of a sticky tray that covers the bottom of the page this frame: focus is scrolled clear of it.
+    pub(crate) tray_cover: f32,
+    pending_scroll: Option<(u8, egui::Rect)>,
+    /// A control in the (sticky, phone) tray took focus: scroll the page until the tray is on screen.
+    pub(crate) reveal_tray: bool,
     /// Rects of this frame's transcript lines (`--dump-controls` prints them, to compare with the DOM).
     pub(crate) lines: Vec<(String, egui::Rect)>,
     /// Sentences for the live region this frame: (text, assertive). `web::announce` speaks them.
@@ -149,14 +160,47 @@ impl<'a> C<'a> {
 }
 
 impl Ctl {
+    /// Carry out the focus scroll request if its control belongs to one of `regions`. Call at the end of a
+    /// scroll area's content, with that area's `ui`.
+    pub(crate) fn flush_scroll(&mut self, ui: &Ui, regions: &[u8]) {
+        if let Some((r, rect)) = self.pending_scroll {
+            if regions.contains(&r) {
+                self.pending_scroll = None;
+                ui.scroll_to_rect(rect, None);
+            }
+        }
+    }
+
     fn track_focus(&mut self, ui: &Ui, r: &egui::Response, id: &str, region: u8, ring: Option<(egui::Rect, f32)>) {
         if self.want_focus.as_deref() == Some(id) {
             self.want_focus = None;
             r.request_focus();
             self.focus = Some(id.to_string());
             self.dom_focus = Some(id.to_string());
+            self.focus_fresh = true;
         }
-        if self.focus.as_deref() == Some(id) || r.has_focus() {
+        let twin_focus = self.focus.as_deref() == Some(id);
+        if twin_focus && self.focus_fresh && self.scrolls.get(region as usize).copied().unwrap_or(false) {
+            self.focus_fresh = false;
+            // the ring and a little air round it; a tall region (the transcript) only needs its top on screen
+            let base = ring.map(|r| r.0).unwrap_or(r.rect);
+            // (air round the ring, unless the window is so short that it would not fit)
+            let mut want = if base.height() + 16.0 <= ui.clip_rect().height() { base.expand(4.0) } else { base };
+            if want.height() > 96.0 {
+                want.max.y = want.min.y + 96.0;
+            }
+            if region == twin::TRAY {
+                self.reveal_tray = true;
+            } else {
+                want.max.y += self.tray_cover;
+            }
+            // applied by `flush_scroll` at the end of the scroll area it belongs to: a scroll area drawn in
+            // between (the page stage) would otherwise take the request
+            self.pending_scroll = Some((region, want));
+        }
+        if twin_focus || r.has_focus() {
+            // a mouse click on the transcript focuses it without a ring (`:focus-visible`); the web twin
+            // reports `kbd:1` when Tab or a script moved focus there with the keyboard in use
             let visible = self.kbd || id != "transcript";
             if visible {
                 let (rect, radius) = ring.unwrap_or((r.rect.expand(2.0), 6.0));
@@ -216,16 +260,21 @@ impl Ctl {
     pub fn group(&mut self, ui: &Ui, r: &egui::Response, id: &str, label: &str, keys: &'static str, region: u8) {
         // one pixel left of its content, so it sorts just before the first paragraph it governs
         let pos = twin::pos_of(r.rect.min - egui::vec2(1.0, 0.0));
+        // the twin sits where the region is on screen: a transcript taller than the window is its visible part
+        let vis = r.rect.intersect(ui.clip_rect());
+        let vis = if vis.width() > 0.0 && vis.height() > 0.0 { vis } else { r.rect };
         self.nodes.push(Node::Group {
             id: id.into(),
             label: label.into(),
             keys,
             region,
             pos,
-            at: (r.rect.min.x.round() as i32, r.rect.min.y.round() as i32),
-            size: (r.rect.width().round() as u16, r.rect.height().round() as u16),
+            at: (vis.min.x.round() as i32, vis.min.y.round() as i32),
+            size: (vis.width().round() as u16, vis.height().round() as u16),
         });
-        self.track_focus(ui, r, id, region, Some((r.rect.expand(3.0), 0.0)));
+        // the page stage fills its pane: its ring goes inside, or the pane's edge clips it to a hairline
+        let ring = if id == "stage" { r.rect.shrink(2.0) } else { r.rect.expand(3.0) };
+        self.track_focus(ui, r, id, region, Some((ring, 0.0)));
     }
 
     fn push(&mut self, reg: Reg) {
@@ -298,6 +347,28 @@ impl Ctl {
         }
     }
 
+    /// Struck-through text in the paragraph being built.
+    pub fn para_del(&mut self, s: &str) {
+        if let Some(p) = &mut self.para {
+            p.push(Part::Del(s.into()));
+        }
+    }
+
+    /// A picture the twin describes with `label`, at `rect` (clipped to what is on screen).
+    pub fn image(&mut self, ui: &Ui, id: &str, label: &str, region: u8, rect: egui::Rect) {
+        let vis = rect.intersect(ui.clip_rect());
+        let vis = if vis.width() > 0.0 && vis.height() > 0.0 { vis } else { rect };
+        self.nodes.push(Node::Image {
+            id: id.into(),
+            label: label.into(),
+            region,
+            // just after the stage group, which sorts one pixel before its content
+            pos: twin::pos_of(rect.min),
+            at: (vis.min.x.round() as i32, vis.min.y.round() as i32),
+            size: (vis.width().round() as u16, vis.height().round() as u16),
+        });
+    }
+
     pub fn para_math(&mut self, tex: &str) {
         if let Some(p) = &mut self.para {
             p.push(Part::Math(tex.into()));
@@ -326,10 +397,13 @@ impl Ctl {
                 self.act.push(id.into());
             } else if let Some(id) = m.strip_prefix("focus:") {
                 self.focus = Some(id.into());
+                self.focus_fresh = true;
             } else if let Some(id) = m.strip_prefix("blur:") {
                 if self.focus.as_deref() == Some(id) {
                     self.focus = None;
                 }
+            } else if m == "kbd:1" {
+                self.kbd = true;
             } else if let Some(rest) = m.strip_prefix("key:") {
                 let (key, alt) = match rest.split_once('\u{1}') {
                     Some((k, m)) => (k, m.contains("alt")),
@@ -382,6 +456,7 @@ pub struct App {
     queue: Queue,
     ctl: Ctl,
     last_nodes: Vec<Node>,
+    last_screen: (f32, f32),
     host: Option<(Dispatch, Inbox)>,
     boot: Boot,
     session: Option<state::Session>,
@@ -459,6 +534,7 @@ impl App {
             queue,
             ctl: Ctl::default(),
             last_nodes: vec![],
+            last_screen: (0.0, 0.0),
             host: None,
             boot: Boot::Loading,
             session: None,
@@ -902,6 +978,8 @@ impl App {
             self.dark_applied = Some(t.dark);
         }
         self.ctl.ring = t.ink;
+        self.ctl.scrolls = [false; 5];
+        self.ctl.pending_scroll = None;
         self.ctl.nodes.clear();
         self.ctl.para = None;
         review::show(self, ctx, t);
@@ -956,6 +1034,8 @@ impl eframe::App for App {
 impl App {
     /// One frame: twin and host input, the screen, the twin output, saves, image requests, exit rules.
     fn step(&mut self, ctx: &egui::Context, system_dark: bool) {
+        #[cfg(target_arch = "wasm32")]
+        web::fit_scale(ctx);
         if ctx.input(|i| i.pointer.any_pressed()) {
             self.ctl.kbd = false;
         }
@@ -984,10 +1064,16 @@ impl App {
         // reading order: region, then 16px row band, then x
         self.ctl.nodes.sort_by_key(|n| n.key());
         let nodes = std::mem::take(&mut self.ctl.nodes);
-        if nodes != self.last_nodes {
+        let sr = ctx.screen_rect();
+        let screen = (sr.width(), sr.height());
+        if nodes != self.last_nodes || screen != self.last_screen {
             #[cfg(target_arch = "wasm32")]
-            web::sync(&nodes);
+            {
+                web::place(screen);
+                web::sync(&nodes);
+            }
             self.last_nodes = nodes;
+            self.last_screen = screen;
         }
         if let Some(id) = self.ctl.dom_focus.take() {
             #[cfg(target_arch = "wasm32")]

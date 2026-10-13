@@ -163,14 +163,67 @@ fn symbol(c: char) -> String {
     }
 }
 
+/// Does a script argument need an explicit end? `x^{a+b} + c` must not read as `x^(a+b+c)`; a bare sign and
+/// one symbol (`e^{-x}`) is short enough to hear in one breath.
+fn needs_end(arg: &str) -> bool {
+    let a = arg.trim();
+    let a = a.strip_prefix("minus ").unwrap_or(a);
+    a.split_whitespace().count() > 1
+}
+
 fn power(arg: &str) -> String {
     match arg {
         "2" => " squared ".into(),
         "3" => " cubed ".into(),
         "degrees" => " degrees ".into(),
         "prime" => " prime ".into(),
+        a if needs_end(a) => format!(" to the power of {a} end of power "),
         a => format!(" to the power of {a} "),
     }
+}
+
+fn sub(arg: &str) -> String {
+    if needs_end(arg) {
+        format!(" sub {arg} end sub ")
+    } else {
+        format!(" sub {arg} ")
+    }
+}
+
+/// Limits written after a big operator: `\sum_{i=1}^{n}` is "the sum from i equals 1 to n of".
+fn limits(cs: &[char], p: &mut usize, head: &str) -> String {
+    let (mut lo, mut hi) = (None, None);
+    for _ in 0..2 {
+        let mut q = *p;
+        while q < cs.len() && cs[q].is_whitespace() {
+            q += 1;
+        }
+        match cs.get(q) {
+            Some('_') if lo.is_none() => {
+                *p = q + 1;
+                lo = Some(atom(cs, p).trim().to_string());
+            }
+            Some('^') if hi.is_none() => {
+                *p = q + 1;
+                hi = Some(atom(cs, p).trim().to_string());
+            }
+            _ => break,
+        }
+    }
+    let mut out = format!(" {head}");
+    if let Some(l) = lo {
+        // `\lim_{x \to 0}` is "the limit as x approaches 0 of"
+        if head.starts_with("the limit") {
+            out.push_str(&format!(" as {l}"));
+        } else {
+            out.push_str(&format!(" from {l}"));
+        }
+    }
+    if let Some(h) = hi {
+        out.push_str(&format!(" to {h}"));
+    }
+    out.push_str(" of ");
+    out
 }
 
 /// `\name` with its arguments, `p` at the backslash.
@@ -233,7 +286,12 @@ fn command(cs: &[char], p: &mut usize) -> String {
         "text" | "textbf" | "textit" | "mathrm" | "mathbf" | "mathit" | "mathbb" | "mathcal" | "operatorname" | "mbox" => {
             format!(" {} ", raw_group(cs, p))
         }
-        "sin" | "cos" | "tan" | "log" | "ln" | "exp" | "min" | "max" | "lim" | "sup" | "inf" => format!(" {name} "),
+        "sum" => limits(cs, p, "the sum"),
+        "prod" => limits(cs, p, "the product"),
+        "int" => limits(cs, p, "the integral"),
+        "oint" => limits(cs, p, "the contour integral"),
+        "lim" => limits(cs, p, "the limit"),
+        "sin" | "cos" | "tan" | "log" | "ln" | "exp" | "min" | "max" | "sup" | "inf" => format!(" {name} "),
         "Sigma" | "Delta" | "Omega" | "Gamma" | "Theta" | "Lambda" | "Pi" | "Phi" | "Psi" | "Xi" => {
             format!(" capital {} ", name.to_lowercase())
         }
@@ -249,9 +307,16 @@ fn command(cs: &[char], p: &mut usize) -> String {
 
 fn seq(cs: &[char], p: &mut usize, in_group: bool) -> String {
     let mut out = String::new();
+    // `|x - 3|`: the first bar opens an absolute value and the next closes it
+    let mut bar_open = false;
     while *p < cs.len() {
         let c = cs[*p];
         match c {
+            '|' => {
+                *p += 1;
+                out.push_str(if bar_open { " end absolute value " } else { " absolute value of " });
+                bar_open = !bar_open;
+            }
             '}' if in_group => break,
             '}' => *p += 1,
             '{' => {
@@ -267,7 +332,7 @@ fn seq(cs: &[char], p: &mut usize, in_group: bool) -> String {
             '_' => {
                 *p += 1;
                 let a = atom(cs, p);
-                out.push_str(&format!(" sub {} ", a.trim()));
+                out.push_str(&sub(a.trim()));
             }
             '\\' => out.push_str(&command(cs, p)),
             c if c.is_whitespace() => {
@@ -318,6 +383,12 @@ mod tests {
         assert_eq!(tex_speech(r"\sqrt[3]{x}"), "cube root of x");
         assert_eq!(tex_speech(r"\text{mean} \le \mu"), "mean is less than or equal to mu");
         assert_eq!(tex_speech(r"50\%"), "50 percent");
+        // limits, the end of long exponents and subscripts, absolute value
+        assert_eq!(tex_speech(r"\sum_{i=1}^{n} x_i"), "the sum from i equals 1 to n of x sub i");
+        assert_eq!(tex_speech(r"\int_0^1 x\,dx"), "the integral from 0 to 1 of x d x");
+        assert_eq!(tex_speech(r"x^{a+b} + c"), "x to the power of a plus b end of power plus c");
+        assert_eq!(tex_speech(r"a_{n+1} = 2"), "a sub n plus 1 end sub equals 2");
+        assert_eq!(tex_speech(r"|x-3|<2"), "absolute value of x minus 3 end absolute value is less than 2");
         // never panics on junk or a truncated formula
         assert_eq!(tex_speech(r"\frac{"), "over");
         let _ = tex_speech(r"\{^_}\\");

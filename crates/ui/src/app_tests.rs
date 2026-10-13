@@ -1449,7 +1449,7 @@ fn round5_flagged_words_read_in_place_inside_the_sentence() {
         for p in parts {
             match p {
                 Part::Text(t) => flat.push_str(t),
-                Part::Math(t) => flat.push_str(t),
+                Part::Math(t) | Part::Del(t) => flat.push_str(t),
                 Part::Control(c) => flat.push_str(&format!("[{}]", c.id)),
             }
         }
@@ -1596,4 +1596,129 @@ fn critic_math_speech_keeps_scope() {
         }
     }
     assert!(bad.is_empty(), "spoken math loses structure:\n{}", bad.join("\n"));
+}
+
+// ---- phase 4 a11y twin, round 2: the gaps the blind critic named
+
+/// A control is on screen once it has focus: on a phone, in a short window and on a desktop where the
+/// foot of the transcript is below the fold. The twin is `overflow: clip`, so the canvas has to scroll.
+#[test]
+fn a11y_focus_scrolls_the_control_into_view() {
+    for (w, hgt) in [(390.0, 844.0), (640.0, 400.0), (320.0, 256.0), (1280.0, 520.0)] {
+        let mut h = H::new("m1");
+        h.size = (w, hgt);
+        h.with_picture();
+        h.frames(10);
+        let ids: Vec<String> = h.app.controls().iter().filter(|c| !c.disabled && c.size.0 > 0).map(|c| c.id.clone()).collect();
+        let mut off = vec![];
+        for id in ids {
+            h.focus(&id);
+            h.frames(3);
+            if let Some(c) = h.ctl(&id) {
+                let (top, bottom) = (c.at.1, c.at.1 + c.size.1 as i32);
+                if top < -1 || bottom > hgt as i32 + 1 {
+                    off.push(format!("{id} {top}..{bottom}"));
+                }
+            }
+        }
+        assert!(off.is_empty(), "{w}x{hgt}: focus left off screen: {off:?}");
+    }
+}
+
+/// The regions that take keys are laid over what is visible of them, not their whole (taller) extent.
+#[test]
+fn a11y_transcript_group_is_its_visible_part() {
+    let mut h = H::new("m1");
+    h.size = (320.0, 256.0);
+    h.with_picture();
+    h.frames(10);
+    h.focus("transcript");
+    h.frames(3);
+    let g = h.app.nodes().iter().find_map(|n| match n {
+        Node::Group { id, at, size, .. } if id == "transcript" => Some((*at, *size)),
+        _ => None,
+    });
+    let (at, size) = g.expect("transcript group");
+    assert!(at.1 >= 0 && at.1 + size.1 as i32 <= 257, "{at:?} {size:?}");
+}
+
+/// A Tab stop that is the transcript shows its ring when focus came by keyboard (web: `kbd:1` from
+/// `:focus-visible`); a mouse click alone still shows none.
+#[test]
+fn a11y_transcript_ring_shows_after_tab() {
+    let mut h = H::new("m1");
+    h.with_picture();
+    h.act("tray-close");
+    h.frames(5);
+    let wide = |h: &H| h.rings().iter().any(|r| r.width() > 150.0 && r.height() > 40.0);
+    h.app.queue.lock().unwrap().push("kbd:1".into());
+    h.focus("transcript");
+    h.frames(2);
+    assert!(wide(&h), "the transcript has a ring after a keyboard focus");
+}
+
+#[test]
+fn a11y_page_image_zoom_and_meta_are_in_the_twin() {
+    let mut h = H::new("m1");
+    h.with_picture();
+    h.frames(5);
+    assert!(h.app.nodes().iter().any(|n| matches!(n, Node::Image { label, .. } if label == "The scanned handwritten page")));
+    assert!(h.ctl("zoom-fit").unwrap().label.contains("100%"), "{:?}", h.ctl("zoom-fit").map(|c| c.label.clone()));
+    let meta = h.node_text("student-meta").expect("meta line");
+    assert!(meta.contains("page") && meta.contains("words"), "{meta}");
+}
+
+#[test]
+fn a11y_strikethrough_is_a_deletion_in_the_twin() {
+    let h = H::new("m1");
+    let has = h.app.nodes().iter().any(|n| match n {
+        Node::Para { parts, .. } => parts.iter().any(|p| matches!(p, Part::Del(t) if t.contains("probably"))),
+        _ => false,
+    });
+    assert!(has, "~~probably~~ is a Del part");
+}
+
+/// After a decision the panel moved on by itself: the announcement says which word it is on now.
+#[test]
+fn a11y_decision_announces_the_next_word() {
+    let mut h = H::new("m1");
+    let w = h.word_id("c:0");
+    h.act(&w);
+    let before = h.app.announced().len();
+    h.act("alt-suggested");
+    let said = h.app.announced()[before..].join(" | ");
+    assert!(said.contains("suggested word") && (said.contains("Next, word") || said.contains("All words checked")), "{said}");
+    assert!(said.contains("Nothing is chosen for it yet") || said.contains("All words checked"), "{said}");
+}
+
+#[test]
+fn a11y_reordering_a_page_is_announced() {
+    let mut h = H::new("m1");
+    h.focus("page-m1");
+    h.twin_key("ArrowRight", true);
+    let said = h.app.announced().join(" | ");
+    assert!(said.contains("Moved to position 2 of 2"), "{said}");
+}
+
+#[test]
+fn a11y_settings_dialog_starts_on_its_first_control() {
+    let mut h = H::new("m1");
+    h.act("settings");
+    h.frames(3);
+    assert_eq!(h.app.ctl.focus.as_deref(), Some("theme-auto"));
+}
+
+/// A window a few hundred points high has no room for a header that stays put: it is the top of the page.
+#[test]
+fn a11y_short_window_scrolls_the_header_with_the_page() {
+    let mut h = H::new("m1");
+    h.size = (1280.0, 256.0);
+    h.frames(6);
+    let done = h.ctl("done").expect("done");
+    let tools = h.ctl("zoom-out").expect("page tools");
+    assert!(tools.at.1 > done.at.1, "the page starts under the header, inside one scroll area");
+    h.focus("remove");
+    h.frames(3);
+    let r = h.ctl("remove").unwrap();
+    assert!(r.at.1 >= 0 && r.at.1 + r.size.1 as i32 <= 257, "{:?}", r.at);
 }

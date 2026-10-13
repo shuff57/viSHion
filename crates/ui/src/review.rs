@@ -100,6 +100,8 @@ struct Cx<'a> {
     storage: &'a str,
     notice: &'a Option<String>,
     narrow: bool,
+    /// A window too short for a header that stays put: the header is the top of the page and scrolls with it.
+    inline_header: bool,
     screen_h: f32,
     stage: &'a mut Stage,
     emoji: &'a mut emoji::EmojiCache,
@@ -158,7 +160,10 @@ pub(crate) fn show(app: &mut App, ctx: &egui::Context, t: &Tokens) {
         s.normalize();
     }
     let screen = ctx.screen_rect();
-    let narrow = screen.width() < NARROW;
+    // a page zoomed to 400% or a phone on its side is a few hundred points high: stacked panes, and a header
+    // that scrolls away with the page, as the document does in a browser
+    let short = screen.height() < 300.0;
+    let narrow = screen.width() < NARROW || short;
     match (&*boot, session.as_ref()) {
         (Boot::Ready, Some(s)) => {
             let mut cx = Cx {
@@ -172,6 +177,7 @@ pub(crate) fn show(app: &mut App, ctx: &egui::Context, t: &Tokens) {
                 storage: &*storage,
                 notice: &*notice,
                 narrow,
+                inline_header: short,
                 screen_h: screen.height(),
                 stage: &mut *stage,
                 want: &mut *want,
@@ -179,16 +185,35 @@ pub(crate) fn show(app: &mut App, ctx: &egui::Context, t: &Tokens) {
                 scroll_read: false,
             };
             // `.topbar`: padding 8 and a 1px border at the bottom only, `gap: 4px 24px`, min-height 64
-            let hdr = egui::TopBottomPanel::top("hdr")
-                .min_height(64.0)
-                .show_separator_line(false)
-                .frame(egui::Frame::none().fill(t.surface).inner_margin(Margin { left: if narrow { 16.0 } else { 24.0 }, right: if narrow { 16.0 } else { 24.0 }, top: 8.0, bottom: 9.0 }))
-                .show(ctx, |ui| {
-                    ui.spacing_mut().item_spacing.y = 4.0;
-                    header(ui, &mut cx, s)
-                });
-            let hr = hdr.response.rect;
-            ctx.layer_painter(egui::LayerId::new(egui::Order::Middle, egui::Id::new("hdr-line"))).hline(hr.x_range(), hr.bottom() - 0.5, Stroke::new(1.0, t.line));
+            if !short {
+                let hdr = egui::TopBottomPanel::top("hdr")
+                    .min_height(64.0)
+                    .show_separator_line(false)
+                    .frame(egui::Frame::none().fill(t.surface).inner_margin(Margin { left: if narrow { 16.0 } else { 24.0 }, right: if narrow { 16.0 } else { 24.0 }, top: 8.0, bottom: 9.0 }))
+                    .show(ctx, |ui| {
+                        ui.spacing_mut().item_spacing.y = 4.0;
+                        // the wrapped header of a phone could take most of the screen: it scrolls inside half
+                        // of it, and focus scrolls it into view
+                        cx.ctl.scrolls[HEADER as usize] = true;
+                        // (a panel's room is its minimum height until its content has been laid out, so the
+                        // scroll area is given its cap here and shrinks to what the header needs)
+                        let cap = screen.height() * 0.5;
+                        ui.allocate_ui(vec2(ui.available_width(), cap), |ui| {
+                            egui::ScrollArea::vertical()
+                                .id_source("hdr-scroll")
+                                .max_height(cap)
+                                .min_scrolled_height(0.0)
+                                .auto_shrink([false, true])
+                                .animated(false)
+                                .show(ui, |ui| {
+                                    header(ui, &mut cx, s);
+                                    cx.ctl.flush_scroll(ui, &[HEADER]);
+                                });
+                        });
+                    });
+                let hr = hdr.response.rect;
+                ctx.layer_painter(egui::LayerId::new(egui::Order::Middle, egui::Id::new("hdr-line"))).hline(hr.x_range(), hr.bottom() - 0.5, Stroke::new(1.0, t.line));
+            }
             match s.view {
                 View::Inbox => inbox(ctx, &mut cx, s),
                 View::Review => review(ctx, &mut cx, s, narrow),
@@ -372,22 +397,30 @@ fn apply(
         Act::MovePage(id, d) => {
             if s.move_page(&id, d) {
                 ctl.want_focus = Some(format!("page-{id}"));
+                if let Some(g) = s.group() {
+                    if let Some(i) = g.pages.iter().position(|p| *p == id) {
+                        ctl.say(format!("Moved to position {} of {}.", i + 1, g.pages.len()));
+                    }
+                }
             }
         }
         Act::Choose(via, text) => {
             if s.choose_open(via, &text) {
                 typed.clear();
-                ctl.say(match via {
+                let head = match via {
                     "suggested" => "Used the suggested word.".to_string(),
                     "written" => "Kept the word as read from the page.".to_string(),
                     "typed" => format!("Used “{text}”."),
                     _ => "Marked as checked.".to_string(),
-                });
+                };
+                // the panel moved on by itself: say which word it is on now, or a second Enter would accept
+                // a guess nobody has heard
+                ctl.say(format!("{head} {}", s.next_word_phrase()));
             }
         }
         Act::UseAll => {
             s.use_all();
-            ctl.say("Used all the suggestions.");
+            ctl.say(format!("Used all the suggestions. {}", s.next_word_phrase()));
         }
         Act::StepWord(d) => s.step_word(d),
         Act::Tray(open) => {
@@ -564,6 +597,23 @@ fn apply(
 }
 
 // ------------------------------------------------------------------ header
+
+/// The header as the first thing in a page's scroll area (`Cx::inline_header`).
+fn header_inline(ui: &mut Ui, cx: &mut Cx, s: &Session) {
+    let t = cx.t;
+    cx.ctl.scrolls[HEADER as usize] = true;
+    let r = egui::Frame::none()
+        .fill(t.surface)
+        .inner_margin(Margin { left: 16.0, right: 16.0, top: 8.0, bottom: 9.0 })
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.spacing_mut().item_spacing.y = 4.0;
+            header(ui, cx, s);
+        })
+        .response
+        .rect;
+    ui.painter().hline(r.x_range(), r.bottom() - 0.5, Stroke::new(1.0, t.line));
+}
 
 fn header(ui: &mut Ui, cx: &mut Cx, s: &Session) {
     let t = cx.t;
@@ -782,7 +832,11 @@ fn header(ui: &mut Ui, cx: &mut Cx, s: &Session) {
 fn inbox(ctx: &egui::Context, cx: &mut Cx, s: &Session) {
     let t = cx.t;
     egui::CentralPanel::default().frame(egui::Frame::none().fill(t.bg)).show(ctx, |ui| {
-        egui::ScrollArea::vertical().auto_shrink([false, false]).id_source("inbox-scroll").show(ui, |ui| {
+        cx.ctl.scrolls[TEXT as usize] = true;
+        egui::ScrollArea::vertical().auto_shrink([false, false]).animated(false).id_source("inbox-scroll").show(ui, |ui| {
+            if cx.inline_header {
+                header_inline(ui, cx, s);
+            }
             let avail = ui.available_width();
             // `.page-inner { max-width: 1120px; padding: 40px 24px 56px }` (28 16 48 on a phone)
             let pad = if cx.narrow { 16.0 } else { 24.0 };
@@ -793,6 +847,7 @@ fn inbox(ctx: &egui::Context, cx: &mut Cx, s: &Session) {
                 ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
                 inbox_body(ui, cx, s);
             });
+            cx.ctl.flush_scroll(ui, &[HEADER, TEXT]);
         });
     });
 }
@@ -1190,16 +1245,25 @@ fn review_panes(ctx: &egui::Context, cx: &mut Cx, s: &Session, narrow: bool) {
     let g = s.group();
     let entries: Vec<Entry> = g.as_ref().map(|g| s.entries(g)).unwrap_or_default();
     let tray_on = !entries.is_empty() && s.tray_open;
+    cx.ctl.scrolls = [cx.ctl.scrolls[HEADER as usize], narrow, true, true, false];
+    cx.ctl.tray_cover = if narrow && tray_on && ctx.screen_rect().height() >= 520.0 { cx.stage.tray_box_h } else { 0.0 };
     if narrow {
         // `.tray-wrap { position: sticky; bottom: 0 }` inside `.text`: the tray sits at the end of the
         // transcript, rides at the bottom of the screen while the transcript is on it, and never leaves the
         // transcript's box: at the top of the page it is below the fold, behind the page image there is none.
         let mut marks = (0.0f32, 0.0f32);
-        let tray_h = if tray_on { cx.stage.tray_box_h } else { 0.0 };
+        // a short window (a phone on its side, a page zoomed to 400%) has no room for a tray riding over the
+        // page: it stays in the page, after the transcript, and scrolls with it
+        let inflow = tray_on && ctx.screen_rect().height() < 520.0;
+        let sticky = tray_on && !inflow;
+        let tray_h = if sticky { cx.stage.tray_box_h } else { 0.0 };
         let central = egui::CentralPanel::default().frame(egui::Frame::none().fill(t.surface)).show(ctx, |ui| {
-            egui::ScrollArea::vertical().auto_shrink([false, false]).id_source("review-scroll").show(ui, |ui| {
+            egui::ScrollArea::vertical().auto_shrink([false, false]).animated(false).id_source("review-scroll").show(ui, |ui| {
                 // the panes of `.review` are stacked boxes with nothing between them
                 ui.spacing_mut().item_spacing.y = 0.0;
+                if cx.inline_header {
+                    header_inline(ui, cx, s);
+                }
                 if s.split {
                     egui::Frame::none().fill(t.scanbg).show(ui, |ui| {
                         ui.set_width(ui.available_width());
@@ -1210,12 +1274,29 @@ fn review_panes(ctx: &egui::Context, cx: &mut Cx, s: &Session, narrow: bool) {
                 marks.0 = ui.cursor().top();
                 text_column(ui, cx, s, g.as_ref(), &entries);
                 marks.1 = ui.cursor().top();
-                if tray_on {
+                if inflow {
+                    egui::Frame::none().fill(t.sunken).show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        ui.spacing_mut().item_spacing = vec2(8.0, 8.0);
+                        tray(ui, cx, s, &entries);
+                    });
+                    ui.painter().hline(ui.min_rect().x_range(), marks.1 + 0.5, Stroke::new(1.0, t.line));
+                } else if tray_on {
                     ui.add_space(tray_h);
+                    // the tray rides at the bottom of the screen once the page has been scrolled up to it; a
+                    // control in it that took focus asks for that (it starts below the fold)
+                    if std::mem::take(&mut cx.ctl.reveal_tray) {
+                        let need = marks.0 + tray_h - ui.clip_rect().bottom();
+                        if need > 0.5 {
+                            ui.scroll_with_delta(vec2(0.0, -need));
+                            ui.ctx().request_repaint();
+                        }
+                    }
                 }
+                cx.ctl.flush_scroll(ui, &[HEADER, SCAN, TEXT, TRAY]);
             });
         });
-        if tray_on {
+        if sticky {
             let vp = central.response.rect;
             let y = (vp.bottom() - tray_h).min(marks.1).max(marks.0).max(vp.top());
             let inner = egui::Area::new(egui::Id::new("tray-sticky"))
@@ -1227,7 +1308,18 @@ fn review_panes(ctx: &egui::Context, cx: &mut Cx, s: &Session, narrow: bool) {
                     egui::Frame::none().fill(t.sunken).show(ui, |ui| {
                         ui.set_width(vp.width());
                         ui.spacing_mut().item_spacing = vec2(8.0, 8.0);
-                        tray(ui, cx, s, &entries);
+                        // a short window: the tray scrolls inside what is left after the header and a strip of
+                        // the transcript, so every control in it can be reached (400% zoom, a phone on its side)
+                        let cap = (vp.height() - 96.0).max(120.0);
+                        egui::ScrollArea::vertical()
+                            .id_source("tray-scroll-narrow")
+                            .max_height(cap)
+                            .auto_shrink([false, true])
+                            .animated(false)
+                            .show(ui, |ui| {
+                                tray(ui, cx, s, &entries);
+                                cx.ctl.flush_scroll(ui, &[TRAY]);
+                            });
                     });
                 });
             let r = inner.response.rect;
@@ -1256,14 +1348,18 @@ fn review_panes(ctx: &egui::Context, cx: &mut Cx, s: &Session, narrow: bool) {
                         .show_inside(ui, |ui| {
                             let out = egui::ScrollArea::vertical()
                                 .id_source("tray-scroll")
+                                .animated(false)
                                 .max_height(cap)
                                 .min_scrolled_height(cx.stage.tray_h.min(cap))
                                 .auto_shrink([false, true])
-                                .show(ui, |ui| tray(ui, cx, s, &entries));
+                                .show(ui, |ui| {
+                                    tray(ui, cx, s, &entries);
+                                    cx.ctl.flush_scroll(ui, &[TRAY]);
+                                });
                             cx.stage.tray_h = out.content_size.y;
                         });
                 }
-                let mut area = egui::ScrollArea::vertical().auto_shrink([false, false]).id_source("text-scroll");
+                let mut area = egui::ScrollArea::vertical().auto_shrink([false, false]).animated(false).id_source("text-scroll");
                 if let Some((n, off)) = s.scroll_req {
                     if cx.stage.scroll_epoch != n {
                         cx.stage.scroll_epoch = n;
@@ -1273,6 +1369,7 @@ fn review_panes(ctx: &egui::Context, cx: &mut Cx, s: &Session, narrow: bool) {
                 }
                 let out = area.show(ui, |ui| {
                     text_column(ui, cx, s, g.as_ref(), &entries);
+                    cx.ctl.flush_scroll(ui, &[TEXT, SCAN]);
                 });
                     // review.js: `pane.addEventListener('scroll', debounce(save, 600))`
                 let y = out.state.offset.y;
@@ -1360,7 +1457,7 @@ fn scan(ui: &mut Ui, cx: &mut Cx, s: &Session, stacked: bool) {
                 cx.acts.push(Act::Zoom(-1));
             }
             let zl = format!("{}%", (z * 100.0).round() as i32);
-            if widgets::button_pad(cx.ctl, ui, t, C::new("zoom-fit", "Fit the page to the pane", SCAN).disabled(!has), &zl, Look::Ghost, 56.0, 12.0) {
+            if widgets::button_pad(cx.ctl, ui, t, C::new("zoom-fit", &format!("Fit the page to the pane, zoom {zl}"), SCAN).disabled(!has), &zl, Look::Ghost, 56.0, 12.0) {
                 cx.acts.push(Act::ZoomSet(1.0));
             }
             if widgets::icon_button(cx.ctl, ui, t, C::new("zoom-in", "Zoom in", SCAN).disabled(!has || z >= state::ZOOMS[state::ZOOMS.len() - 1]), Icon::ZoomIn, false) {
@@ -1519,7 +1616,7 @@ fn scan(ui: &mut Ui, cx: &mut Cx, s: &Session, stacked: bool) {
     // inside the page's own scroll cannot ask for that by itself (it is clamped to what is left of the
     // window), so it is given its content height from the last frame.
     let stage_h = if stacked { Some(cx.stage.content_h.clamp(120.0, (cx.screen_h * 0.8).max(120.0))) } else { None };
-    let mut area = egui::ScrollArea::both().id_source("stage").auto_shrink([false, false]);
+    let mut area = egui::ScrollArea::both().id_source("stage").auto_shrink([false, false]).animated(false);
     // keep the middle of the view where it was while the zoom changes
     if cx.stage.zoom == 0.0 {
         cx.stage.zoom = s.zoom;
@@ -1570,10 +1667,18 @@ fn scan(ui: &mut Ui, cx: &mut Cx, s: &Session, stacked: bool) {
     }
     cx.stage.off = out.state.offset;
     cx.stage.view = out.inner_rect.size();
+    // the page tools and the strip above the stage are in the page's scroll area, not the stage's
+    if stacked {
+        cx.ctl.flush_scroll(ui, &[SCAN]);
+    }
     // keys, wheel and double click on the stage
     let stage_rect = out.inner_rect;
     let r = ui.interact(stage_rect, ui.id().with("stage-keys"), Sense::focusable_noninteractive());
     cx.ctl.group(ui, &r, "stage", "Page image. Press plus or minus to zoom, zero to fit.", "stage", SCAN);
+    // `img { alt: 'The scanned handwritten page' }`: the picture has a text alternative
+    if cur.is_some_and(|p| matches!(cx.images.get(p.id()), Some(Slot::Ready(_)))) {
+        cx.ctl.image(ui, "page-image", "The scanned handwritten page", SCAN, stage_rect);
+    }
     let dbl = ui.interact(stage_rect, ui.id().with("stage-dbl"), Sense::click());
     if dbl.double_clicked() {
         cx.acts.push(Act::ZoomSet(if s.zoom > 1.0 { 1.0 } else { 2.0 }));
@@ -1697,7 +1802,8 @@ fn transcript_pane(ui: &mut Ui, cx: &mut Cx, s: &Session, g: Option<&vishion_cor
     let name_r = css_text(ui, &g.name, theme::serif_semi(32.0), t.ink, 32.0 * 1.15, wrap_w, true);
     cx.ctl.heading("student-name", 1, &g.name, TEXT, name_r.min);
     ui.add_space(6.0);
-    css_text(ui, &meta, theme::sans(14.0), t.muted, 14.0 * 1.4, wrap_w, false);
+    let meta_r = css_text(ui, &meta, theme::sans(14.0), t.muted, 14.0 * 1.4, wrap_w, false);
+    cx.ctl.text("student-meta", &meta, TEXT, meta_r.min);
     ui.add_space(4.0);
     let at = ui.cursor().min + vec2(-16.0, 0.0);
     let clicked = widgets::button_at(cx.ctl, ui, t, C::new("change-student", "Change student", TEXT), "Change student", Look::Ghost, at);
@@ -2029,7 +2135,11 @@ fn unit(ui: &mut Ui, cx: &mut Cx, s: &Session, p: &Page, line: &Line, items: &[w
         };
         let color = if st.strike || small { t.muted } else { t.ink };
         let color = if force_ink { t.ink } else { color };
-        cx.ctl.para_text(txt);
+        if st.strike {
+            cx.ctl.para_del(txt);
+        } else {
+            cx.ctl.para_text(txt);
+        }
         // the font's own row height: what an emoji's line box is
         let nat_h = ui.painter().layout_no_wrap("Hg".to_string(), font.clone(), color).size().y;
         enum P {

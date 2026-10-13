@@ -47,7 +47,13 @@ impl Dialog {
     /// safe choice for a confirmation).
     pub fn first_focus(&self, s: &Session) -> String {
         match self {
-            Dialog::Settings => "dialog-close".into(),
+            // the first control in reading order (the one for the theme in use), not the last: Tab goes on
+            // through the rest and Shift+Tab does not leave the dialog at once
+            Dialog::Settings => match s.settings.get("theme").and_then(|v| v.as_str()) {
+                Some("light") => "theme-light".into(),
+                Some("dark") => "theme-dark".into(),
+                _ => "theme-auto".into(),
+            },
             Dialog::Confirm { .. } => "dialog-cancel".into(),
             Dialog::ChangeStudent { .. } => {
                 if s.other_students().is_empty() {
@@ -77,6 +83,8 @@ fn heading(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, text: &str) {
 /// Draw the dialog over a scrim. Returns what the user decided this frame.
 pub fn show(ctx: &egui::Context, ctl: &mut Ctl, t: &Tokens, s: &Session, d: &mut Dialog) -> Option<Out> {
     let mut out = None;
+    // only the student list scrolls; a stray scroll request here has no later scroll area to leak into
+    ctl.scrolls[DIALOG as usize] = true;
     let screen = ctx.screen_rect();
     egui::Area::new(egui::Id::new("scrim")).order(Order::Foreground).fixed_pos(screen.min).show(ctx, |ui| {
         let (r, _) = ui.allocate_exact_size(screen.size(), Sense::click());
@@ -180,6 +188,7 @@ fn change_student(
                 *new_student = true;
                 *error = false;
             }
+            ctl.flush_scroll(ui, &[DIALOG]);
         });
     });
     if *new_student {

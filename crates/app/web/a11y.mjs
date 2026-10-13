@@ -5,7 +5,7 @@
 //   - announcements through the live regions
 //   - 44px targets, twin laid over the canvas where the widget is drawn, reading order = visual order
 //   - prefers-reduced-motion, forced-colors, 200% and 400% zoom (reflow at 640 and 320 CSS px)
-// Screen readers cannot run headless: crates/ui/A11Y-CHECKLIST.md is the manual NVDA / VoiceOver pass.
+// Screen readers cannot run headless: crates/ui/A11Y.md is the manual NVDA / VoiceOver pass.
 // Usage: node crates/app/web/a11y.mjs   (run build.mjs first; CHROME env overrides the browser path)
 import { chromium } from 'playwright-core';
 import { createRequire } from 'node:module';
@@ -53,12 +53,15 @@ async function open(label, { query = '', viewport = { width: 1280, height: 800 }
       for (let i = 0; i < limit; i++) { await page.keyboard.press('Tab'); if ((await api.active()) === id) return true; }
       return false;
     },
-    async axe(tag) {
+    async axe(tag, { modal = false } = {}) {
       await page.evaluate(axeSource);
-      const res = await page.evaluate(async () => {
-        const r = await window.axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa', 'best-practice'] } });
+      // a modal dialog takes the page behind it out of the tree on purpose: no main landmark or h1 is the point
+      const off = modal ? ['landmark-one-main', 'page-has-heading-one', 'region'] : [];
+      const res = await page.evaluate(async (off) => {
+        const rules = Object.fromEntries(off.map(r => [r, { enabled: false }]));
+        const r = await window.axe.run(document, { rules, runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa', 'best-practice'] } });
         return r.violations.map(v => ({ id: v.id, impact: v.impact, help: v.help, nodes: v.nodes.slice(0, 4).map(n => n.target.join(' ') + ' :: ' + (n.failureSummary || '').split('\n').slice(0, 2).join(' | ')) }));
-      });
+      }, off);
       expect(res.length === 0, `axe-core: no violations [${tag}]` + (res.length ? '\n' + JSON.stringify(res, null, 1) : ''));
       return res;
     },
@@ -139,6 +142,13 @@ try {
     const canvas = await page.evaluate(() => { const c = document.getElementById('c'); return { t: c.getAttribute('tabindex'), h: c.getAttribute('aria-hidden') }; });
     expect(canvas.t === '-1' && canvas.h === 'true', 'canvas is tabindex=-1 and aria-hidden');
 
+    // ---- what the legacy tree says that a first twin missed
+    has(/button "Fit the page to the pane, zoom 100%"/, 'zoom: the level is part of the name of the fit button');
+    has(/- img "The scanned handwritten page"/, 'the page image has a text alternative');
+    has(/paragraph: 2 pages, \d+ words/, 'the page and word count are exposed');
+    expect(await page.evaluate(() => [...document.querySelectorAll('#controls del')].some(d => d.textContent === 'probably')),
+      'strikethrough text is a deletion in the transcript twin, not plain text');
+
     await a.axe('review screen, tray open');
 
     // ---- announcements
@@ -151,9 +161,19 @@ try {
     expect(await a.wait(async () => /suggested word/.test((await a.announced())[0])), 'accepting a suggestion is announced: ' + JSON.stringify(await a.announced()));
     const act = await a.active();
     expect(act && act !== 'body', 'focus is still on a control after the decision: ' + act);
+    expect(/Next, word \d+ of \d+: .+\. (Nothing is chosen for it yet|Already chosen)\.|All words checked/.test((await a.announced())[0]),
+      'the decision says which word the panel moved on to, so a second Enter is not blind: ' + JSON.stringify(await a.announced()));
     expect(await a.tabTo('copy'), 'Tab reaches Copy text');
     await page.keyboard.press('Enter');
     expect(await a.wait(async () => /Copied Maya R\./.test((await a.announced())[0])), 'the toast is spoken through the live region: ' + JSON.stringify(await a.announced()));
+    expect(await page.evaluate(() => ![...document.querySelectorAll('#controls [data-region="2"] p')].some(p => /Copied/.test(p.textContent))),
+      'the toast is spoken through the live region and is not a paragraph of the transcript');
+    // ---- reordering a page announces where it went
+    expect(await a.tabTo('page-p-maya-1'), 'Tab reaches the first page in the strip');
+    await page.keyboard.press('Alt+ArrowRight');
+    expect(await a.wait(async () => /Moved to position 2 of 2/.test((await a.announced())[0])), 'Alt+Arrow on a page says its new place: ' + JSON.stringify(await a.announced()));
+    await page.keyboard.press('Alt+ArrowLeft');
+    await a.pump(4);
     // ---- the tray: closing it puts focus on the word
     expect(await a.tabTo('tray-close'), 'Tab reaches the tray close button');
     await page.keyboard.press('Enter');
@@ -167,13 +187,24 @@ try {
     expect(await a.tabTo('settings'), 'Tab reaches Settings');
     await page.keyboard.press('Enter');
     expect(await a.wait(async () => (await a.text('dialog-title')) === 'Settings'), 'Settings opens');
-    expect((await a.active()) === 'dialog-close', 'focus moves into the dialog: ' + await a.active());
+    expect((await a.active()) === 'theme-auto', 'focus moves to the first control of the dialog (not the last): ' + await a.active());
     const dlg = await a.snapshot();
     expect(/dialog "Settings":/.test(dlg), 'the dialog is a landmark-like dialog named "Settings"');
     expect(await page.evaluate(() => document.querySelector('#controls [role=dialog]')?.getAttribute('aria-modal')) === 'true', 'aria-modal=true');
     expect(!/button "Done, next student"/.test(dlg), 'the screen behind the dialog is not in the tree');
-    await a.axe('settings dialog');
-    // Tab stays inside the dialog's own controls and never traps: it can always leave by Escape
+    await a.axe('settings dialog', { modal: true });
+    const behind = await page.evaluate(() => [...document.querySelectorAll('#controls > [data-region], #controls > [role=main]')]
+      .filter(e => e.getAttribute('role') !== 'dialog').map(e => e.hasAttribute('inert') && e.getAttribute('aria-hidden') === 'true'));
+    expect(behind.length > 0 && behind.every(Boolean), 'everything behind the dialog is inert and aria-hidden');
+    // Tab goes round inside the dialog (and Escape always leaves it): it never walks out to the page behind
+    const seen = new Set();
+    for (let i = 0; i < 8; i++) {
+      await page.keyboard.press('Tab');
+      seen.add(await page.evaluate(() => document.activeElement?.closest('[role=dialog]') ? document.activeElement.dataset.id : 'OUTSIDE:' + document.activeElement?.tagName));
+    }
+    expect(![...seen].some(x => x.startsWith('OUTSIDE')), 'Tab stays in the dialog: ' + [...seen]);
+    await page.keyboard.press('Shift+Tab');
+    expect(await page.evaluate(() => !!document.activeElement?.closest('[role=dialog]')), 'Shift+Tab stays in the dialog');
     await page.keyboard.press('Escape');
     expect(await a.wait(async () => (await a.active()) === 'settings'), 'Escape closes the dialog and focus returns to Settings: ' + await a.active());
 
@@ -227,6 +258,21 @@ try {
     const snap = await a.snapshot();
     expect(/heading "Maya R\." \[level=1\]/.test(snap) && /- main:/.test(snap), `${zoom * 100}%: same structure (h1, main)`);
     await a.axe(`${zoom * 100}% zoom`);
+    await a.close();
+  }
+
+  // ---------------------------------------------------------------- keyboard focus is never off screen
+  for (const [w, h, o] of [[390, 844, {}], [640, 400, { deviceScaleFactor: 2 }], [320, 256, { deviceScaleFactor: 4 }]]) {
+    const a = await open(`tab ${w}x${h}`, { viewport: { width: w, height: h }, ...o });
+    const { page } = a;
+    await page.mouse.click(w / 2, 2);
+    const off = [];
+    for (let i = 0; i < 60; i++) {
+      await page.keyboard.press('Tab'); await a.pump(3);
+      const r = await page.evaluate(() => { const e = document.activeElement; if (!e?.dataset?.id) return null; const b = e.getBoundingClientRect(); return { id: e.dataset.id, top: b.top, bottom: b.bottom, h: innerHeight }; });
+      if (r && (r.bottom > r.h + 1 || r.top < -1) && !off.includes(r.id)) off.push(r.id);
+    }
+    expect(off.length === 0, `${w}x${h}: every Tab stop is scrolled into view (WCAG 2.4.7, 2.4.11)` + (off.length ? ': ' + off.slice(0, 8) : ''));
     await a.close();
   }
 } catch (e) {
