@@ -43,6 +43,8 @@ pub(crate) struct Stage {
     /// Painted height of the bottom tray panel last frame (wide layout). It overlays the transcript pane in
     /// the browser, so a line under it still counts as in view for `scrollIntoView({ block: 'nearest' })`.
     tray_px: f32,
+    /// Height of the tray's scroll area last frame.
+    tray_in: f32,
     /// The reading line moved because of a mouse click: the sticky tray overlays the pane then, as in the
     /// browser (a line under it counts as in view). A line reached by keys or the screen reader is kept above it.
     read_by_pointer: bool,
@@ -931,7 +933,7 @@ fn header(ui: &mut Ui, cx: &mut Cx, s: &Session) {
             } else {
                 widgets::paint_icon(ui, ir, icon, icon_col);
             }
-            ui.painter().galley(pos2(sr.left() + 24.0, sr.center().y - sg.size().y / 2.0), sg, save_col);
+            ui.painter().galley(pos2(sr.left() + 24.0, (sr.center().y - sg.size().y / 2.0 - 1.0).round()), sg, save_col);
             cx.ctl.status("save-state", &save_text, HEADER, sr);
             if widgets::icon_button(cx.ctl, ui, t, C::new("settings", "Settings", HEADER), Icon::Gear, false) {
                 cx.acts.push(Act::OpenSettings);
@@ -1011,13 +1013,13 @@ fn header(ui: &mut Ui, cx: &mut Cx, s: &Session) {
             if pos.is_some() {
                 // 19.6 + 18.2 of text centred in the 44 high bar
                 // (egui sets the glyphs about 2px higher in their row than the browser does: measured on the ink)
-                let top = wr.top() + (TARGET - 37.8) / 2.0 + 2.0;
+                let top = wr.top() + (TARGET - 37.8) / 2.0;
                 let a = ui.painter().layout_no_wrap(who.clone(), theme::sans_semi(14.0), t.ink);
                 let c = pos2(wr.center().x - a.size().x / 2.0, top + (19.6 - a.size().y) / 2.0);
                 ui.painter().galley(c, a, t.ink);
                 cx.ctl.text("student-pos", &format!("{who}, student {} of {}", i + 1, n), HEADER, wr);
                 let b = ui.painter().layout_no_wrap(format!("{} of {}", i + 1, n), theme::sans(13.0), t.muted);
-                let c = pos2(wr.center().x - b.size().x / 2.0, top + 19.6 + (18.2 - b.size().y) / 2.0);
+                let c = pos2(wr.center().x - b.size().x / 2.0, top + 19.6 + 1.0 + (18.2 - b.size().y) / 2.0);
                 ui.painter().galley(c, b, t.muted);
             } else {
                 let a = ui.painter().layout_no_wrap(who.clone(), theme::sans_semi(14.0), t.ink);
@@ -1043,7 +1045,7 @@ fn header(ui: &mut Ui, cx: &mut Cx, s: &Session) {
             } else {
                 widgets::paint_icon(ui, ir, icon, icon_col);
             }
-            ui.painter().galley(pos2(sr.left() + 24.0, sr.center().y - sg.size().y / 2.0), sg, save_col);
+            ui.painter().galley(pos2(sr.left() + 24.0, (sr.center().y - sg.size().y / 2.0 - 1.0).round()), sg, save_col);
             cx.ctl.status("save-state", &save_text, HEADER, sr);
         }
         1 => {
@@ -1494,12 +1496,23 @@ fn toast(ctx: &egui::Context, cx: &mut Cx, msg: &str, err: bool) {
     let t = cx.t;
     let area = egui::Area::new(egui::Id::new("toast"))
         .order(egui::Order::Foreground)
-        .anchor(egui::Align2::CENTER_BOTTOM, vec2(0.0, -20.0))
+        // `.toasts { bottom: 24px; width: min(480px, 100vw - 32px) }`
+        .anchor(egui::Align2::CENTER_BOTTOM, vec2(0.0, -24.0))
         .interactable(false)
         .show(ctx, |ui| {
-            egui::Frame::none().fill(t.ink).rounding(8.0).inner_margin(Margin::symmetric(16.0, 12.0)).show(ui, |ui| {
-                ui.set_max_width((ctx.screen_rect().width() - 64.0).max(160.0));
-                ui.label(RichText::new(msg).font(theme::sans(14.0)).color(if err { Color32::from_rgb(0xFF, 0x9C, 0x92) } else { t.on_ink }));
+            let w = (ctx.screen_rect().width() - 32.0).clamp(160.0, 480.0);
+            let shadow = egui::epaint::Shadow { offset: vec2(0.0, 8.0), blur: 24.0, spread: 0.0, color: Color32::from_rgba_unmultiplied(5, 7, 11, 89) };
+            egui::Frame::none().fill(if err { t.bad } else { t.ink }).rounding(8.0).shadow(shadow).inner_margin(Margin::symmetric(16.0, 12.0)).show(ui, |ui| {
+                ui.set_width(w - 32.0);
+                ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
+                let g = ui.painter().layout(msg.to_string(), theme::sans(14.0), t.on_ink, w - 32.0);
+                let rows: Vec<String> = g.rows.iter().map(|r| r.text().trim_end().to_string()).collect();
+                let (r, _) = ui.allocate_exact_size(vec2(w - 32.0, 19.6 * rows.len().max(1) as f32), Sense::hover());
+                for (i, row) in rows.iter().enumerate() {
+                    let rg = ui.painter().layout_no_wrap(row.clone(), theme::sans(14.0), t.on_ink);
+                    let dy = ((19.6 - rg.size().y.min(19.6)) / 2.0 + 0.2).round();
+                    ui.painter().galley(pos2(r.left(), r.top() + i as f32 * 19.6 + dy), rg, t.on_ink);
+                }
             });
         });
     let r = area.response.rect;
@@ -1643,14 +1656,28 @@ fn review_panes(ctx: &egui::Context, cx: &mut Cx, s: &Session, narrow: bool) {
         let panel = egui::CentralPanel::default()
             .frame(egui::Frame::none().fill(t.surface).inner_margin(Margin { left: if s.split { 1.0 } else { 0.0 }, ..Margin::ZERO }))
             .show(ctx, |ui| {
+                let mut tray_rect: Option<Rect> = None;
                 if tray_on {
                     // a short window: the tray scrolls inside what is left after 150 for the transcript, so
                     // the word being decided always has room above it
                     let cap = (ui.available_height() - 150.0).max(120.0);
-                    let tray_panel = egui::TopBottomPanel::bottom("tray")
-                        .resizable(false)
-                        .frame(egui::Frame::none().fill(t.sunken))
+                    // the browser puts the tray's top border on a whole pixel: the panel's height is what makes
+                    // its top land there (content heights are fractional: 26.6 + 18.2 ...)
+                    let bottom = ui.max_rect().bottom();
+                    // (1px of border above the content)
+                    let total = cx.stage.tray_h.min(cap) + 1.0;
+                    let snapped = bottom - (bottom - total).round();
+                    // the browser lays out at fractions and paints on whole pixels: the border is on the rounded
+                    // top, the content starts from the unrounded one
+                    let frac = snapped - total;
+                    let mut panel = egui::TopBottomPanel::bottom("tray").resizable(false).show_separator_line(false).frame(egui::Frame::none().fill(t.sunken));
+                    if cx.stage.tray_h > 0.0 {
+                        panel = panel.exact_height(snapped);
+                    }
+                    let tray_panel = panel
                         .show_inside(ui, |ui| {
+                            ui.spacing_mut().item_spacing.y = 0.0;
+                            ui.add_space((1.0 + frac).clamp(0.5, 1.5));
                             let out = egui::ScrollArea::vertical()
                                 .id_source("tray-scroll")
                                 .animated(false)
@@ -1662,8 +1689,15 @@ fn review_panes(ctx: &egui::Context, cx: &mut Cx, s: &Session, narrow: bool) {
                                     cx.ctl.flush_scroll(ui, &[TRAY]);
                                 });
                             cx.stage.tray_h = out.content_size.y;
+                            cx.stage.tray_in = out.inner_rect.height();
                         });
                     cx.stage.tray_px = if cx.narrow { 0.0 } else { tray_panel.response.rect.height() };
+                    tray_rect = Some(tray_panel.response.rect);
+                    // `.tray-wrap { border-top: 1px solid var(--line) }`
+                    {
+                        let r = tray_panel.response.rect;
+                        ui.painter().hline(r.x_range(), r.top().round() + 0.5, Stroke::new(1.0, t.line));
+                    }
                 }
                 if !tray_on {
                     cx.stage.tray_px = 0.0;
@@ -1684,6 +1718,18 @@ fn review_panes(ctx: &egui::Context, cx: &mut Cx, s: &Session, narrow: bool) {
                     text_column(ui, cx, s, g.as_ref(), &entries);
                     cx.ctl.flush_scroll(ui, &[TEXT, SCAN]);
                 });
+                // `.tray-wrap { box-shadow: 0 -8px 16px -12px rgba(20, 27, 45, 0.25) }` over the text above it
+                if let (Some(r), false) = (tray_rect, cx.narrow) {
+                    // (Chrome's blur, row by row above the border: 255 - 17 at the border, to nothing 13 px up)
+                    const A: [f32; 13] = [0.072, 0.064, 0.051, 0.043, 0.034, 0.030, 0.026, 0.021, 0.017, 0.013, 0.009, 0.009, 0.004];
+                    let top = r.top().round();
+                    let clip = Rect::from_min_max(pos2(r.left(), top - 13.0), pos2(r.right(), top));
+                    let p = ui.painter().with_clip_rect(clip);
+                    for (i, a) in A.iter().enumerate() {
+                        let y = top - 1.0 - i as f32;
+                        p.hline(r.x_range(), y + 0.5, Stroke::new(1.0, Color32::from_rgba_unmultiplied(20, 27, 45, (a * 255.0).round() as u8)));
+                    }
+                }
                     // review.js: `pane.addEventListener('scroll', debounce(save, 600))`
                 let y = out.state.offset.y;
                 let now = ui.input(|i| i.time);
@@ -2052,7 +2098,8 @@ fn page_image(ui: &mut Ui, cx: &mut Cx, s: &Session, p: &Page, im: &Img, pad: f3
             pt.rect_stroke(r, 2.0, Stroke::new(1.0, t.accent.gamma_multiply(0.55)));
         }
     }
-    if let Some(b) = hover.and_then(|i| boxes.get(i)) {
+    // (only the boxes of "a box on every line" exist to be lit: the marks of "underlines" have no hover)
+    if let (Some(b), true) = (hover.and_then(|i| boxes.get(i)), s.boxes == BoxMode::All && !approx) {
         pt.rect_stroke(at(b).expand(1.0), 3.0, Stroke::new(2.0, t.accent));
     }
     let read = s.selected.as_ref().and_then(|id| s.read_line.get(id)).copied();
@@ -3225,13 +3272,15 @@ fn alternatives(ui: &mut Ui, cx: &mut Cx, s: &Session, cur: &Entry) {
         // css line boxes: 19px at 1.4 and 13px at 1.4 (a wrapped line adds its own)
         let main_h = main.size().y.max(19.0 * 1.4);
         let hint_h = hint.size().y.max(13.0 * 1.4);
-        let h = (2.0 + 12.0 + main_h + hint_h).max(TARGET).round();
+        // (fractional like the browser's layout: 6 + 26.6 + 18.2 + 6 + 2; only the paint is put on pixels)
+        let h = (2.0 + 12.0 + main_h + hint_h).max(TARGET);
         let r = ui.allocate_response(vec2(w, h), Sense::click());
+        let rc = Rect::from_min_max(r.rect.min.round(), r.rect.max.round());
         let fill = if a.on { t.ok_bg } else if r.hovered() { t.sunken } else { t.surface };
         let line = if a.on { t.ok } else { t.line2 };
-        ui.painter().rect_filled(r.rect, 8.0, fill);
-        ui.painter().rect_stroke(r.rect, 8.0, Stroke::new(1.0, line));
-        let c = pos2(r.rect.left() + 14.0 + 8.0, r.rect.center().y);
+        ui.painter().rect_filled(rc, 8.0, fill);
+        ui.painter().rect_stroke(rc.shrink(0.5), 7.5, Stroke::new(1.0, line));
+        let c = pos2(rc.left() + 14.0 + 8.0, rc.center().y.round());
         ui.painter().circle(c, 8.0, t.surface, Stroke::new(if a.on { 5.0 } else { 2.0 }, if a.on { t.ok } else { t.faint }));
         let x = r.rect.left() + text_x;
         let top = (r.rect.center().y - (main_h + hint_h) / 2.0).round();

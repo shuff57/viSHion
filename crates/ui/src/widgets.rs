@@ -13,7 +13,7 @@ pub const BTN_PAD: f32 = 34.0;
 /// between two rows of pixels from one frame to the next; this decides it the same way every time.
 pub fn centered(rect: Rect, size: egui::Vec2) -> egui::Pos2 {
     let p = rect.center() - size / 2.0;
-    pos2((p.x + 0.02).round(), (p.y + 0.02).round())
+    pos2((p.x + 0.02).round(), (p.y - 0.02).round())
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -46,18 +46,25 @@ fn paint_look(ui: &Ui, r: &Response, t: &Tokens, look: Look, on: bool, disabled:
             // `.btn.primary:hover { background: var(--ink); filter: brightness(1.15) }`: still ink, a shade brighter
             let b = |c: u8| (c as f32 * 1.15).round().min(255.0) as u8;
             let fill = if disabled { t.line2 } else if hover { Color32::from_rgb(b(t.ink.r()), b(t.ink.g()), b(t.ink.b())) } else { t.ink };
-            p.rect_filled(r.rect, 8.0, fill);
+            p.rect_filled(snap(r.rect), 8.0, fill);
         }
         Look::Outline => {
-            p.rect_filled(r.rect, 8.0, if hover { t.sunken } else { t.surface });
-            p.rect_stroke(r.rect, 8.0, Stroke::new(1.0, t.line2));
+            // (a CSS box is painted on whole pixels with its 1px border inside it)
+            let rr = snap(r.rect);
+            p.rect_filled(rr, 8.0, if hover { t.sunken } else { t.surface });
+            p.rect_stroke(rr.shrink(0.5), 7.5, Stroke::new(1.0, t.line2));
         }
         Look::Ghost => {
             if hover || on {
-                p.rect_filled(r.rect, 8.0, t.hover);
+                p.rect_filled(snap(r.rect), 8.0, t.hover);
             }
         }
     }
+}
+
+/// `rect` on whole pixels, as a browser paints a box.
+pub fn snap(rect: Rect) -> Rect {
+    Rect::from_min_max(rect.min.round(), rect.max.round())
 }
 
 /// A text button. `min_w` keeps related buttons aligned; the height is always 44.
@@ -227,7 +234,7 @@ pub fn icon_text_button(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, c: C, icon: Icon
     let r = ui.allocate_response(vec2(w, TARGET), sense);
     paint_look(ui, &r, t, look, false, c.disabled);
     paint_icon(ui, Rect::from_center_size(pos2(r.rect.left() + 17.0 + 10.0, r.rect.center().y), vec2(20.0, 20.0)), icon, fg);
-    ui.painter().galley(pos2(r.rect.left() + 17.0 + 28.0, r.rect.center().y - g.size().y / 2.0), g, fg);
+    ui.painter().galley(pos2(r.rect.left() + 17.0 + 28.0, (r.rect.center().y - g.size().y / 2.0 - 1.0).round()), g, fg);
     let disabled = c.disabled;
     ctl.reg(ui, &r, c) && !disabled
 }
@@ -248,7 +255,7 @@ pub fn crumb(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, c: C, name: &str, max_w: f3
     let r = ui.allocate_response(vec2(w, TARGET), Sense::click());
     let col = if r.hovered() { t.accent } else { t.ink };
     paint_icon(ui, Rect::from_center_size(pos2(r.rect.left() + 10.0, r.rect.center().y), vec2(20.0, 20.0)), Icon::Left, col);
-    ui.painter().galley(pos2(r.rect.left() + 26.0, r.rect.center().y - g.size().y / 2.0), g, col);
+    ui.painter().galley(pos2(r.rect.left() + 26.0, (r.rect.center().y - g.size().y / 2.0 - 1.0).round()), g, col);
     ctl.reg(ui, &r, c)
 }
 
@@ -276,7 +283,7 @@ pub fn brand(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, c: C) -> bool {
         .flat_map(|row| row.visuals.mesh.vertices.iter().map(|v| v.pos.y))
         .fold(f32::MIN, f32::max);
     // (the glyph quads reach about 3px under the baseline at this size: measured against the browser)
-    let dy = baseline - bottom + 1.8;
+    let dy = baseline - bottom + 0.3;
     // the row meshes use texel UVs; the tessellator normalises them for text shapes, here it is done by hand
     let [tw, th] = ui.fonts(|f| f.font_image_size());
     let mut x = 0.0;

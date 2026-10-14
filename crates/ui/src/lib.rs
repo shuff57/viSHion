@@ -774,6 +774,8 @@ pub struct App {
     /// The window / tab title last set (`<assignment> | viSHion` once an assignment is open).
     last_title: Option<String>,
     status_err: bool,
+    /// The toast on show and the egui time it first showed (JS toasts leave after 4 s, 8 s for an error).
+    status_seen: Option<((String, u64), f64)>,
     dialog: Option<dialog::Dialog>,
     /// Scroll position and size of the page stage, kept so zoom can hold the middle of the view.
     stage: review::Stage,
@@ -872,6 +874,7 @@ impl App {
             native_said_n: 0,
             last_title: None,
             status_err: false,
+            status_seen: None,
             dialog: None,
             stage: review::Stage::default(),
             want: vec![],
@@ -1441,6 +1444,24 @@ impl App {
                 self.ctl.focus = None;
                 self.ctl.restore_kb = None;
             }
+        }
+        // `OCR.toast`: info toasts leave after 4 s, errors after 8 s, the storage notice after 9 s
+        if let Some(m) = self.status_msg.clone() {
+            let now = ctx.input(|i| i.time);
+            let key = (m.clone(), self.ctl.toast_serial);
+            if self.status_seen.as_ref().map(|(k, _)| k) != Some(&key) {
+                self.status_seen = Some((key, now));
+            }
+            let ms = if m.starts_with("Saves live in this browser") { 9.0 } else if self.status_err { 8.0 } else { 4.0 };
+            let at = self.status_seen.as_ref().map_or(now, |(_, t)| *t);
+            if now - at >= ms {
+                self.status_msg = None;
+                self.status_seen = None;
+            } else {
+                ctx.request_repaint_after(std::time::Duration::from_millis(250));
+            }
+        } else {
+            self.status_seen = None;
         }
         // what the page made of the DOM transcript last frame (line heights, where the words landed)
         #[cfg(target_arch = "wasm32")]

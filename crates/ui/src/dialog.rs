@@ -335,8 +335,9 @@ fn field_label(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, w: f32, id: &'static str,
 /// `<select class="select">`: the shown value and a chevron; returns whether it was pressed.
 fn select_box(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, w: f32, id: &str, name: &str, shown: &str, open: bool) -> bool {
     let sr = ui.allocate_response(vec2(w, TARGET), Sense::click());
-    ui.painter().rect_filled(sr.rect, 8.0, t.surface);
-    ui.painter().rect_stroke(sr.rect, 8.0, Stroke::new(1.0, t.line2));
+    let sb = widgets::snap(sr.rect);
+    ui.painter().rect_filled(sb, 8.0, t.surface);
+    ui.painter().rect_stroke(sb.shrink(0.5), 7.5, Stroke::new(1.0, t.line2));
     let g = ui.painter().layout_no_wrap(shown.to_string(), theme::sans(14.0), t.ink);
     let size = g.size();
     let at = egui::Rect::from_min_size(sr.rect.min + vec2(12.0, 0.0), vec2(size.x, TARGET));
@@ -406,7 +407,7 @@ fn checkrow(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, w: f32, id: &str, title: &st
     if hover {
         p.rect_filled(r.rect, 8.0, t.sunken);
     }
-    p.rect_stroke(r.rect, 8.0, Stroke::new(1.0, t.line2));
+    p.rect_stroke(widgets::snap(r.rect).shrink(0.5), 7.5, Stroke::new(1.0, t.line2));
     // the box: 18px, accent ink when on
     let b = egui::Rect::from_min_size(pos2(r.rect.left() + 13.0, r.rect.top() + 13.0), vec2(18.0, 18.0));
     if on {
@@ -417,7 +418,7 @@ fn checkrow(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, w: f32, id: &str, title: &st
         p.line_segment([c + vec2(-1.5, 3.5), c + vec2(4.5, -3.0)], st);
     } else {
         p.rect_filled(b, 3.0, if t.dark { egui::Color32::from_rgb(59, 59, 59) } else { egui::Color32::WHITE });
-        p.rect_stroke(b, 3.0, Stroke::new(1.0, egui::Color32::from_rgb(118, 118, 118)));
+        p.rect_stroke(widgets::snap(b).shrink(0.5), 2.5, Stroke::new(1.0, egui::Color32::from_rgb(118, 118, 118)));
     }
     let x = r.rect.left() + 13.0 + 18.0 + 12.0;
     let y = r.rect.top() + 11.0;
@@ -712,7 +713,7 @@ fn option_row(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, id: &str, text: &str, on: 
     let r = ui.allocate_response(vec2(ui.available_width(), TARGET), Sense::click());
     let hover = r.hovered();
     ui.painter().rect_filled(r.rect, 8.0, if hover { t.sunken } else { t.surface });
-    ui.painter().rect_stroke(r.rect, 8.0, Stroke::new(1.0, if on { t.ink } else { t.line2 }));
+    ui.painter().rect_stroke(widgets::snap(r.rect).shrink(0.5), 7.5, Stroke::new(1.0, if on { t.ink } else { t.line2 }));
     let g = ui.painter().layout_no_wrap(text.to_string(), theme::sans(14.0), t.ink);
     let size = g.size();
     let at = egui::Rect::from_min_size(r.rect.min + vec2(12.0, 0.0), vec2(size.x, TARGET));
@@ -759,7 +760,7 @@ fn change_student(
         let shown = if *new_student { "A new student\u{2026}".to_string() } else { pick.clone().unwrap_or_else(|| "Choose a student".to_string()) };
         let sr = ui.allocate_response(vec2(iw, TARGET), Sense::click());
         ui.painter().rect_filled(sr.rect, 8.0, t.surface);
-        ui.painter().rect_stroke(sr.rect, 8.0, Stroke::new(1.0, t.line2));
+        ui.painter().rect_stroke(widgets::snap(sr.rect).shrink(0.5), 7.5, Stroke::new(1.0, t.line2));
         let g = ui.painter().layout_no_wrap(shown.clone(), theme::sans(14.0), t.ink);
         let size = g.size();
         let at = egui::Rect::from_min_size(sr.rect.min + vec2(12.0, 0.0), vec2(size.x, TARGET));
@@ -838,7 +839,7 @@ fn change_student(
                 }
                 let on = *all == is_all;
                 let r = ui.allocate_response(vec2(iw, TARGET), Sense::click());
-                ui.painter().rect_stroke(r.rect, 8.0, Stroke::new(1.0, if on { t.ink } else { t.line2 }));
+                ui.painter().rect_stroke(widgets::snap(r.rect).shrink(0.5), 7.5, Stroke::new(1.0, if on { t.ink } else { t.line2 }));
                 radio(ui.painter(), pos2(r.rect.left() + 12.0 + 9.0, r.rect.center().y), on, t);
                 let g = ui.painter().layout_no_wrap(label.clone(), theme::sans(14.0), t.ink);
                 let size = g.size();
