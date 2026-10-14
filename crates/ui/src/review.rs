@@ -100,6 +100,7 @@ pub(crate) enum Act {
     OpenSettings,
     CloseDialog,
     Inbox,
+    Home,
     OpenReview(String),
     ExportSelected,
     ReviewAgain,
@@ -205,7 +206,7 @@ fn tw(ui: &Ui, text: &str, font: egui::FontId) -> f32 {
 }
 
 pub(crate) fn show(app: &mut App, ctx: &egui::Context, t: &Tokens) {
-    let App { ctl, session, math, images, typed, typed_for, status_msg, status_err, boot, notice, save, storage, dialog, stage, host, want, emoji: emoji_cache, .. } = app;
+    let App { home, ctl, session, math, images, typed, typed_for, status_msg, status_err, boot, notice, save, storage, dialog, stage, host, want, emoji: emoji_cache, .. } = app;
     let mut acts: Vec<Act> = vec![];
     if let Some(s) = session.as_mut() {
         // js renderWho: Original cannot stay set where both versions read the same
@@ -226,7 +227,19 @@ pub(crate) fn show(app: &mut App, ctx: &egui::Context, t: &Tokens) {
         ctx.request_repaint();
     }
     let narrow = screen.width() < NARROW || short;
+    let show_home = home.active || matches!(boot, Boot::Empty);
+    let mut home_acts = vec![];
+    if show_home {
+        if home.cards.is_none() && !home.asked {
+            home.asked = true;
+            if let Some((d, _)) = host.as_ref() {
+                d(Cmd::ListProjects);
+            }
+        }
+        home_acts = crate::home::show(ctx, &mut *ctl, t, &mut *home, storage, narrow, crate::now_ms());
+    }
     match (&*boot, session.as_ref()) {
+        (_, _) if show_home => {}
         (Boot::Ready, Some(s)) => {
             let mut cx = Cx {
                 t,
@@ -304,13 +317,13 @@ pub(crate) fn show(app: &mut App, ctx: &egui::Context, t: &Tokens) {
     }
 
     // a modal dialog draws last, over everything
-    if let (Some(d), Some(s)) = (dialog.as_mut(), session.as_ref()) {
+    if let (Some(d), Some(s), false) = (dialog.as_mut(), session.as_ref(), show_home) {
         if let Some(o) = dialog::show(ctx, &mut *ctl, t, s, d) {
             acts.push(Act::Dialog(o));
         }
     }
 
-    if let Some(s) = session.as_ref() {
+    if let (Some(s), false) = (session.as_ref(), show_home) {
         route_keys(&*ctl, s, dialog.is_some(), &mut acts);
     }
 
@@ -319,8 +332,20 @@ pub(crate) fn show(app: &mut App, ctx: &egui::Context, t: &Tokens) {
             d(c);
         }
     };
+    for a in home_acts {
+        use crate::home::HomeAct;
+        send(match a {
+            HomeAct::Open(slug) => Cmd::OpenProject { slug },
+            HomeAct::Create(name) => Cmd::CreateProject { name },
+            HomeAct::Rename(slug, name) => Cmd::RenameProject { slug, name },
+            HomeAct::Duplicate(slug) => Cmd::DuplicateProject { slug },
+            HomeAct::Delete(slug) => Cmd::DeleteProject { slug },
+        });
+        // the list is asked for again after a change
+        home.cards = None;
+    }
     let dialog_was = ctl.dialog_was;
-    if let Some(s) = session.as_mut() {
+    if let (Some(s), false) = (session.as_mut(), show_home) {
         s.now = crate::now_ms();
         for a in acts {
             if !matches!(a, Act::ReadLine(_) | Act::ReadMove(_) | Act::ReadEdge(_) | Act::ReadClear | Act::Zoom(_) | Act::ZoomSet(_) | Act::Pan(_) | Act::Dialog(_) | Act::CloseDialog | Act::Scrolled(_)) {
@@ -351,6 +376,11 @@ pub(crate) fn show(app: &mut App, ctx: &egui::Context, t: &Tokens) {
             }
         }
         ctl.dialog_was = open_now;
+    }
+    if std::mem::take(&mut ctl.want_home) {
+        home.active = true;
+        home.cards = None;
+        home.asked = false;
     }
 }
 
@@ -723,6 +753,7 @@ fn apply(
             ctl.say_node("inbox-title");
             ctl.focus_title = Some("inbox-title");
         }
+        Act::Home => ctl.want_home = true,
         Act::OpenReview(id) => {
             s.select(&id);
             s.view = View::Review;
@@ -919,7 +950,7 @@ fn header(ui: &mut Ui, cx: &mut Cx, s: &Session) {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 12.0;
             if widgets::brand(cx.ctl, ui, t, C::new("brand", "viSHion", HEADER)) {
-                cx.acts.push(Act::Inbox);
+                cx.acts.push(Act::Home);
             }
             let sg = ui.painter().layout_no_wrap(save_text.clone(), theme::sans(13.0), save_col);
             let w = sg.size().x + 24.0 + 12.0 + TARGET;

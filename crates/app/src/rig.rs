@@ -286,4 +286,44 @@ mod tests {
         let tray = r.y_of("Check this word").unwrap();
         assert!(word as f32 + 44.0 <= tray + 30.0, "word target at {word}, tray heading at {tray}");
     }
+
+    /// Phase 5: the home screen from the wordmark: the list, rename, duplicate, delete, create.
+    #[test]
+    fn home_lists_renames_duplicates_deletes_and_creates() {
+        let mut r = Rig::demo();
+        r.act("crumb");
+        r.act("brand");
+        assert!(r.has("new-assignment") && r.has("open-0"), "{:?}", r.app.controls().iter().map(|c| &c.id).collect::<Vec<_>>());
+        r.act("rename-0");
+        r.app.twin_text("rename-name-0", "Quiz 2");
+        r.frames(2);
+        r.act("rename-ok-0");
+        assert!(label_of(&r, "open-0").starts_with("Quiz 2."), "{}", label_of(&r, "open-0"));
+        r.act("duplicate-0");
+        assert!(r.has("open-1"));
+        r.act("delete-1");
+        assert!(r.has("delete-ok-1"));
+        r.act("delete-cancel-1");
+        assert!(r.has("open-1"), "cancel keeps it");
+        r.act("delete-1");
+        r.act("delete-ok-1");
+        assert!(!r.has("open-1"));
+        r.act("new-assignment");
+        r.app.twin_text("new-name", "Fresh start");
+        r.frames(2);
+        r.act("create-assignment");
+        assert_eq!(r.app.session().unwrap().a.meta.name(), "Fresh start");
+        assert!(!r.has("new-assignment"), "the new assignment is open, not the home screen");
+    }
+
+    /// Opening a card from the home screen shows that assignment.
+    #[test]
+    fn home_open_goes_to_the_assignment() {
+        let mut r = Rig::demo();
+        r.act("crumb");
+        r.act("brand");
+        r.act("open-0");
+        assert!(!r.has("open-0"));
+        assert!(r.app.session().is_some());
+    }
 }

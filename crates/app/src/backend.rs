@@ -380,6 +380,26 @@ impl Backend {
         }
     }
 
+    /// `fs.listProjects` as the home screen's cards.
+    async fn list_event(&self, now: i64) -> Event {
+        match self.projects.list_projects(now).await {
+            Ok(list) => Event::Projects(
+                list.into_iter()
+                    .map(|s| vishion_ui::Card { slug: s.slug, name: s.name, pages: s.pages.max(0) as usize, done: s.done.max(0) as usize, updated: s.updated })
+                    .collect(),
+            ),
+            Err(e) => Event::Notice { text: format!("Could not list the assignments: {e}"), error: true },
+        }
+    }
+
+    /// The list again after a change, or the toast saying why not.
+    async fn changed(&self, r: std::result::Result<(), impl std::fmt::Display>, what: &str, now: i64) -> Event {
+        match r {
+            Ok(()) => self.list_event(now).await,
+            Err(e) => Event::Notice { text: format!("{what}: {e}"), error: true },
+        }
+    }
+
     pub async fn handle(&self, cmd: Cmd, now: i64) -> Event {
         match cmd {
             Cmd::RemovePage { slug, id } => done(self.projects.delete_page(&slug, &id).await),
@@ -420,6 +440,24 @@ impl Backend {
                 let out = std::cell::RefCell::new(vec![]);
                 self.read_pages(&slug, ids, conn, &|e| out.borrow_mut().push(e)).await;
                 Event::Many(out.into_inner())
+            }
+            Cmd::ListProjects => self.list_event(now).await,
+            Cmd::OpenProject { slug } => self.open(Some(&slug), now).await,
+            Cmd::CreateProject { name } => match self.projects.create_project(&name, now).await {
+                Ok(slug) => self.open(Some(&slug), now).await,
+                Err(e) => Event::Notice { text: format!("Could not create the assignment: {e}"), error: true },
+            },
+            Cmd::RenameProject { slug, name } => {
+                let r = self.projects.rename_project(&slug, &name, now).await;
+                self.changed(r.map(|_| ()), "Could not rename the assignment", now).await
+            }
+            Cmd::DuplicateProject { slug } => match self.projects.duplicate_project(&slug, now).await {
+                Ok(_) => Event::Many(vec![Event::Notice { text: "Assignment duplicated.".into(), error: false }, self.list_event(now).await]),
+                Err(e) => Event::Notice { text: format!("Could not duplicate: {e}"), error: true },
+            },
+            Cmd::DeleteProject { slug } => {
+                let r = self.projects.delete_project(&slug).await;
+                self.changed(r, "Could not delete the assignment", now).await
             }
             Cmd::Stop => {
                 self.cancel.stop();

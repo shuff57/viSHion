@@ -21,6 +21,7 @@ mod bands;
 mod dialog;
 pub mod emoji;
 mod flow;
+mod home;
 pub mod host;
 pub mod math;
 mod review;
@@ -41,7 +42,7 @@ mod app_tests;
 #[cfg(test)]
 mod a11y_critic_tests;
 
-pub use host::{Cmd, Conn, Dispatch, Event, Inbox, ReadOutcome};
+pub use host::{Card, Cmd, Conn, Dispatch, Event, Inbox, ReadOutcome};
 pub use twin::{Node, Part, Reg};
 
 /// Web only: call once after eframe started; makes the canvas a non-tabbable, AT-hidden surface and names
@@ -138,6 +139,8 @@ pub struct Ctl {
     pub(crate) dom_focus: Option<String>,
     /// A dialog was open at the end of the last frame, and where focus goes back to when it closes.
     pub(crate) dialog_was: bool,
+    /// The person asked for the home screen (the wordmark); the app shell takes it after the frame.
+    pub(crate) want_home: bool,
     /// The dialog a confirmation is stacked on (Settings under "Clear remembered fixes", as modal.js stacks
     /// them) and the control that gets focus back when the confirmation closes.
     pub(crate) under: Option<(crate::dialog::Dialog, &'static str)>,
@@ -750,6 +753,7 @@ pub struct App {
     last_screen: (f32, f32),
     host: Option<(Dispatch, Inbox)>,
     boot: Boot,
+    home: home::Home,
     session: Option<state::Session>,
     storage: String,
     notice: Option<String>,
@@ -862,6 +866,7 @@ impl App {
             last_screen: (0.0, 0.0),
             host: None,
             boot: Boot::Loading,
+            home: Default::default(),
             session: None,
             storage: String::new(),
             notice: None,
@@ -1021,6 +1026,11 @@ impl App {
         self.queue.lock().unwrap().push(format!("act:{id}"));
     }
 
+    #[doc(hidden)]
+    pub fn twin_text(&self, id: &str, value: &str) {
+        self.queue.lock().unwrap().push(format!("text:{id}\u{1}{value}"));
+    }
+
     /// Hand a session to the app directly (tests; the host path is `Event::Opened`).
     pub fn open_session(&mut self, s: state::Session, storage: &str) {
         self.session = Some(s);
@@ -1075,6 +1085,7 @@ impl App {
                         settings.set("noticeSeen", serde_json::json!(true));
                         notice_seen_now = true;
                     }
+                    self.home = Default::default();
                     self.images.clear();
                     let mut sess = state::Session::new(slug, *assignment, *settings, now_ms());
                     if let Some(id) = &self.start_page {
@@ -1090,6 +1101,10 @@ impl App {
                     sess.dirty.settings |= notice_seen_now;
                     self.session = Some(sess);
                     self.boot = Boot::Ready;
+                }
+                Event::Projects(cards) => {
+                    self.home.cards = Some(cards);
+                    self.home.asked = false;
                 }
                 Event::Empty { storage } => {
                     self.storage = storage;

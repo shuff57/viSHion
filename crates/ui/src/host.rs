@@ -20,9 +20,32 @@ pub struct Conn {
     pub examples: Vec<String>,
 }
 
+/// One assignment on the home screen (`fs.listProjects`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Card {
+    pub slug: String,
+    pub name: String,
+    pub pages: usize,
+    pub done: usize,
+    /// Last change, ms since the epoch.
+    pub updated: f64,
+}
+
 /// UI to host.
 #[derive(Debug)]
 pub enum Cmd {
+    /// The home screen's list: `Event::Projects`.
+    ListProjects,
+    /// Open another assignment: `Event::Opened`.
+    OpenProject { slug: String },
+    /// `fs.createProject` then open it: `Event::Opened`.
+    CreateProject { name: String },
+    /// `fs.renameProject`, then the list again.
+    RenameProject { slug: String, name: String },
+    /// `fs.duplicateProject`, then the list again.
+    DuplicateProject { slug: String },
+    /// `fs.deleteProject`, then the list again.
+    DeleteProject { slug: String },
     /// Read `<slug>/images/<id>.jpg`; answered by `Event::Image`.
     LoadImage { slug: String, id: String },
     /// `savePage`: written compact under the key the page was loaded from.
@@ -75,6 +98,8 @@ pub enum Event {
         /// The assignment came from the backup copy of a damaged `project.json`.
         notice: Option<String>,
     },
+    /// The assignments the home screen lists.
+    Projects(Vec<Card>),
     /// The store holds no assignment.
     Empty { storage: String },
     /// Opening failed (the message is shown on screen; nothing is written).

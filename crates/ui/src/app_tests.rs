@@ -226,6 +226,10 @@ fn empty_store_and_failure_have_a_screen() {
         ..Default::default()
     };
     let _ = ctx.run(input.clone(), |c| app.step(c, false));
+    // an empty store is the home screen; its list is what the host answers (`ListProjects`)
+    assert!(app.nodes().iter().any(|n| matches!(n, Node::Heading { text, .. } if text == "Assignments")));
+    inbox.push(Event::Projects(vec![]));
+    let _ = ctx.run(input.clone(), |c| app.step(c, false));
     assert!(app.nodes().iter().any(|n| matches!(n, Node::Heading { text, .. } if text == "No assignments yet")));
     inbox.push(Event::Failed("boom".into()));
     let _ = ctx.run(input, |c| app.step(c, false));

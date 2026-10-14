@@ -96,7 +96,11 @@ whenever the inline bootstrap script in `crates/app/web/index.html` changes, so 
   activating a flagged word).
 - tray: choices, typed fix, step, close (Escape inside it closes it and returns focus to a word).
 - dialogs: Change student, confirmations, Settings (theme). Modal: only its controls are in the twin.
-- inbox: a minimal assignment overview the crumb and the last student's Done return to (full inbox is phase 5).
+- inbox: the assignment overview the crumb and the last student's Done return to (tabs, run bar, rows).
+- home (`ui::home`, Phase 5): the wordmark on the inbox goes there, and an empty store starts there. Lists the
+  assignments (`Cmd::ListProjects` -> `Event::Projects`), opens one, creates, renames, duplicates and deletes
+  (inline fields and an inline confirm instead of dialogs, so it works with no session). Not yet: the folder
+  card states (choose / reconnect), zip and folder import, Download zip, old-session import.
 
 Flows are `ui::state::Session` over `core::words` (`choose`, `use_all`, which call `core::judge::toggle`),
 `core::groups`, `core::export`. The screen never touches storage: it sends `host::Cmd`s (`LoadImage`,
