@@ -349,6 +349,31 @@ mod tests {
         assert!(out.borrow().iter().any(|e| matches!(e, Event::Transcribed { outcome: vishion_ui::ReadOutcome::Unreachable(_), .. })));
     }
 
+    /// Phase 3: the judge model's likely words come back from the server, cleaned like `W.parseGuesses`.
+    #[test]
+    fn guesses_are_asked_of_the_server_outside_demo_mode() {
+        use std::io::{Read, Write};
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", l.local_addr().unwrap());
+        std::thread::spawn(move || {
+            let (mut s, _) = l.accept().unwrap();
+            s.set_read_timeout(Some(std::time::Duration::from_millis(300))).unwrap();
+            let mut b = [0u8; 65536];
+            while s.read(&mut b).map_or(false, |n| n > 0) {}
+            let content = r#"Sure: [{"n":1,"options":[{"text":"discriminant","percent":60},{"text":"determinant","percent":25}]}]"#;
+            let j = serde_json::json!({"choices": [{"message": {"content": content}}]}).to_string();
+            let r = format!("HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{j}", j.len());
+            s.write_all(r.as_bytes()).unwrap();
+        });
+        let (store, slug) = block_on(seed(1)).unwrap();
+        let be = Backend::new(store, "Saved");
+        let conn = vishion_ui::Conn { url, timeout_secs: 5, ..Default::default() };
+        let ev = block_on(be.handle(Cmd::Guess { slug, id: "p-maya-1".into(), raw: "the [illegible] root".into(), conn, examples: vec![] }, 0));
+        let Event::Guessed { result: Ok(g), .. } = ev else { panic!("{ev:?}") };
+        assert_eq!(g["i:0"][0]["text"], "discriminant");
+        assert_eq!(g["i:0"][1]["percent"], 25);
+    }
+
     /// The native path: a real folder, written and read back through `FsStore` and the project layer.
     #[test]
     fn folder_store_round_trip_keeps_edits() {

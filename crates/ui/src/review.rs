@@ -708,7 +708,7 @@ fn apply(
         Act::Stop => send(Cmd::Stop),
         Act::Guess(id) => {
             if let Some(p) = s.page(&id) {
-                send(Cmd::Guess { slug, id: id.clone(), raw: p.raw().to_string() });
+                send(Cmd::Guess { slug, id: id.clone(), raw: p.raw().to_string(), conn: s.read_conn(), examples: s.reference_examples() });
             }
         }
         Act::OpenSettings => *dialog = Some(Dialog::settings()),

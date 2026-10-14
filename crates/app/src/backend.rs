@@ -347,6 +347,29 @@ impl Backend {
         }
     }
 
+    /// `W.guess` against the server: the page picture and the numbered transcript, one answer back.
+    async fn guess_live(&self, slug: &str, id: &str, numbered: &str, count: usize, conn: &Conn, examples: &[String]) -> std::result::Result<serde_json::Map<String, Value>, String> {
+        let image = match self.projects.load_image(slug, id).await {
+            Ok(Some(b)) => b,
+            _ => return Err("The image is missing.".into()),
+        };
+        let prompt = vishion_core::guess::prompt(numbered, examples);
+        let req = vishion_net::Request {
+            endpoint: vishion_net::Endpoint::new(conn.url.clone()),
+            api_key: &conn.api_key,
+            model: &conn.model,
+            prompt: &prompt,
+            image: &image,
+            timeout_secs: conn.timeout_secs,
+            poll_slots: false,
+        };
+        match vishion_net::complete(req).await {
+            Ok(t) => Ok(vishion_core::guess::parse_guesses(&t, count)),
+            Err(vishion_net::Error::Http(m)) | Err(vishion_net::Error::Network(m)) | Err(vishion_net::Error::Unavailable(m)) => Err(m),
+            Err(_) => Err(NEEDS_OCR.into()),
+        }
+    }
+
     pub async fn handle(&self, cmd: Cmd, now: i64) -> Event {
         match cmd {
             Cmd::RemovePage { slug, id } => done(self.projects.delete_page(&slug, &id).await),
@@ -392,12 +415,14 @@ impl Backend {
                 self.cancel.stop();
                 Event::Many(vec![])
             }
-            Cmd::Guess { id, raw, .. } => {
+            Cmd::Guess { slug, id, raw, conn, examples } => {
+                let (numbered, n) = vishion_core::guess::numbered(&raw);
                 if self.demo_mode().await {
-                    let (_, n) = vishion_core::guess::numbered(&raw);
                     Event::Guessed { id, result: Ok(vishion_core::demo::guesses(n)) }
+                } else if n == 0 {
+                    Event::Guessed { id, result: Ok(Default::default()) }
                 } else {
-                    Event::Guessed { id, result: Err(NEEDS_OCR.into()) }
+                    Event::Guessed { id: id.clone(), result: self.guess_live(&slug, &id, &numbered, n, &conn, &examples).await }
                 }
             }
             Cmd::Export { slug, name, bytes } => match self.projects.write_export(&slug, &name, &bytes).await {

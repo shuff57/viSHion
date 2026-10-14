@@ -1095,6 +1095,11 @@ impl Session {
         n
     }
 
+    /// The teacher's earlier resolutions for this topic, as the guess prompt quotes them (`W.referenceExamples`).
+    pub fn reference_examples(&self) -> Vec<String> {
+        vishion_core::words::reference_examples(&self.settings, self.a.meta.topic(), Some(10))
+    }
+
     /// How to reach the OCR server for a run (`S.d.settings`, `O.buildPrompt`).
     pub fn read_conn(&self) -> crate::host::Conn {
         let st = &self.settings;

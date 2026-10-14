@@ -44,7 +44,7 @@ pub enum Cmd {
     /// sent (the worker may be busy reading), so it never needs an answer.
     Stop,
     /// Ask for likely words for the unreadable words of a page (`W.guess`): `Event::Guessed`.
-    Guess { slug: String, id: String, raw: String },
+    Guess { slug: String, id: String, raw: String, conn: Conn, examples: Vec<String> },
     /// Write `exports/<name>` (the strip's "Export N selected").
     Export { slug: String, name: String, bytes: Vec<u8> },
     /// Web: fetch the STIX Two Math font once (it is not part of the wasm, plan risk "wasm size").

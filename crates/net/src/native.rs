@@ -2,7 +2,7 @@
 //! so Stop and the timeout are noticed within 100 ms even while the model is still reading the page.
 use crate::sse::SseParser;
 use crate::slots;
-use crate::{body, http_error, tokens, unreachable_message, verdict_error, Cancel, Done, Error, Progress, Request};
+use crate::{complete_body, content_of, body, http_error, tokens, unreachable_message, verdict_error, Cancel, Done, Error, Progress, Request};
 use std::io::Read;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
@@ -83,6 +83,28 @@ fn poll(url: String, stop: Arc<AtomicBool>, tx: mpsc::Sender<Msg>) {
             }
         }
         std::thread::sleep(slots::EVERY);
+    }
+}
+
+/// One non-streamed answer (`W.guess`): the model's text. Blocks the calling thread (the host's worker),
+/// for at most `timeout_secs`.
+pub async fn complete(req: Request<'_>) -> Result<String, Error> {
+    let agent = ureq::AgentBuilder::new()
+        .timeout_connect(Duration::from_secs(10))
+        .timeout(Duration::from_secs(req.timeout_secs.max(1)))
+        .build();
+    let mut r = agent.post(&req.endpoint.chat_completions_url()).set("Content-Type", "application/json");
+    if !req.api_key.is_empty() {
+        r = r.set("Authorization", &format!("Bearer {}", req.api_key));
+    }
+    match r.send_string(&complete_body(req.model, req.image, req.prompt)) {
+        Ok(res) => res.into_string().map(|t| content_of(&t)).map_err(|_| Error::Network(unreachable_message(&req.endpoint.base_url))),
+        Err(ureq::Error::Status(code, res)) => {
+            let mut s = String::new();
+            let _ = res.into_reader().take(4096).read_to_string(&mut s);
+            Err(http_error(code, &s))
+        }
+        Err(_) => Err(Error::Network(unreachable_message(&req.endpoint.base_url))),
     }
 }
 
@@ -209,6 +231,15 @@ mod tests {
         assert_eq!(e, Error::Unavailable("The OCR model is not loaded yet. loading".into()));
         let e = pending(transcribe(req("http://127.0.0.1:1"), &Cancel::default(), &mut |_| {})).unwrap_err();
         assert!(matches!(e, Error::Network(m) if m.contains("Cannot reach OCR server")));
+    }
+
+    #[test]
+    fn complete_returns_the_message_content() {
+        let j = r#"{"choices":[{"message":{"content":"[{\"n\":1}]"}}]}"#;
+        let reply = format!("HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{j}", j.len());
+        let url = serve(Box::leak(reply.into_boxed_str()).as_bytes());
+        let t = pending(complete(req(&url))).unwrap();
+        assert_eq!(t, r#"[{"n":1}]"#);
     }
 
     #[test]

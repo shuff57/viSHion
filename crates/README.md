@@ -149,8 +149,8 @@ closing it returns focus to what opened it. The line being read is `data-reading
 
 `--demo`, `?demo=1` and the `demo` setting answer Retry, Transcribe, Transcribe again and the inbox's Resume
 with the sample transcripts of js/ocr.js (`core::demo`), run the offline judge over them, and add the sample
-guesses for unreadable words, exactly as the JS app's demo mode does. Without demo mode the host says the OCR
-connection is not there yet (phase 3) and leaves the page alone. Straighten is a port of js/deskew.js
+guesses for unreadable words, exactly as the JS app's demo mode does. Without demo mode, reading goes to the server (`net`) and Guess asks the same model for likely words
+(`net::complete`, js/guess.js prompt, `core::guess::parse_guesses`). Straighten is a port of js/deskew.js
 (`app::pictures::deskew`), also applied to pictures picked with Replace and Add page.
 
 ## Review-screen tests

@@ -8,11 +8,11 @@ pub mod sse;
 #[cfg(not(target_arch = "wasm32"))]
 mod native;
 #[cfg(not(target_arch = "wasm32"))]
-pub use native::transcribe;
+pub use native::{complete, transcribe};
 #[cfg(target_arch = "wasm32")]
 mod web;
 #[cfg(target_arch = "wasm32")]
-pub use web::transcribe;
+pub use web::{complete, transcribe};
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -115,6 +115,25 @@ pub fn body(model: &str, image_jpeg: &[u8], prompt: &str) -> String {
     .to_string()
 }
 
+/// The body of js/guess.js `ask`: one answer, not streamed, a little warmer than reading, 500 tokens at most.
+pub fn complete_body(model: &str, image_jpeg: &[u8], prompt: &str) -> String {
+    let mut v: serde_json::Value = serde_json::from_str(&body(model, image_jpeg, prompt)).expect("body is json");
+    let o = v.as_object_mut().expect("object");
+    o.insert("stream".into(), false.into());
+    o.remove("stream_options");
+    o.insert("temperature".into(), 0.2.into());
+    o.insert("max_tokens".into(), 500.into());
+    v.to_string()
+}
+
+/// `j.choices[0].message.content`, or empty.
+pub(crate) fn content_of(reply: &str) -> String {
+    serde_json::from_str::<serde_json::Value>(reply)
+        .ok()
+        .and_then(|j| j["choices"][0]["message"]["content"].as_str().map(str::to_string))
+        .unwrap_or_default()
+}
+
 pub(crate) fn unreachable_message(origin: &str) -> String {
     format!("Cannot reach OCR server at {}. Is llama-server running with CORS enabled?", origin.trim_end_matches('/'))
 }
@@ -173,6 +192,20 @@ mod tests {
         let c = &v["messages"][0]["content"];
         assert_eq!(c[0]["image_url"]["url"], "data:image/jpeg;base64,/9g=");
         assert_eq!(c[1]["text"], "Read.");
+    }
+
+    #[test]
+    fn complete_body_is_one_warm_short_answer() {
+        let v: serde_json::Value = serde_json::from_str(&complete_body("m", b"x", "Q")).unwrap();
+        assert_eq!((v["stream"].as_bool(), v["max_tokens"].as_u64(), v["temperature"].as_f64()), (Some(false), Some(500), Some(0.2)));
+        assert!(v.get("stream_options").is_none());
+        assert_eq!(v["model"], "m");
+    }
+
+    #[test]
+    fn content_of_takes_the_first_choice() {
+        assert_eq!(content_of(r#"{"choices":[{"message":{"content":"[]"}}]}"#), "[]");
+        assert_eq!(content_of("nope"), "");
     }
 
     #[test]

@@ -38,6 +38,24 @@ pub fn numbered(raw: &str) -> (String, usize) {
     (out, n)
 }
 
+/// The question of js/guess.js `ask`: the numbered transcript, and the teacher's earlier resolutions as a guide.
+pub fn prompt(numbered_text: &str, examples: &[String]) -> String {
+    let mut p = String::from(
+        "Below is the transcript of the handwritten page in the image. Each [illegible #k] marks a word that could not be read. \
+For each one, look at the handwriting and the sentence around it and give up to 3 of the most likely words, each with your certainty as a percentage from 0 to 100. \
+Certainties for one word must not add up to more than 100. Give an empty list if you cannot tell. ",
+    );
+    if !examples.is_empty() {
+        p.push_str(&format!(
+            "For reference, this teacher resolved unreadable words in earlier pages like this: {}. Use them as a guide to vocabulary and style, not as answers to copy.\n",
+            examples.join("; ")
+        ));
+    }
+    p.push_str("Answer with JSON only, like [{\"n\":1,\"options\":[{\"text\":\"discriminant\",\"percent\":60},{\"text\":\"determinant\",\"percent\":25}]}].\n\nTranscript:\n");
+    p.push_str(numbered_text);
+    p
+}
+
 /// `firstArray`: first JSON array in a reply that may also contain notes or code fences.
 pub fn first_array(t: &str) -> Option<Value> {
     let s = t.find('[')?;
@@ -123,3 +141,17 @@ pub fn parse_guesses(reply: &str, count: usize) -> Map<String, Value> {
     }
     out
 }
+
+#[cfg(test)]
+mod prompt_tests {
+    use super::*;
+
+    #[test]
+    fn prompt_has_examples_only_when_there_are_some() {
+        let a = prompt("x [illegible #1]", &[]);
+        assert!(a.ends_with("Transcript:\nx [illegible #1]") && !a.contains("For reference"));
+        let b = prompt("t", &["\u{201C}the ___ is\u{201D} was root".to_string(), "b".to_string()]);
+        assert!(b.contains("earlier pages like this: \u{201C}the ___ is\u{201D} was root; b. Use them"));
+    }
+}
+
