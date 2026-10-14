@@ -16,6 +16,25 @@ pub fn centered(rect: Rect, size: egui::Vec2) -> egui::Pos2 {
     pos2((p.x + 0.02).round(), (p.y - 0.02).round())
 }
 
+/// A CSS `box-shadow` with a blur radius. egui's own shadow is one linear ramp as wide as `blur`, which is
+/// harder at the edge and ends sooner than a Gaussian (sigma = blur / 2): the page sheet and the dialog looked
+/// hard-edged next to the browser's. Three ramps of different widths, weighted, give the soft tail; their
+/// alphas are chosen so that the solid middle composes to exactly `shadow.color`.
+pub fn soft_shadow(shadow: egui::epaint::Shadow, rect: Rect, rounding: f32) -> Vec<egui::epaint::RectShape> {
+    if shadow.blur < 4.0 {
+        return vec![shadow.as_shape(rect, rounding)];
+    }
+    let total = shadow.color.a() as f32 / 255.0;
+    [(0.5_f32, 0.75_f32), (0.3, 1.5), (0.2, 2.5)]
+        .iter()
+        .map(|(weight, width)| {
+            let a = 1.0 - (1.0 - total).powf(*weight);
+            let color = Color32::from_rgba_unmultiplied(shadow.color.r(), shadow.color.g(), shadow.color.b(), (a * 255.0).round() as u8);
+            egui::epaint::Shadow { blur: shadow.blur * width, color, ..shadow }.as_shape(rect, rounding)
+        })
+        .collect()
+}
+
 #[derive(Clone, Copy, PartialEq)]
 pub enum Look {
     /// Filled with ink (the primary action).
@@ -262,6 +281,8 @@ pub fn crumb(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, c: C, name: &str, max_w: f3
 /// The wordmark at rest (header.js `logo`): "vi" "SH" "ion" in 600 weight monospace, the SH in the accent,
 /// in an svg 32px high (viewBox 312 x 84), so 119px wide with the text stretched to 114px.
 pub const BRAND_W: f32 = 119.0;
+/// How far the second pass of the wordmark's glyphs sits to the right of the first (see `brand`).
+pub const BRAND_EMBOLDEN: f32 = 0.45;
 
 pub fn brand(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, c: C) -> bool {
     // js/ui/header.js `logo()`: SVG text `600 64px mono`, `textLength=300 spacingAndGlyphs` in a 312 x 84 view box
@@ -294,7 +315,14 @@ pub fn brand(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, c: C) -> bool {
                 v.pos = pos2(x0 + (x + v.pos.x) * k, v.pos.y + dy);
                 v.uv = pos2(v.uv.x / tw as f32, v.uv.y / th as f32);
             }
+            // JS draws Consolas at weight 600 (a real bold, about a fifth more ink than Hack Bold at this size):
+            // the same glyphs once more, a fraction of a pixel to the right, make the strokes as heavy
+            let mut m2 = m.clone();
+            for v in &mut m2.vertices {
+                v.pos.x += BRAND_EMBOLDEN;
+            }
             ui.painter().add(egui::Shape::mesh(m));
+            ui.painter().add(egui::Shape::mesh(m2));
         }
         x += g.size().x;
     }

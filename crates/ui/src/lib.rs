@@ -41,7 +41,7 @@ mod app_tests;
 #[cfg(test)]
 mod a11y_critic_tests;
 
-pub use host::{Cmd, Dispatch, Event, Inbox, ReadOutcome};
+pub use host::{Cmd, Conn, Dispatch, Event, Inbox, ReadOutcome};
 pub use twin::{Node, Part, Reg};
 
 /// Web only: call once after eframe started; makes the canvas a non-tabbable, AT-hidden surface and names
@@ -676,18 +676,29 @@ impl Ctl {
 }
 
 impl Img {
-    /// The texture to draw the page at `px_w` device pixels wide: the smallest pre-filtered level that is still
-    /// at least that wide, so the GPU only ever shrinks by under 2 x.
-    pub(crate) fn level_for(&self, px_w: f32) -> egui::TextureId {
-        let mut best = self.full.id();
-        for (w, t) in &self.mips {
-            if *w as f32 >= px_w {
-                best = t.id();
-            } else {
-                break;
-            }
+    /// The texture to draw the page at `px_w` x `px_h` device pixels, and the pixel size it really has.
+    ///
+    /// Shrinking is what the browser does with a `<img>` at the pane's width: its resampler averages the source
+    /// pixels each output pixel covers. A GPU texture sampled bilinearly at 0.64 x reads two taps per pixel and
+    /// the ruled lines and thin ink alias, so the page is shrunk once, on the CPU, with a triangle filter (the
+    /// same support as the browser's) and then drawn one texel to one pixel. The last few sizes are kept.
+    pub(crate) fn page_texture(&self, ctx: &egui::Context, px_w: u32, px_h: u32) -> (egui::TextureId, (u32, u32)) {
+        if px_w == 0 || px_h == 0 || px_w >= self.size.0 {
+            return (self.full.id(), self.size);
         }
-        best
+        let mut cache = self.scaled.borrow_mut();
+        if let Some((_, t)) = cache.iter().find(|((w, h), _)| (*w, *h) == (px_w, px_h)) {
+            return (t.id(), (px_w, px_h));
+        }
+        let small = image::imageops::resize(&*self.src, px_w, px_h, image::imageops::FilterType::Triangle);
+        let ci = egui::ColorImage::from_rgba_unmultiplied([px_w as usize, px_h as usize], small.as_raw());
+        let t = ctx.load_texture(format!("page-{}-{px_w}", self.id), ci, egui::TextureOptions::LINEAR);
+        let id = t.id();
+        cache.push(((px_w, px_h), t));
+        if cache.len() > 4 {
+            cache.remove(0);
+        }
+        (id, (px_w, px_h))
     }
 }
 
@@ -695,9 +706,11 @@ impl Img {
 pub(crate) struct Img {
     pub full: egui::TextureHandle,
     pub thumb: egui::TextureHandle,
-    /// Pre-filtered copies at half, quarter, ... the width (2 x 2 box averages): egui has no mipmaps, so a page
-    /// drawn much smaller than its pixels would alias with plain bilinear sampling. `(width, texture)`.
-    pub mips: Vec<(u32, egui::TextureHandle)>,
+    /// The page's pixels, to shrink it to the size it is drawn at (`page_texture`).
+    pub src: std::sync::Arc<image::RgbaImage>,
+    /// Shrunk copies by size (the latest few).
+    pub scaled: std::cell::RefCell<Vec<((u32, u32), egui::TextureHandle)>>,
+    pub id: String,
     /// Pixel size of the full image.
     pub size: (u32, u32),
     /// Ink bands of the picture (`image.js lineBands`): where the writing is, for pages without stored boxes.
@@ -1047,17 +1060,20 @@ impl App {
                         msg = Some(msg.map_or(n.clone(), |m| format!("{m} {n}")));
                     }
                     self.notice = msg;
-                    // js/fs.js `notice()`: once, when the work lives in this browser
-                    if self.storage == "Saved in this browser" && self.status_msg.is_none() {
-                        #[cfg(target_arch = "wasm32")]
-                        let seen = web::take_storage_notice();
-                        #[cfg(not(target_arch = "wasm32"))]
-                        let seen = true;
-                        if !seen {
+                    // js/fs.js `notice()`: once, when the work lives in this browser and the person chose browser
+                    // storage (`settings.storage === 'idb'`, set by `useBrowserStorage`); it then writes `noticeSeen`
+                    let mut settings = settings;
+                    let chose_browser = settings.get("storage").and_then(|v| v.as_str()) == Some("idb");
+                    let seen = settings.get("noticeSeen").and_then(|v| v.as_bool()) == Some(true);
+                    let mut notice_seen_now = false;
+                    if self.storage == "Saved in this browser" && chose_browser && !seen {
+                        if self.status_msg.is_none() {
                             self.status_msg = Some("Saves live in this browser only. Use Export to keep a copy.".into());
                             self.status_err = false;
                             self.ctl.toast_serial += 1;
                         }
+                        settings.set("noticeSeen", serde_json::json!(true));
+                        notice_seen_now = true;
                     }
                     self.images.clear();
                     let mut sess = state::Session::new(slug, *assignment, *settings, now_ms());
@@ -1070,6 +1086,8 @@ impl App {
                     if self.start_no_tray {
                         sess.tray_open = false;
                     }
+                    // (`S.saveSettings({ noticeSeen: true })` writes `settings.json` and the browser copy)
+                    sess.dirty.settings |= notice_seen_now;
                     self.session = Some(sess);
                     self.boot = Boot::Ready;
                 }
@@ -1160,9 +1178,22 @@ impl App {
                     self.ctl.toast_serial += 1;
                     self.status_err = false;
                 }
+                Event::Reading { id, text } => {
+                    if let Some(s) = &mut self.session {
+                        s.page_reading(&id, &text);
+                    }
+                }
                 Event::Transcribed { id, outcome } => {
                     use host::ReadOutcome::*;
                     match outcome {
+                        Stopped => {
+                            if let Some(s) = &mut self.session {
+                                s.page_unread(&id);
+                            }
+                            self.status_msg = Some("Stopped.".into());
+                            self.ctl.toast_serial += 1;
+                            self.status_err = false;
+                        }
                         Done { raw, tokens, ms, guesses } => {
                             let bands: Vec<bands::Band> = match self.images.get(&id) {
                                 Some(Slot::Ready(im)) => im.bands.clone(),
@@ -1173,6 +1204,9 @@ impl App {
                             }
                         }
                         Unreachable(m) => {
+                            if let Some(s) = &mut self.session {
+                                s.page_unread(&id);
+                            }
                             self.status_msg = Some(m);
                             self.ctl.toast_serial += 1;
                             self.status_err = true;
@@ -1394,34 +1428,7 @@ fn decode_image(ctx: &egui::Context, id: &str, bytes: &[u8]) -> Option<Img> {
     }
     let ti = egui::ColorImage::from_rgba_unmultiplied([th.width() as usize, th.height() as usize], th.as_raw());
     let thumb = ctx.load_texture(format!("thumb-{id}"), ti, egui::TextureOptions::LINEAR);
-    // area-averaged mip chain, built from the raw pixels
-    let mut mips = Vec::new();
-    let (mut mw, mut mh) = (size.0 as usize, size.1 as usize);
-    let mut cur: Vec<u8> = rgba.as_raw().clone();
-    let mut level = 1;
-    while mw >= 400 && mh >= 2 {
-        let (nw, nh) = ((mw / 2).max(1), (mh / 2).max(1));
-        let mut next = vec![0u8; nw * nh * 4];
-        for y in 0..nh {
-            let (y0, y1) = (y * 2, (y * 2 + 1).min(mh - 1));
-            for x in 0..nw {
-                let (x0, x1) = (x * 2, (x * 2 + 1).min(mw - 1));
-                for c in 0..4 {
-                    let sum = cur[(y0 * mw + x0) * 4 + c] as u32
-                        + cur[(y0 * mw + x1) * 4 + c] as u32
-                        + cur[(y1 * mw + x0) * 4 + c] as u32
-                        + cur[(y1 * mw + x1) * 4 + c] as u32;
-                    next[(y * nw + x) * 4 + c] = ((sum + 2) / 4) as u8;
-                }
-            }
-        }
-        let ci = egui::ColorImage::from_rgba_unmultiplied([nw, nh], &next);
-        mips.push((nw as u32, ctx.load_texture(format!("page-{id}-m{level}"), ci, egui::TextureOptions::LINEAR)));
-        cur = next;
-        (mw, mh) = (nw, nh);
-        level += 1;
-    }
-    Some(Img { full, thumb, mips, size, bands })
+    Some(Img { full, thumb, src: std::sync::Arc::new(rgba), scaled: Default::default(), id: id.to_string(), size, bands })
 }
 
 impl eframe::App for App {

@@ -22,7 +22,8 @@ serde_json = { version = "1", features = ["preserve_order", "arbitrary_precision
 # No `default_fonts`: egui's own faces are 1.4 MB of wasm. The review screen bundles Instrument Sans, Source
 # Serif 4 and a Latin subset of Hack (ui/assets/fonts). latex-rust is vendored for the same reason (see
 # crates/vendor/PATCHES.md), otherwise its default egui features switch them back on.
-eframe = { version = "0.28", default-features = false, features = ["glow", "accesskit"] }
+# The renderer (`glow` or `wgpu`) is chosen by vishion-app features, not here.
+eframe = { version = "0.28", default-features = false, features = ["accesskit"] }
 egui = { version = "0.28", default-features = false }
 
 # eframe 0.28.1 does not compile against web-sys >= 0.3.77 once `--cfg=web_sys_unstable_apis` is set
@@ -32,6 +33,8 @@ egui = { version = "0.28", default-features = false }
 eframe = { path = "crates/vendor/eframe" }
 # Font atlas gamma (text weight), one line, see crates/vendor/PATCHES.md.
 egui_glow = { path = "crates/vendor/egui_glow" }
+# The same gamma knob for the wgpu renderer, see crates/vendor/PATCHES.md.
+egui-wgpu = { path = "crates/vendor/egui-wgpu" }
 # Text advances are not rounded to whole pixels (one line), see crates/vendor/PATCHES.md.
 epaint = { path = "crates/vendor/epaint" }
 # latex-rust 2.1.1 with `egui` built without default_fonts (wasm size, plan risk "wasm size").

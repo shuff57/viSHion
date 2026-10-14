@@ -1765,13 +1765,29 @@ fn ensure_katex() {
     });
     let _ = el.add_event_listener_with_callback("load", onload.as_ref().unchecked_ref());
     onload.forget();
+    // the stylesheet first (katex.css lays the formula out: without it the HTML is unstyled and measured wrong),
+    // the typesetter when it is there
+    let Ok(link) = doc.create_element("link") else { return };
+    let _ = link.set_attribute("rel", "stylesheet");
+    let _ = link.set_attribute("href", "katex.min.css");
+    let add_script = {
+        let el = el.clone();
+        Closure::<dyn FnMut()>::new(move || {
+            if let Some(head) = document().and_then(|d| d.head()) {
+                let _ = head.append_child(&el);
+            }
+        })
+    };
+    let _ = link.add_event_listener_with_callback("load", add_script.as_ref().unchecked_ref());
+    let _ = link.add_event_listener_with_callback("error", add_script.as_ref().unchecked_ref());
+    add_script.forget();
     if let Some(head) = doc.head() {
-        let _ = head.append_child(&el);
+        let _ = head.append_child(&link);
     }
 }
 
-/// A formula in a transcript line: KaTeX's MathML (the browser's own math layout, in the STIX Two Math face),
-/// or its TeX source in monospace until KaTeX is there (plan rule 4: never nothing).
+/// A formula in a transcript line: KaTeX's HTML and MathML as the JS app renders it (KaTeX's own faces and
+/// stylesheet), or its TeX source in monospace until KaTeX is there (plan rule 4: never nothing).
 fn render_math(el: &web_sys::Element, tex: &str, display: bool) {
     let render = katex();
     let state = format!("{}{}|{}", if render.is_some() { "m" } else { "s" }, display as u8, tex);
@@ -1781,7 +1797,8 @@ fn render_math(el: &web_sys::Element, tex: &str, display: bool) {
     match render {
         Some(f) => {
             let opts = js_sys::Object::new();
-let _ = js_sys::Reflect::set(&opts, &"output".into(), &"mathml".into());
+// KaTeX's default output (`htmlAndMathml`), what js/render.js shows: its own HTML and fonts are what the
+            // eye sees, the MathML next to it (visually hidden) is what assistive technology reads
             let _ = js_sys::Reflect::set(&opts, &"displayMode".into(), &JsValue::from_bool(display));
             let _ = js_sys::Reflect::set(&opts, &"throwOnError".into(), &JsValue::FALSE);
             match f.call2(&JsValue::NULL, &JsValue::from_str(tex), &opts).ok().and_then(|v| v.as_string()) {
@@ -1846,7 +1863,7 @@ pub fn set_tokens(t: &crate::theme::Tokens) {
     thread_local! {
         static LAST: std::cell::RefCell<String> = const { std::cell::RefCell::new(String::new()) };
     }
-    let v = [("--ink", t.ink), ("--muted", t.muted), ("--warn", t.warn), ("--bad", t.bad), ("--bad-bg", t.bad_bg), ("--ok", t.ok), ("--ok-bg", t.ok_bg), ("--hover", t.hover), ("--accent", t.accent), ("--sunken", t.sunken), ("--line2", t.line2)]
+    let v = [("--ink", t.ink), ("--muted", t.muted), ("--warn", t.warn), ("--bad", t.bad), ("--bad-bg", t.bad_bg), ("--ok", t.ok), ("--ok-bg", t.ok_bg), ("--hover", t.hover), ("--accent", t.accent), ("--sunken", t.sunken), ("--line2", t.line2), ("--surface", t.surface)]
         .iter()
         .map(|(k, c)| format!("{k}:{}", css(*c)))
         .collect::<Vec<_>>()
@@ -1862,16 +1879,4 @@ pub fn set_tokens(t: &crate::theme::Tokens) {
         }
     }
     LAST.with(|l| *l.borrow_mut() = v);
-}
-
-/// `settings.noticeSeen` of js/fs.js, kept in this browser (localStorage) so the "Saves live in this browser
-/// only" toast shows once per browser, as `notice()` does. Returns whether it had been seen, and marks it seen.
-pub fn take_storage_notice() -> bool {
-    const KEY: &str = "vishion.noticeSeen";
-    let Some(st) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) else { return false };
-    if st.get_item(KEY).ok().flatten().is_some() {
-        return true;
-    }
-    let _ = st.set_item(KEY, "1");
-    false
 }

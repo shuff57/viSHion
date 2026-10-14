@@ -35,6 +35,13 @@ browser's rendering of the same face at the same size (the review screen's trans
 surface), while light text on the dark theme wants a boost, so `ui::theme` sets the gamma per theme and sets
 the fonts again to rebuild the atlas. Wired in with `[patch.crates-io]`. Drop it when egui exposes the gamma.
 
+## egui-wgpu 0.28.1
+
+Copy of the crates.io release (src, README, `Cargo.toml`) with the same font atlas gamma as egui_glow: the atlas is
+converted with `egui_wgpu::set_font_gamma` (default 1.0) instead of the fixed 0.55, so text weight matches the
+glow renderer and the browser. `ui::theme` calls both setters. Wired in with `[patch.crates-io]`. Drop it when
+egui exposes the gamma.
+
 ## epaint 0.28.1
 
 Copy of the crates.io release (src, README, `Cargo.toml`; the font files are only used by `default_fonts`, which

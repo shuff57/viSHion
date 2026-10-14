@@ -76,6 +76,10 @@ fn main() -> eframe::Result<()> {
     // Window size: the screenshot/dump runs use the design's reference size.
     let mut native = eframe::NativeOptions::default();
     native.viewport = egui_viewport(size.0, size.1);
+    #[cfg(feature = "wgpu")]
+    {
+        native.renderer = eframe::Renderer::Wgpu;
+    }
 
     eframe::run_native(
         "viSHion",
@@ -83,10 +87,13 @@ fn main() -> eframe::Result<()> {
         Box::new(move |cc| {
             let inbox_box = Inbox::new(cc.egui_ctx.clone());
             let (tx, rx) = mpsc::channel::<Cmd>();
+            // Stop must reach a worker that is busy reading a page, so it goes around the channel
+            let cancel = vishion_net::Cancel::default();
+            let worker_cancel = cancel.clone();
             let worker_inbox = inbox_box.clone();
             std::thread::spawn(move || {
                 let now = vishion_ui::now_ms;
-                let backend = if let Some(dir) = &seed_to {
+                let mut backend = if let Some(dir) = &seed_to {
                     let fs = AnyStore::Fs(FsStore::new(dir));
                     match block_on(vishion_app::demo::seed_into(fs, now())) {
                         // the sample assignment: reading a page answers with the sample text
@@ -107,12 +114,22 @@ fn main() -> eframe::Result<()> {
                 } else {
                     Backend::new(AnyStore::Fs(FsStore::new(&root)), "Saved to your folder")
                 };
+                backend.cancel = worker_cancel;
                 worker_inbox.push(block_on(backend.open(project.as_deref(), now())));
                 while let Ok(cmd) = rx.recv() {
-                    worker_inbox.push(block_on(backend.handle(cmd, now())));
+                    match cmd {
+                        Cmd::Transcribe { slug, ids, conn } => {
+                            block_on(backend.read_pages(&slug, ids, conn, &|e| worker_inbox.push(e)));
+                        }
+                        cmd => worker_inbox.push(block_on(backend.handle(cmd, now()))),
+                    }
                 }
             });
             let dispatch: vishion_ui::Dispatch = Box::new(move |c| {
+                if matches!(c, Cmd::Stop) {
+                    cancel.stop();
+                    return;
+                }
                 let _ = tx.send(c);
             });
             let mut app = vishion_ui::App::new(cc.egui_ctx.clone()).with_host(dispatch, inbox_box).inbox(inbox).no_tray(no_tray);

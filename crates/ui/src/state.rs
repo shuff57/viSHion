@@ -1095,11 +1095,59 @@ impl Session {
         n
     }
 
+    /// How to reach the OCR server for a run (`S.d.settings`, `O.buildPrompt`).
+    pub fn read_conn(&self) -> crate::host::Conn {
+        let st = &self.settings;
+        let text = |k: &str| st.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+        crate::host::Conn {
+            url: text("ocrUrl").trim_end_matches('/').to_string(),
+            api_key: text("apiKey"),
+            model: text("model"),
+            timeout_secs: st.get("timeoutSec").and_then(Value::as_u64).filter(|n| *n > 0).unwrap_or(180),
+            prompt: vishion_core::words::build_prompt(st, &self.a.meta),
+            demo: st.get("demo").and_then(Value::as_bool) == Some(true),
+        }
+    }
+
+    /// The text of a page being read so far (`queue.js` `runOne` start and `page:stream`): status
+    /// transcribing, nothing decided yet. Not saved until the page is done.
+    pub fn page_reading(&mut self, id: &str, text: &str) {
+        let Some(p) = self.a.pages.get_mut(id) else { return };
+        let started = p.status() != "transcribing";
+        if started {
+            p.set("status", json!("transcribing"));
+            p.set("corrected", json!(""));
+            p.set("corrections", json!([]));
+            p.set("boxes", json!([]));
+            p.set("error", json!(""));
+        }
+        p.set("raw", json!(text));
+        if started {
+            self.a.sync_stats();
+            self.sync_tray();
+        }
+    }
+
+    /// Stop or an unreachable server: the page goes back to pending with nothing on it (`queue.js`).
+    pub fn page_unread(&mut self, id: &str) {
+        let Some(p) = self.a.pages.get_mut(id) else { return };
+        if p.status() != "transcribing" {
+            return;
+        }
+        p.set("status", json!("pending"));
+        p.set("raw", json!(""));
+        p.set("corrected", json!(""));
+        self.a.sync_stats();
+        self.sync_tray();
+    }
+
     /// The page could not be read: status error with the message (`queue.js` catch).
     pub fn page_failed(&mut self, id: &str, msg: &str) {
         let Some(p) = self.a.pages.get_mut(id) else { return };
         let changed = p.status() != "error";
         p.set("status", json!("error"));
+        let partial = p.raw().to_string();
+        p.set("corrected", json!(partial));
         p.set("error", json!(if msg.is_empty() { "Transcription failed." } else { msg }));
         self.dirty.pages.insert(id.to_string());
         if changed {

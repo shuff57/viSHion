@@ -32,3 +32,8 @@ web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlE
 [dev-dependencies]
 # What a platform adapter does with the tree update: the tests feed it the same updates.
 accesskit_consumer = "0.16"
+
+[features]
+default = []
+glow = ["eframe/glow"]
+wgpu = ["eframe/wgpu"]

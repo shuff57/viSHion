@@ -287,7 +287,7 @@ mod tests {
         let s = block_on(be.handle(Cmd::Straighten { slug: slug.clone(), id: "p-maya-1".into() }, 0));
         assert!(matches!(s, Event::Straightened { angle, bytes: None, .. } if angle == 0.0), "{s:?}");
         // demo mode answers with the sample text, one event per page, by position in the run
-        let Event::Many(evs) = block_on(be.handle(Cmd::Transcribe { slug: slug.clone(), ids: vec!["p-omar-1".into(), "p-ben-1".into()] }, 0)) else {
+        let Event::Many(evs) = block_on(be.handle(Cmd::Transcribe { slug: slug.clone(), ids: vec!["p-omar-1".into(), "p-ben-1".into()], conn: Default::default() }, 0)) else {
             panic!("expected one event per page")
         };
         assert_eq!(evs.len(), 2);
@@ -303,8 +303,40 @@ mod tests {
         // without demo mode the page is left alone and the message says why
         let (store, slug) = block_on(seed(1)).unwrap();
         let be = Backend::new(store, "Saved");
-        let Event::Many(evs) = block_on(be.handle(Cmd::Transcribe { slug, ids: vec!["p-maya-1".into()] }, 0)) else { panic!() };
-        assert!(matches!(&evs[0], Event::Transcribed { outcome: vishion_ui::ReadOutcome::Unreachable(m), .. } if m.contains("OCR")));
+        let Event::Many(evs) = block_on(be.handle(Cmd::Transcribe { slug, ids: vec!["p-maya-1".into()], conn: Default::default() }, 0)) else { panic!() };
+        assert!(evs.iter().any(|e| matches!(e, Event::Transcribed { outcome: vishion_ui::ReadOutcome::Unreachable(m), .. } if m.contains("OCR"))));
+    }
+
+    /// Phase 3 end to end: a page is read from a (local) chat-completions server, streamed into `Reading`
+    /// events, cleaned, and answered as `Done`; Stop ends a run.
+    #[test]
+    fn a_page_is_read_from_the_server_and_stop_ends_the_run() {
+        use std::io::{Read, Write};
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", l.local_addr().unwrap());
+        std::thread::spawn(move || {
+            let (mut s, _) = l.accept().unwrap();
+            // the request is a JSON body with a JPEG in it: read until the client has stopped sending
+            s.set_read_timeout(Some(std::time::Duration::from_millis(300))).unwrap();
+            let mut b = [0u8; 65536];
+            while s.read(&mut b).map_or(false, |n| n > 0) {}
+            let r = "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\ndata: {\"choices\":[{\"delta\":{\"content\":\"```\\nHello\"}}]}\n\ndata: {\"choices\":[{\"delta\":{\"content\":\" world\\n```\"}}],\"usage\":{\"completion_tokens\":2}}\n\ndata: [DONE]\n\n";
+            s.write_all(r.as_bytes()).unwrap();
+        });
+        let (store, slug) = block_on(seed(1)).unwrap();
+        let be = Backend::new(store, "Saved");
+        let conn = vishion_ui::Conn { url, timeout_secs: 5, prompt: "Read.".into(), ..Default::default() };
+        let Event::Many(evs) = block_on(be.handle(Cmd::Transcribe { slug: slug.clone(), ids: vec!["p-maya-1".into()], conn }, 0)) else { panic!() };
+        assert!(evs.iter().any(|e| matches!(e, Event::Reading { text, .. } if text == "```\nHello world\n```")));
+        assert!(evs.iter().any(|e| matches!(e, Event::Transcribed { outcome: vishion_ui::ReadOutcome::Done { raw, tokens: 2, .. }, .. } if raw == "Hello world")));
+
+        // Stop before the run starts reading anything: nothing is sent to the server.
+        be.cancel.stop();
+        let out = std::cell::RefCell::new(vec![]);
+        let conn = vishion_ui::Conn { url: "http://127.0.0.1:1".into(), timeout_secs: 5, ..Default::default() };
+        // read_pages resets the flag at the start of a run (a Stop belongs to the run in progress)
+        block_on(be.read_pages(&slug, vec!["p-maya-1".into()], conn, &|e| out.borrow_mut().push(e)));
+        assert!(out.borrow().iter().any(|e| matches!(e, Event::Transcribed { outcome: vishion_ui::ReadOutcome::Unreachable(_), .. })));
     }
 
     /// The native path: a real folder, written and read back through `FsStore` and the project layer.

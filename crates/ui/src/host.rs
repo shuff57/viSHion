@@ -4,6 +4,18 @@
 use std::sync::{Arc, Mutex};
 use vishion_core::model::{Assignment, Page, Project, Settings};
 
+/// How to reach the OCR server for a run (`S.d.settings` + `O.buildPrompt`; the API key lives in the UI
+/// because `settings.json` is stored without secrets).
+#[derive(Debug, Clone, Default)]
+pub struct Conn {
+    pub url: String,
+    pub api_key: String,
+    pub model: String,
+    pub timeout_secs: u64,
+    pub prompt: String,
+    pub demo: bool,
+}
+
 /// UI to host.
 #[derive(Debug)]
 pub enum Cmd {
@@ -27,7 +39,10 @@ pub enum Cmd {
     Straighten { slug: String, id: String },
     /// Read these pages (again), in order: `Event::Transcribed` per page. Demo mode answers with sample text;
     /// otherwise the host needs the OCR connection (phase 3) and says so.
-    Transcribe { slug: String, ids: Vec<String> },
+    Transcribe { slug: String, ids: Vec<String>, conn: Conn },
+    /// `Q.stop`: the page being read goes back to pending and the run ends. Handled where the command is
+    /// sent (the worker may be busy reading), so it never needs an answer.
+    Stop,
     /// Ask for likely words for the unreadable words of a page (`W.guess`): `Event::Guessed`.
     Guess { slug: String, id: String, raw: String },
     /// Write `exports/<name>` (the strip's "Export N selected").
@@ -69,6 +84,8 @@ pub enum Event {
     PageReplaced { id: String, name: String, bytes: Vec<u8> },
     /// New pages with their pictures, in order.
     PagesAdded { pages: Vec<(Page, Vec<u8>)> },
+    /// A page is being read: the text so far (`page:stream`), shown where the transcript will be.
+    Reading { id: String, text: String },
     /// The answer to `Transcribe` for one page.
     Transcribed { id: String, outcome: ReadOutcome },
     /// The answer to `Straighten`: the angle that was removed (0 = the page was already level) and the new
@@ -93,6 +110,8 @@ pub enum ReadOutcome {
     Done { raw: String, tokens: u32, ms: u32, guesses: Option<serde_json::Map<String, serde_json::Value>> },
     /// The server could not be reached: the page keeps what it had (`queue.js` "unreachable").
     Unreachable(String),
+    /// Stop was pressed: the page goes back to pending (`queue.js` abort).
+    Stopped,
     /// The page could not be read: its status becomes "error" with this message.
     Failed(String),
 }

@@ -37,3 +37,11 @@ web-sys = { version = "0.3", features = [
   "Event", "EventTarget", "Response", "Headers",
 ] }
 log = "0.4"
+
+[features]
+default = ["glow"]
+# OpenGL natively, WebGL2 in the browser.
+glow = ["eframe/glow", "vishion-ui/glow"]
+# wgpu: Vulkan/DX12/Metal natively. In the browser eframe 0.28 uses wgpu only when glow is off, and that
+# build is WebGPU-only (no WebGL fallback): `--no-default-features --features wgpu`.
+wgpu = ["eframe/wgpu", "vishion-ui/wgpu"]

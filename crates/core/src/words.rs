@@ -502,3 +502,42 @@ pub fn use_all(p: &mut Page, settings: &mut Settings, topic: &str, now: i64) {
         choose(p, &it.key, "suggested", "", settings, topic, now);
     }
 }
+
+/// `O.buildPrompt`: the assignment's own instructions (or the default), then the topic's spelling hints and
+/// the words this teacher has fixed before.
+pub fn build_prompt(settings: &Settings, meta: &crate::model::Project) -> String {
+    let own = meta.prompt().trim_matches(is_ws);
+    let default = settings.get("defaultPrompt").and_then(Value::as_str).unwrap_or(crate::model::DEFAULT_PROMPT);
+    let base = if own.is_empty() { default } else { own };
+    let terms = settings.terms(meta.topic());
+    let hints = if terms.is_empty() {
+        String::new()
+    } else {
+        format!("Spelling hints (use only when the handwriting matches): {}.", terms.join(", "))
+    };
+    let mine = reference_words(settings, meta.topic(), Some(30));
+    let earlier = if mine.is_empty() {
+        String::new()
+    } else {
+        format!("Words this teacher has fixed before (use only when the handwriting matches): {}.", mine.join(", "))
+    };
+    [base.to_string(), hints, earlier].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join("\n")
+}
+
+#[cfg(test)]
+mod prompt_tests {
+    use super::*;
+    use crate::model::{Project, Settings};
+
+    #[test]
+    fn default_prompt_then_topic_hints() {
+        let s = Settings::defaults();
+        let meta = Project::from_json("{}").unwrap();
+        assert_eq!(build_prompt(&s, &meta), crate::model::DEFAULT_PROMPT);
+        let mut m = Project::from_json("{}").unwrap();
+        m.set("topic", json!("Medical"));
+        m.set("prompt", json!("  Read it.  "));
+        let p = build_prompt(&s, &m);
+        assert!(p.starts_with("Read it.\nSpelling hints (use only when the handwriting matches): hypertension, "));
+    }
+}

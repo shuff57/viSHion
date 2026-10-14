@@ -29,6 +29,9 @@
   @font-face { font-family: "Source Serif 4"; font-weight: 400; font-style: italic; font-display: swap; src: url("fonts/source-serif-4-latin-400-italic.woff2") format("woff2"); }
   @font-face { font-family: "Hack"; font-weight: 400; font-display: swap; src: url("fonts/hack-latin-400-normal.ttf") format("truetype"); }
   @font-face { font-family: "STIX Two Math"; font-display: swap; src: url("stix-two-math.otf") format("opentype"); }
+  /* An opaque background under the text lets the browser draw it with sub-pixel (LCD) anti-aliasing, as it does the
+     JS app's text: on a transparent layer over the canvas it falls back to grey. The pane is the surface colour; every
+     piece of text carries it (`p.tx`, `.txc`), the transcript box as a whole does not, for the canvas shows through. */
   #controls .tx-clip { position: absolute; overflow: auto; scrollbar-width: none; overscroll-behavior: none; pointer-events: none; }
   #controls .tx-clip.tx-still { overflow: clip; }
   #controls [inert] .tx-clip { visibility: hidden; }
@@ -41,6 +44,7 @@
      the line has room for it under its text, so nothing of the line overflows into the next one. The screen
      spaces lines without this room (`web::measure` takes it off), so the layout is the JS app's. */
   #controls p.tx:has(.w) { padding-bottom: 9px; padding-bottom: max(1px, calc(9px - (1lh - 1.35em) / 2)); }
+  #controls p.tx, #controls .txc:not(.pill) { background-color: var(--surface, #FFFFFF); }
   #controls p.tx.margin { font: 16px/1.5 "Instrument Sans", system-ui, sans-serif; color: var(--muted, #5A6478); }
   #controls p.tx.plain { white-space: pre-wrap; overflow-wrap: anywhere; padding: 0; font: 13px/1.65 ui-monospace, "SF Mono", Menlo, Consolas, monospace; cursor: auto; }
   #controls p.tx[data-reading] { text-decoration: underline 3px var(--accent, #2F5BEA); text-underline-offset: 7px; text-decoration-skip-ink: none; }
@@ -50,15 +54,16 @@
   #controls p.tx .lead { color: var(--ink, #1B2230); font-weight: 600; }
   #controls p.tx del { color: var(--muted, #5A6478); }
   #controls p.tx.display { text-align: center; }
-  #controls p.tx .tx-math { font-size: 1.21em; position: relative; }
+  #controls p.tx .tx-math { position: relative; }
+  /* katex.min.css (fetched with the typesetter) sets the size, 1.21em, and the display margin, 1em, as the JS app has them */
   /* a formula wider than the column (400% zoom, a narrow window) scrolls inside its own box instead of being cut
      off by the clip (WCAG 1.4.10); `data-wide` is set by the page when it measures. A formula that fits is
      inline math, laid out as before. */
-  #controls p.tx .tx-math.disp { display: block; margin: 22px 0; max-width: 100%; overflow-x: auto; overflow-y: hidden; }
+  #controls p.tx .tx-math.disp { display: block; margin: 0; max-width: 100%; overflow-x: auto; overflow-y: hidden; }
   #controls p.tx .tx-math[data-wide] { display: inline-block; max-width: 100%; overflow-x: auto; overflow-y: hidden; vertical-align: middle; }
   /* what a selection or a find-in-page holds of a formula: its TeX, transparent text laid over it (the typeset
      MathML is for the eye: a selection reads its symbols one per line) */
-  #controls p.tx .tx-math math { user-select: none; }
+  #controls p.tx .tx-math math, #controls p.tx .tx-math .katex-html { user-select: none; }
   #controls p.tx .tx-hit { position: absolute; left: 0; top: 0; bottom: 0; right: 0; overflow: hidden; white-space: nowrap; color: transparent; forced-color-adjust: none;
     font: 10px/1.2 ui-monospace, "SF Mono", Menlo, Consolas, monospace; user-select: text; pointer-events: none; }
   /* the end of a line: a break in the text a selection gives, no height */

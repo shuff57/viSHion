@@ -41,6 +41,34 @@ mod web {
         Some(js_sys::Uint8Array::new(&buf).to_vec())
     }
 
+    /// `localStorage["ocr_settings_v1"]`, the JS app's own copy of the settings (theme, demo, API key, topics...).
+    mod local_settings {
+        use vishion_core::model::Settings;
+        const KEY: &str = "ocr_settings_v1";
+
+        fn storage() -> Option<web_sys::Storage> {
+            web_sys::window()?.local_storage().ok()?
+        }
+
+        /// `Object.assign({}, DEFAULTS, saved)` over whatever `settings.json` gave: a key kept in this browser wins.
+        pub fn overlay(settings: &mut Settings) {
+            let Some(text) = storage().and_then(|s| s.get_item(KEY).ok().flatten()) else { return };
+            let Ok(saved) = serde_json::from_str::<serde_json::Value>(&text) else { return };
+            if let serde_json::Value::Object(m) = &saved {
+                for (k, v) in m {
+                    settings.set(k, v.clone());
+                }
+            }
+            settings.set("defaultPrompt", serde_json::Value::String(vishion_core::model::DEFAULT_PROMPT.into()));
+        }
+
+        pub fn store(settings: &Settings) {
+            if let (Some(st), Ok(text)) = (storage(), serde_json::to_string(&settings.0)) {
+                let _ = st.set_item(KEY, &text);
+            }
+        }
+    }
+
     /// Mount the egui app on the canvas with the given id.
     ///
     /// URL options: `?demo=1` runs the sample assignment from memory (nothing is stored), `?project=<slug>`
@@ -76,6 +104,10 @@ mod web {
                     let dispatch: vishion_ui::Dispatch = {
                         let (b, inbox) = (backend.clone(), inbox.clone());
                         Box::new(move |cmd: Cmd| {
+                            if matches!(cmd, Cmd::Stop) {
+                                b.cancel.stop();
+                                return;
+                            }
                             let (b, inbox) = (b.clone(), inbox.clone());
                             wasm_bindgen_futures::spawn_local(async move {
                                 if matches!(cmd, Cmd::LoadMathFont) {
@@ -96,6 +128,15 @@ mod web {
                                     inbox.push(Event::FallbackFont(bytes));
                                     return;
                                 }
+                                // js/state.js `saveSettings`: the whole settings object, API key included, is kept in this
+                                // browser as `ocr_settings_v1`; `settings.json` (secrets stripped) is the backend's part
+                                if let Cmd::SaveSettings { settings } = &cmd {
+                                    local_settings::store(settings);
+                                }
+                                if let Cmd::Transcribe { slug, ids, conn } = cmd {
+                                    b.read_pages(&slug, ids, conn, &|e| inbox.push(e)).await;
+                                    return;
+                                }
                                 let e: Event = b.handle(cmd, js_sys::Date::now() as i64).await;
                                 inbox.push(e);
                             });
@@ -104,7 +145,11 @@ mod web {
                     {
                         let (b, inbox) = (backend.clone(), inbox.clone());
                         wasm_bindgen_futures::spawn_local(async move {
-                            let e = b.open(want.as_deref(), js_sys::Date::now() as i64).await;
+                            let mut e = b.open(want.as_deref(), js_sys::Date::now() as i64).await;
+                            // js/state.js `loadSettings`: this browser's `ocr_settings_v1` is the settings of the app
+                            if let Event::Opened { settings, .. } = &mut e {
+                                local_settings::overlay(settings);
+                            }
                             inbox.push(e);
                         });
                     }

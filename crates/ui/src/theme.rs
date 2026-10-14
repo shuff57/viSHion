@@ -298,7 +298,11 @@ pub const GAMMA_DARK: f32 = 0.5;
 /// Install fonts and the visuals of `t`. Cheap enough to call when the theme changes. The caller sets the
 /// fonts again afterwards (`set_fonts`) so the atlas is rebuilt with the theme's gamma.
 pub fn apply(ctx: &egui::Context, t: &Tokens) {
-    eframe::egui_glow::set_font_gamma(if t.dark { GAMMA_DARK } else { GAMMA_LIGHT });
+    let gamma = if t.dark { GAMMA_DARK } else { GAMMA_LIGHT };
+    #[cfg(feature = "glow")]
+    eframe::egui_glow::set_font_gamma(gamma);
+    #[cfg(feature = "wgpu")]
+    eframe::egui_wgpu::set_font_gamma(gamma);
     let mut v = if t.dark { Visuals::dark() } else { Visuals::light() };
     v.override_text_color = Some(t.ink);
     v.panel_fill = t.bg;

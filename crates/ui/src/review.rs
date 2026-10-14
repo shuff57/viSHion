@@ -63,6 +63,7 @@ pub(crate) struct Stage {
 }
 
 pub(crate) enum Act {
+    Stop,
     Pick(String, String),
     Undo,
     SetSplit(bool),
@@ -701,9 +702,10 @@ fn apply(
                     then: After::TranscribeAgain(id),
                 });
             } else {
-                send(Cmd::Transcribe { slug, ids: vec![id] });
+                send(Cmd::Transcribe { slug, ids: vec![id], conn: s.read_conn() });
             }
         }
+        Act::Stop => send(Cmd::Stop),
         Act::Guess(id) => {
             if let Some(p) = s.page(&id) {
                 send(Cmd::Guess { slug, id: id.clone(), raw: p.raw().to_string() });
@@ -778,7 +780,7 @@ fn apply(
         }
         Act::RetryIds(ids) => {
             if !ids.is_empty() {
-                send(Cmd::Transcribe { slug, ids });
+                send(Cmd::Transcribe { slug, ids, conn: s.read_conn() });
             }
         }
         Act::Dialog(o) => {
@@ -861,7 +863,7 @@ fn apply(
                         back_to = Some("st-provider");
                     }
                     After::RemovePage(id) => s.remove_page(&id),
-                    After::TranscribeAgain(id) => send(Cmd::Transcribe { slug, ids: vec![id] }),
+                    After::TranscribeAgain(id) => send(Cmd::Transcribe { slug, ids: vec![id], conn: s.read_conn() }),
                     After::ReviewAgain(ids) => {
                         let n = s.review_again_and_open(&ids);
                         say(format!("{} back in review.", state::plural(n, "page is", "pages are")), false);
@@ -2089,13 +2091,24 @@ fn page_image(ui: &mut Ui, cx: &mut Cx, s: &Session, p: &Page, im: &Img, pad: f3
     let h = w * im.size.1 as f32 / im.size.0.max(1) as f32;
     let (outer, _) = ui.allocate_exact_size(vec2(w.max(avail - 2.0 * pad) + 2.0 * pad, h), Sense::hover());
     let rect = Rect::from_min_size(pos2(outer.left() + pad + ((outer.width() - 2.0 * pad - w) / 2.0).max(0.0), outer.top()), vec2(w, h));
+    // the picture is shrunk to whole device pixels and drawn one texel to one pixel, as the browser's image is
+    let ppp = ui.ctx().pixels_per_point();
+    let (tex, (tw, th)) = im.page_texture(ui.ctx(), (w * ppp).round() as u32, (h * ppp).round() as u32);
+    let shrunk = tex != im.full.id();
+    let rect = if shrunk {
+        let min = pos2((rect.min.x * ppp).round() / ppp, (rect.min.y * ppp).round() / ppp);
+        Rect::from_min_size(min, vec2(tw as f32 / ppp, th as f32 / ppp))
+    } else {
+        rect
+    };
     let pt = ui.painter();
     // `.scan-sheet { box-shadow: 0 1px 2px rgba(20,27,45,.25), 0 24px 48px -12px rgba(20,27,45,.35) }`
     let ink = |a: f32| Color32::from_rgba_unmultiplied(20, 27, 45, (a * 255.0) as u8);
-    pt.add(egui::epaint::Shadow { offset: vec2(0.0, 24.0), blur: 48.0, spread: -12.0, color: ink(0.35) }.as_shape(rect, 2.0));
+    for sh in widgets::soft_shadow(egui::epaint::Shadow { offset: vec2(0.0, 24.0), blur: 48.0, spread: -12.0, color: ink(0.35) }, rect, 2.0) {
+        pt.add(sh);
+    }
     pt.add(egui::epaint::Shadow { offset: vec2(0.0, 1.0), blur: 2.0, spread: 0.0, color: ink(0.25) }.as_shape(rect, 2.0));
-    let ppp = ui.ctx().pixels_per_point();
-    pt.image(im.level_for(w * ppp), rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+    pt.image(tex, rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
 
     if s.boxes == BoxMode::Off {
         return;
@@ -2288,6 +2301,10 @@ fn transcript_pane(ui: &mut Ui, cx: &mut Cx, s: &Session, g: Option<&vishion_cor
                 css_text(ui, note, theme::sans(13.0), t.muted, 13.0 * 1.4, ui.available_width(), false)
             };
             cx.ctl.text("stream-note", note, TEXT, r);
+            ui.add_space(12.0);
+            if widgets::button(cx.ctl, ui, t, C::new("stop-run", "Stop", TEXT), "Stop", Look::Outline, 0.0) {
+                cx.acts.push(Act::Stop);
+            }
         }
         "pending" if p.raw().is_empty() => {
             let id = p.id().to_string();

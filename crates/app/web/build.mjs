@@ -1,6 +1,6 @@
 // Build the web bundle into crates/app/dist:
 //   cargo build (wasm32, release) -> wasm-bindgen --target web -> index.html + _headers (CSP with hash).
-// Usage: node crates/app/web/build.mjs [--debug]
+// Usage: node crates/app/web/build.mjs [--debug] [--wgpu]
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
@@ -19,7 +19,9 @@ const run = (cmd, args, opts = {}) => execFileSync(cmd, args, { cwd: repo, stdio
 // explicit RUSTFLAGS in the environment replaces that setting, so make sure it is present either way.
 const CFG = '--cfg=web_sys_unstable_apis';
 const rustflags = process.env.RUSTFLAGS && !process.env.RUSTFLAGS.includes(CFG) ? `${process.env.RUSTFLAGS} ${CFG}` : process.env.RUSTFLAGS;
-run('cargo', ['build', '-p', 'vishion-app', '--lib', '--target', 'wasm32-unknown-unknown', ...(debug ? [] : ['--release'])],
+// --wgpu renders with WebGPU instead of WebGL2 (eframe 0.28 web: wgpu only when glow is off, no WebGL fallback)
+const renderer = process.argv.includes('--wgpu') ? ['--no-default-features', '--features', 'wgpu'] : [];
+run('cargo', ['build', '-p', 'vishion-app', '--lib', '--target', 'wasm32-unknown-unknown', ...renderer, ...(debug ? [] : ['--release'])],
   rustflags ? { env: { ...process.env, RUSTFLAGS: rustflags } } : {});
 
 // clear the folder's contents, not the folder: a shell or editor with it as its working directory (EPERM on Windows)
@@ -56,6 +58,12 @@ for (const f of fs.readdirSync(path.join(repo, 'fonts')).filter((n) => /^(instru
 }
 fs.copyFileSync(path.join(repo, 'crates/ui/assets/fonts/hack-latin-400-normal.ttf'), path.join(dist, 'fonts/hack-latin-400-normal.ttf'));
 fs.copyFileSync(path.join(repo, 'spikes/s5-markdown-katex/vendor/katex-0.16.9/dist/katex.min.js'), path.join(dist, 'katex.min.js'));
+// KaTeX's own stylesheet and faces (woff2 only: every browser that runs the app reads it), so a formula looks as it
+// does in the JS app: HTML output in KaTeX_Main, KaTeX_Math ... The faces load as their glyphs are used.
+fs.copyFileSync(path.join(here, 'vendor/katex/katex.min.css'), path.join(dist, 'katex.min.css'));
+for (const f of fs.readdirSync(path.join(here, 'vendor/katex/fonts'))) {
+  fs.copyFileSync(path.join(here, 'vendor/katex/fonts', f), path.join(dist, 'fonts', f));
+}
 fs.copyFileSync(path.join(here, 'index.html'), path.join(dist, 'index.html'));
 fs.copyFileSync(path.join(repo, 'favicon.svg'), path.join(dist, 'favicon.svg'));
 
@@ -82,6 +90,9 @@ const headers = `/*
   Cache-Control: public, max-age=31536000, immutable
 
 /katex.min.js
+  Cache-Control: public, max-age=31536000, immutable
+
+/katex.min.css
   Cache-Control: public, max-age=31536000, immutable
 
 /fonts/*

@@ -8,12 +8,12 @@ use vishion_store::mem::MemStore;
 use vishion_store::projects::Projects;
 use vishion_store::{Result, Store};
 use vishion_core::model::{Assignment, Page};
-use vishion_ui::{Cmd, Event, ReadOutcome};
+use vishion_ui::{Cmd, Conn, Event, ReadOutcome};
 
 use crate::pictures;
 
-/// Said when a page is read without demo mode: the OCR client is phase 3.
-const NEEDS_OCR: &str = "Reading pages needs the OCR connection, which arrives with phase 3. Nothing was changed.";
+/// Said when words are guessed without demo mode (the guess runs on the judge model, which is not ported).
+const NEEDS_OCR: &str = "Guessing unreadable words is not available with this server yet. Nothing was changed.";
 
 /// A file the user picked: its name and its bytes.
 #[derive(Clone, Debug)]
@@ -162,11 +162,13 @@ pub struct Backend {
     /// The sample assignment: reading a page answers with sample text (js/ocr.js demo mode) instead of
     /// needing a server.
     pub demo: bool,
+    /// `Q.stop`: set from the UI thread while a run is reading a page.
+    pub cancel: vishion_net::Cancel,
 }
 
 impl Backend {
     pub fn new(store: AnyStore, storage: &str) -> Self {
-        Backend { projects: Projects::new(store), storage: storage.into(), demo: false }
+        Backend { projects: Projects::new(store), storage: storage.into(), demo: false, cancel: Default::default() }
     }
 
     /// A backend over the in-memory sample assignment (`--demo`, `?demo=1`).
@@ -284,15 +286,64 @@ impl Backend {
         }
     }
 
-    /// One page of a run (`Q.runOne`): sample text in demo mode, otherwise the server (phase 3) is needed.
-    fn read_page(&self, id: String, index: usize, demo: bool) -> Event {
-        if !demo {
-            return Event::Transcribed { id, outcome: ReadOutcome::Unreachable(NEEDS_OCR.into()) };
+    /// `Q.start`: read these pages one after the other, sending `emit` the progress of each (`Reading`) and
+    /// its outcome (`Transcribed`). Stops at the first Stop or unreachable server like `queue.js`.
+    pub async fn read_pages(&self, slug: &str, ids: Vec<String>, conn: Conn, emit: &dyn Fn(Event)) {
+        let demo = self.demo || conn.demo || self.demo_mode().await;
+        self.cancel.reset();
+        for (index, id) in ids.into_iter().enumerate() {
+            if self.cancel.is_set() {
+                break;
+            }
+            let out = if demo { self.read_demo(index) } else { self.read_live(slug, &id, &conn, emit).await };
+            let stop = matches!(out, ReadOutcome::Stopped | ReadOutcome::Unreachable(_));
+            emit(Event::Transcribed { id, outcome: out });
+            if stop {
+                break;
+            }
         }
+    }
+
+    /// Demo mode of js/ocr.js: sample text and sample guesses.
+    fn read_demo(&self, index: usize) -> ReadOutcome {
         let r = vishion_core::demo::read(index);
         let (_, n) = vishion_core::guess::numbered(&r.text);
         let guesses = Some(vishion_core::demo::guesses(n));
-        Event::Transcribed { id, outcome: ReadOutcome::Done { raw: r.text, tokens: r.tokens, ms: r.ms, guesses } }
+        ReadOutcome::Done { raw: r.text, tokens: r.tokens, ms: r.ms, guesses }
+    }
+
+    /// `Q.runOne` against the server.
+    async fn read_live(&self, slug: &str, id: &str, conn: &Conn, emit: &dyn Fn(Event)) -> ReadOutcome {
+        use vishion_net::{Error, Progress, Request};
+        let image = match self.projects.load_image(slug, id).await {
+            Ok(Some(b)) => b,
+            _ => return ReadOutcome::Failed("The image for this page is missing from the project.".into()),
+        };
+        emit(Event::Reading { id: id.into(), text: String::new() });
+        let req = Request {
+            endpoint: vishion_net::Endpoint::new(conn.url.clone()),
+            api_key: &conn.api_key,
+            model: &conn.model,
+            prompt: &conn.prompt,
+            image: &image,
+            timeout_secs: conn.timeout_secs,
+        };
+        let mut on = |p: Progress| {
+            if let Progress::Text { full, .. } = p {
+                emit(Event::Reading { id: id.into(), text: full.to_string() });
+            }
+        };
+        match vishion_net::transcribe(req, &self.cancel, &mut on).await {
+            Ok(d) => ReadOutcome::Done { raw: vishion_core::clean::clean(&d.text), tokens: d.tokens, ms: d.ms, guesses: None },
+            Err(Error::Aborted) => ReadOutcome::Stopped,
+            Err(Error::TimedOut) => ReadOutcome::Failed(format!(
+                "Timed out after {} seconds. Retry, or raise the timeout in Settings.",
+                conn.timeout_secs
+            )),
+            Err(Error::Network(m)) | Err(Error::Unavailable(m)) => ReadOutcome::Unreachable(m),
+            Err(Error::Http(m)) => ReadOutcome::Failed(m),
+            Err(Error::Stream { message, .. }) => ReadOutcome::Failed(message),
+        }
     }
 
     pub async fn handle(&self, cmd: Cmd, now: i64) -> Event {
@@ -330,9 +381,15 @@ impl Backend {
                 },
                 _ => Event::Notice { text: "The image of this page is missing.".into(), error: true },
             },
-            Cmd::Transcribe { ids, .. } => {
-                let demo = self.demo_mode().await;
-                Event::Many(ids.into_iter().enumerate().map(|(i, id)| self.read_page(id, i, demo)).collect())
+            // the executors stream this one with `read_pages`; here it is collected (tests, simple hosts)
+            Cmd::Transcribe { slug, ids, conn } => {
+                let out = std::cell::RefCell::new(vec![]);
+                self.read_pages(&slug, ids, conn, &|e| out.borrow_mut().push(e)).await;
+                Event::Many(out.into_inner())
+            }
+            Cmd::Stop => {
+                self.cancel.stop();
+                Event::Many(vec![])
             }
             Cmd::Guess { id, raw, .. } => {
                 if self.demo_mode().await {
