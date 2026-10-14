@@ -30,7 +30,7 @@ impl Rig {
         let (b2, i2) = (be.clone(), inbox.clone());
         let dispatch: vishion_ui::Dispatch = Box::new(move |c: Cmd| {
             // picture dialogs and font fetches are not part of the rig
-            if matches!(c, Cmd::LoadMathFont | Cmd::LoadFallbackFont | Cmd::LoadEmojiFont | Cmd::ReplaceImage { .. } | Cmd::AddPages { .. }) {
+            if matches!(c, Cmd::LoadMathFont | Cmd::LoadFallbackFont | Cmd::LoadEmojiFont | Cmd::ReplaceImage { .. } | Cmd::AddPages { .. } | Cmd::ImportZip) {
                 return;
             }
             i2.push(block_on(b2.handle(c, 1_700_000_000_000)));
@@ -325,5 +325,19 @@ mod tests {
         r.act("open-0");
         assert!(!r.has("open-0"));
         assert!(r.app.session().is_some());
+    }
+
+    /// Download zip writes `exports/<slug>.zip`, and what it holds reads back as the assignment's files.
+    #[test]
+    fn home_download_zip_round_trips_through_read_zip() {
+        let mut r = Rig::demo();
+        r.act("crumb");
+        r.act("brand");
+        r.act("zip-0");
+        let key = format!("{}/exports/{}.zip", r.slug, r.slug);
+        let bytes = block_on(vishion_store::Store::get(&r.be.projects.store, &key)).unwrap().expect("zip written");
+        let files = vishion_core::export::read_zip(&bytes).unwrap();
+        assert!(files.iter().any(|(k, _)| k.ends_with("/project.json")), "{:?}", files.iter().map(|f| &f.0).collect::<Vec<_>>());
+        assert!(files.iter().all(|(k, _)| !k.contains("/exports/")));
     }
 }

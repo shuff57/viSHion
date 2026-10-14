@@ -177,6 +177,45 @@ pub fn store_zip(files: &[(String, Vec<u8>)]) -> Vec<u8> {
     out
 }
 
+/// `fflate.unzipSync` for project zips: every file entry (not a folder) with its bytes. Handles stored and
+/// deflated entries, which is what browsers, `zip` and this app write; anything else is an error message.
+pub fn read_zip(data: &[u8]) -> Result<Vec<(String, Vec<u8>)>, String> {
+    let bad = || "That zip file could not be read.".to_string();
+    let u16at = |i: usize| data.get(i..i + 2).map(|b| u16::from_le_bytes([b[0], b[1]]) as usize);
+    let u32at = |i: usize| data.get(i..i + 4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as usize);
+    // end of central directory: the last 0x06054b50 in the final 64 KB + 22
+    let from = data.len().saturating_sub(65_557);
+    let eocd = (from..data.len().saturating_sub(21)).rev().find(|&i| u32at(i) == Some(0x0605_4b50)).ok_or_else(bad)?;
+    let n = u16at(eocd + 10).ok_or_else(bad)?;
+    let mut at = u32at(eocd + 16).ok_or_else(bad)?;
+    let mut out = vec![];
+    for _ in 0..n {
+        if u32at(at) != Some(0x0201_4b50) {
+            return Err(bad());
+        }
+        let (method, csize, usize_) = (u16at(at + 10).ok_or_else(bad)?, u32at(at + 20).ok_or_else(bad)?, u32at(at + 24).ok_or_else(bad)?);
+        let (nl, el, cl) = (u16at(at + 28).ok_or_else(bad)?, u16at(at + 30).ok_or_else(bad)?, u16at(at + 32).ok_or_else(bad)?);
+        let local = u32at(at + 42).ok_or_else(bad)?;
+        let name = String::from_utf8_lossy(data.get(at + 46..at + 46 + nl).ok_or_else(bad)?).to_string();
+        at += 46 + nl + el + cl;
+        if name.ends_with('/') {
+            continue;
+        }
+        if u32at(local) != Some(0x0403_4b50) {
+            return Err(bad());
+        }
+        let body = local + 30 + u16at(local + 26).ok_or_else(bad)? + u16at(local + 28).ok_or_else(bad)?;
+        let raw = data.get(body..body + csize).ok_or_else(bad)?;
+        let bytes = match method {
+            0 => raw.to_vec(),
+            8 => miniz_oxide::inflate::decompress_to_vec_with_limit(raw, usize_.max(1) + 1).map_err(|_| bad())?,
+            _ => return Err("That zip uses a compression this app cannot read.".into()),
+        };
+        out.push((name, bytes));
+    }
+    Ok(out)
+}
+
 /// `E.makeZip` for text files.
 pub fn make_zip(files: &[(String, String)]) -> Vec<u8> {
     let f: Vec<(String, Vec<u8>)> = files.iter().map(|(k, v)| (k.clone(), v.clone().into_bytes())).collect();
@@ -351,5 +390,38 @@ pub fn run(kind: &str, list: &[&Page], o: &Opts, meta: &Project, exported: &str)
             file(format!("{}-all.zip", base), "application/zip", store_zip(&files))
         }
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod zip_read_tests {
+    use super::*;
+
+    #[test]
+    fn a_stored_zip_reads_back() {
+        let files = vec![("a/project.json".to_string(), b"{\"name\":\"x\"}".to_vec()), ("a/pages/p1.json".to_string(), b"[]".to_vec())];
+        assert_eq!(read_zip(&store_zip(&files)).unwrap(), files);
+    }
+
+    #[test]
+    fn a_deflated_entry_reads_back() {
+        let body = b"hello hello hello hello hello".to_vec();
+        let comp = miniz_oxide::deflate::compress_to_vec(&body, 6);
+        // one deflated entry, written by hand (store_zip only writes method 0)
+        let mut z = store_zip(&[("f.txt".to_string(), comp.clone())]);
+        // local header: method at 8, sizes at 18 and 22; central header follows the data
+        let patch16 = |z: &mut Vec<u8>, i: usize, v: u16| z[i..i + 2].copy_from_slice(&v.to_le_bytes());
+        let patch32 = |z: &mut Vec<u8>, i: usize, v: u32| z[i..i + 4].copy_from_slice(&v.to_le_bytes());
+        let cd = 30 + 5 + comp.len();
+        patch16(&mut z, 8, 8);
+        patch32(&mut z, 22, body.len() as u32);
+        patch16(&mut z, cd + 10, 8);
+        patch32(&mut z, cd + 24, body.len() as u32);
+        assert_eq!(read_zip(&z).unwrap(), vec![("f.txt".to_string(), body)]);
+    }
+
+    #[test]
+    fn garbage_is_an_error() {
+        assert!(read_zip(b"not a zip").is_err());
     }
 }

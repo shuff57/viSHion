@@ -14,3 +14,5 @@ pulldown-cmark = { version = "0.13", default-features = false }
 # NFKD for `OCR.slug` (export file names).
 unicode-normalization = "0.1"
 icu_collator = "2.3.1"
+# Reading project zips (stored or deflated entries), as fflate does in js/fs-projects.js.
+miniz_oxide = { version = "0.8", default-features = false, features = ["with-alloc"] }

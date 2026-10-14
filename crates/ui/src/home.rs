@@ -29,6 +29,8 @@ pub(crate) enum HomeAct {
     Rename(String, String),
     Duplicate(String),
     Delete(String),
+    ImportZip,
+    DownloadZip(String),
 }
 
 /// `OCR.fmtAgo` for a time in ms; older than a day is the date.
@@ -121,6 +123,9 @@ fn body(ui: &mut Ui, ctl: &mut Ctl, t: &Tokens, h: &mut Home, storage: &str, nar
         ui.spacing_mut().item_spacing.x = 12.0;
         let r = ui.label(RichText::new("Assignments").font(theme::serif_semi(24.0)).color(t.ink));
         ctl.heading("home-assignments", 2, "Assignments", TEXT, r.rect);
+        if widgets::button(ctl, ui, t, C::new("import-zip", "Import zip", TEXT), "Import zip", Look::Outline, 0.0) {
+            acts.push(HomeAct::ImportZip);
+        }
         if h.creating.is_none() && widgets::button(ctl, ui, t, C::new("new-assignment", "New assignment", TEXT), "New assignment", Look::Primary, 0.0) {
             h.creating = Some(String::new());
         }
@@ -240,17 +245,20 @@ fn card(ui: &mut Ui, ctl: &mut Ctl, t: &Tokens, h: &mut Home, c: &Card, i: usize
         }
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing.x = 8.0;
-            let b = |ctl: &mut Ctl, ui: &mut Ui, k: &str, text: &str| {
-                let name = format!("{text} {}", c.name);
+            let b = |ctl: &mut Ctl, ui: &mut Ui, k: &str, text: &str, said: &str| {
+                let name = format!("{said} {}", c.name);
                 widgets::button(ctl, ui, t, C::new(&id(k), &name, TEXT), text, Look::Ghost, 0.0)
             };
-            if b(ctl, ui, "rename", "Rename") {
+            if b(ctl, ui, "rename", "Rename", "Rename") {
                 h.renaming = Some((c.slug.clone(), c.name.clone()));
             }
-            if b(ctl, ui, "duplicate", "Duplicate") {
+            if b(ctl, ui, "duplicate", "Duplicate", "Duplicate") {
                 acts.push(HomeAct::Duplicate(c.slug.clone()));
             }
-            if b(ctl, ui, "delete", "Delete") {
+            if b(ctl, ui, "zip", "Download zip", "Download zip of") {
+                acts.push(HomeAct::DownloadZip(c.slug.clone()));
+            }
+            if b(ctl, ui, "delete", "Delete", "Delete") {
                 h.deleting = Some(c.slug.clone());
             }
         });

@@ -99,8 +99,9 @@ whenever the inline bootstrap script in `crates/app/web/index.html` changes, so 
 - inbox: the assignment overview the crumb and the last student's Done return to (tabs, run bar, rows).
 - home (`ui::home`, Phase 5): the wordmark on the inbox goes there, and an empty store starts there. Lists the
   assignments (`Cmd::ListProjects` -> `Event::Projects`), opens one, creates, renames, duplicates and deletes
-  (inline fields and an inline confirm instead of dialogs, so it works with no session). Not yet: the folder
-  card states (choose / reconnect), zip and folder import, Download zip, old-session import.
+  (inline fields and an inline confirm instead of dialogs, so it works with no session). Import zip (`core::export::read_zip`, stored and deflated
+  entries) and Download zip (writes `exports/<slug>.zip`, `Cmd::DownloadZip`) are in. Not yet: the folder card
+  states (choose / reconnect), folder import, old-session import.
 
 Flows are `ui::state::Session` over `core::words` (`choose`, `use_all`, which call `core::judge::toggle`),
 `core::groups`, `core::export`. The screen never touches storage: it sends `host::Cmd`s (`LoadImage`,

@@ -49,7 +49,17 @@ pub fn uid(now: i64, salt: u64) -> String {
 /// The file dialog (native). The worker thread blocks on it, which is what it is for.
 #[cfg(not(target_arch = "wasm32"))]
 pub async fn pick_pictures(multiple: bool) -> Vec<Picked> {
-    let d = rfd::FileDialog::new().add_filter("Pictures", &["jpg", "jpeg", "png", "gif", "bmp", "webp"]);
+    pick_with("Pictures", &["jpg", "jpeg", "png", "gif", "bmp", "webp"], "image/*", multiple).await
+}
+
+/// A project zip (`Import zip`).
+pub async fn pick_zip() -> Vec<Picked> {
+    pick_with("Zip", &["zip"], ".zip,application/zip", false).await
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+async fn pick_with(label: &str, exts: &[&str], _accept: &str, multiple: bool) -> Vec<Picked> {
+    let d = rfd::FileDialog::new().add_filter(label, exts);
     let files = if multiple { d.pick_files().unwrap_or_default() } else { d.pick_file().into_iter().collect() };
     files
         .into_iter()
@@ -63,13 +73,18 @@ pub async fn pick_pictures(multiple: bool) -> Vec<Picked> {
 /// `<input type=file>` (web). The click happens right after the user's own click, so the browser allows it.
 #[cfg(target_arch = "wasm32")]
 pub async fn pick_pictures(multiple: bool) -> Vec<Picked> {
+    pick_with("Pictures", &[], "image/*", multiple).await
+}
+
+#[cfg(target_arch = "wasm32")]
+async fn pick_with(_label: &str, _exts: &[&str], accept: &str, multiple: bool) -> Vec<Picked> {
     use wasm_bindgen::closure::Closure;
     use wasm_bindgen::JsCast;
     let Some(doc) = web_sys::window().and_then(|w| w.document()) else { return vec![] };
     let Ok(el) = doc.create_element("input") else { return vec![] };
     let Ok(input) = el.dyn_into::<web_sys::HtmlInputElement>() else { return vec![] };
     input.set_type("file");
-    input.set_accept("image/*");
+    input.set_accept(accept);
     input.set_multiple(multiple);
     let inp = input.clone();
     let p = js_sys::Promise::new(&mut |res, _| {
@@ -441,6 +456,29 @@ impl Backend {
                 self.read_pages(&slug, ids, conn, &|e| out.borrow_mut().push(e)).await;
                 Event::Many(out.into_inner())
             }
+            Cmd::ImportZip => {
+                let Some(f) = pick_zip().await.pop() else {
+                    return Event::Notice { text: "No file chosen.".into(), error: false };
+                };
+                match vishion_core::export::read_zip(&f.bytes) {
+                    Err(m) => Event::Notice { text: m, error: true },
+                    Ok(entries) => match self.projects.import_files(&entries).await {
+                        Ok(slug) => Event::Many(vec![Event::Notice { text: "Assignment imported.".into(), error: false }, self.open(Some(&slug), now).await]),
+                        Err(e) => Event::Notice { text: format!("Import failed: {e}"), error: true },
+                    },
+                }
+            }
+            Cmd::DownloadZip { slug } => match self.projects.project_files(&slug).await {
+                Ok(files) => {
+                    let name = format!("{slug}.zip");
+                    let bytes = vishion_core::export::store_zip(&files);
+                    match self.projects.write_export(&slug, &name, &bytes).await {
+                        Ok(()) => Event::Notice { text: format!("Saved exports/{name}."), error: false },
+                        Err(e) => Event::Notice { text: format!("Could not build the zip: {e}"), error: true },
+                    }
+                }
+                Err(e) => Event::Notice { text: format!("Could not build the zip: {e}"), error: true },
+            },
             Cmd::ListProjects => self.list_event(now).await,
             Cmd::OpenProject { slug } => self.open(Some(&slug), now).await,
             Cmd::CreateProject { name } => match self.projects.create_project(&name, now).await {

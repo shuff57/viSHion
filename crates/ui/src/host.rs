@@ -36,6 +36,10 @@ pub struct Card {
 pub enum Cmd {
     /// The home screen's list: `Event::Projects`.
     ListProjects,
+    /// Ask for a project zip and import it as a new assignment: `Event::Opened`.
+    ImportZip,
+    /// Write `exports/<slug>.zip` with every file of the assignment (the home card's Download zip).
+    DownloadZip { slug: String },
     /// Open another assignment: `Event::Opened`.
     OpenProject { slug: String },
     /// `fs.createProject` then open it: `Event::Opened`.

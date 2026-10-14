@@ -3637,6 +3637,7 @@ name = "vishion-core"
 version = "0.1.0"
 dependencies = [
  "icu_collator",
+ "miniz_oxide 0.8.9",
  "pulldown-cmark",
  "serde",
  "serde_json",
