@@ -30,6 +30,16 @@ pub struct StagedItem {
     pub source: String,
 }
 
+/// The storage card of the home screen (`S.d.folder`).
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct FolderInfo {
+    pub mode: String,
+    pub name: String,
+    pub permission: String,
+    /// The browser can pick folders.
+    pub supported: bool,
+}
+
 /// One assignment on the home screen (`fs.listProjects`).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Card {
@@ -46,6 +56,8 @@ pub struct Card {
 pub enum Cmd {
     /// The home screen's list: `Event::Projects`.
     ListProjects,
+    /// Web: `choose` a folder to save in, `browser` storage instead, or `reconnect` the remembered folder.
+    Folder(String),
     /// Ask for pictures and get each one ready for staging (`Event::Staged` one by one, `Event::Skipped` for
     /// files that cannot be added). `preset` is a student chosen beforehand; otherwise, with `read_names`,
     /// the model reads the name at the top of each page.
@@ -120,6 +132,8 @@ pub enum Event {
         /// The assignment came from the backup copy of a damaged `project.json`.
         notice: Option<String>,
     },
+    /// Where assignments are saved (web): `mode` is `none` | `folder` | `idb`, `permission` `granted` | `prompt`.
+    Folder(FolderInfo),
     /// One picture is ready to stage. `names_down`: the name reader could not reach the server.
     Staged { item: StagedItem, names_down: bool },
     /// Files that cannot be added, with the reason each.

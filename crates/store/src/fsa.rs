@@ -235,3 +235,31 @@ impl Store for FsaStore {
         Ok(out)
     }
 }
+
+/// `showDirectoryPicker({ mode: 'readwrite' })` on the window: the chosen folder's handle, `None` when the
+/// person cancelled, an error where the browser has no such picker. Call it from a click.
+pub async fn pick_directory() -> Result<Option<JsValue>> {
+    let w: JsValue = js_sys::global().into();
+    let f = Reflect::get(&w, &"showDirectoryPicker".into()).map_err(berr)?;
+    let f: Function = f.dyn_into().map_err(|_| StoreError::Backend("This browser cannot pick a folder.".into()))?;
+    let o = obj(&[("mode", "readwrite".into())]);
+    let p: Promise = f.call1(&w, &o).map_err(berr)?.dyn_into().map_err(|_| StoreError::Backend("showDirectoryPicker".into()))?;
+    match JsFuture::from(p).await {
+        Ok(h) => Ok(Some(h)),
+        // AbortError: the person closed the picker
+        Err(e) => {
+            if Reflect::get(&e, &"name".into()).ok().and_then(|n| n.as_string()).as_deref() == Some("AbortError") {
+                Ok(None)
+            } else {
+                Err(berr(e))
+            }
+        }
+    }
+}
+
+/// Whether this browser has a folder picker at all.
+pub fn supported() -> bool {
+    let w: JsValue = js_sys::global().into();
+    Reflect::get(&w, &"showDirectoryPicker".into()).map(|f| f.is_function()).unwrap_or(false)
+}
+

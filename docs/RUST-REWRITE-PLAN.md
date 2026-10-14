@@ -73,7 +73,7 @@ Each phase ends with a runnable build on both targets and a parity check against
 | 2 | `store` | idb + fsa + native fs, legacy import | S3 `run.mjs` oracle test passes on all modes; old projects open unchanged in both directions. |
 | 3 | `net` + queue | streaming client, run/stop/retry/resume | S4 scenario table passes; demo mode works end to end. **Done** for the client: mock-server tests cover streaming, partial on a dropped stream, 503, dead port and Stop; demo mode unchanged. `/slots` progress polling is in (`net::slots`, native thread and web `select`; tested against a mock). The judge-model Guess works outside demo mode (`net::complete`, `core::guess::prompt`; tested against a mock). The automatic guess after a read (`autoGuess`) is in. Not done: a run of the web transport against a real server. |
 | 4 | Review screen | Main screen with math, tray, strip, hidden twin | S8 test suite passes; NVDA smoke test; 44px targets. |
-| 5 | Home, inbox, add | remaining screens, drag-reorder, rotate/replace page | Feature list in `README.md` screens table complete. **In progress**: inbox and Home (list, open, create, rename, duplicate, delete) are in. Zip and folder import and Download zip are in. Not done: Home's folder card states (needs a decision, see below), old-session import; drag-reorder of pages at the assignment level; the Add screen's drop, paste and photo preview. The Add staging screen (choose, name reading, chooser, commit) and Assignment settings entry are in. |
+| 5 | Home, inbox, add | remaining screens, drag-reorder, rotate/replace page | Feature list in `README.md` screens table complete. **In progress**: inbox and Home (list, open, create, rename, duplicate, delete) are in. Zip and folder import and Download zip are in. Home's folder card (File System Access folders on the web) is in. Not done: old-session import; drag-reorder of pages at the assignment level; the Add screen's drop, paste and photo preview. The Add staging screen (choose, name reading, chooser, commit) and Assignment settings entry are in. |
 | 6 | Dialogs | settings, assignment settings, export, topics | Same fields as today; export parity. **Done** (Settings, Assignment settings, Export, Subjects and words). |
 | 7 | Polish + parity | fonts bundled, dark theme, reduced motion, contrast audit | Side-by-side walkthrough vs JS app with no feature gaps. **In progress**: a token-level contrast test (4.5:1 for text pairs, both themes and both high-contrast variants) is in; placeholder text in the dark theme was 3.7:1 and now uses `muted`. Reduced motion is in on the web (no easing, a still spinner; native has no system query yet). Not done: the side-by-side walkthrough against the JS app. |
 | 8 | Cutover | deploy web build to the existing route, ship desktop installers | JS app kept on a `/legacy` path for one release. |
@@ -103,12 +103,19 @@ If staffing is one person, do 0, 1, 4, then 2, 3, 5, 6, 7.
 | Mobile web keyboard / IME on canvas | poor phone editing | out of scope for v1 (`Phone.dc.html` is already "later"). |
 | egui and `latex-rust` version pinning | upgrade friction | isolate math behind `ui::math`, so it can be swapped. |
 
+## Decisions
+
+1. **Web storage**: add File System Access folders (Chrome/Edge) beside IndexedDB, with the choose / reconnect
+   card on Home. Other browsers stay on IndexedDB.
+2. **Old single-file sessions**: import on web (the old app's browser storage) and on native (an exported
+   legacy session file).
+3. **Desktop distribution**: plain eframe binary per platform; no installer or signing for v1.
+4. **`file://`**: dropped. The wasm build needs a server; the README says so.
+
 ## Open decisions
 
-1. Desktop distribution: plain eframe binary, or wrap in an installer (MSI/dmg)? Needs a signing story.
-2. Keep `llama.cpp` as the only backend, or abstract the OCR provider in `net` now?
-3. Is dropping `file://` acceptable for teachers who open `index.html` directly today?
-4. Phone layout (`Phone.dc.html`): egui responsive layout, or leave for the web DOM later?
+1. Keep `llama.cpp` as the only backend, or abstract the OCR provider in `net` now?
+2. Phone layout (`Phone.dc.html`): egui responsive layout, or leave for the web DOM later?
 
 ## Not in scope for v1
 

@@ -21,6 +21,8 @@ pub struct Home {
     pub renaming: Option<(String, String)>,
     /// The slug a delete is waiting to be confirmed for.
     pub deleting: Option<String>,
+    /// Where work is saved (web); `None` on native, which shows the storage line only.
+    pub folder: Option<crate::host::FolderInfo>,
 }
 
 pub(crate) enum HomeAct {
@@ -32,6 +34,7 @@ pub(crate) enum HomeAct {
     ImportZip,
     ImportFolder,
     DownloadZip(String),
+    Folder(&'static str),
 }
 
 /// `OCR.fmtAgo` for a time in ms; older than a day is the date.
@@ -119,7 +122,52 @@ fn body(ui: &mut Ui, ctl: &mut Ctl, t: &Tokens, h: &mut Home, storage: &str, nar
     ctl.text("home-sub", sub, TEXT, r.rect);
     ui.add_space(20.0);
 
-    // `.save-card`: where the work lives
+    // `.save-card`: where the work lives. In the browser it says which of the four states it is in.
+    if let Some(f) = h.folder.clone() {
+        let (title, text, buttons): (String, String, Vec<(&'static str, &'static str, &'static str, Look)>) = match (f.mode.as_str(), f.permission.as_str()) {
+            ("none", _) => (
+                "Choose where assignments are saved".into(),
+                "Pick a folder on this computer. Each assignment gets its own subfolder with pages, images and exports.".into(),
+                vec![("choose", "Choose a folder", "choose-folder", Look::Primary), ("browser", "Use browser storage instead", "use-browser", Look::Outline)],
+            ),
+            ("folder", "prompt") => (
+                format!("Reconnect \u{201C}{}\u{201D}", f.name),
+                "The browser needs your permission again before it can open this folder. Nothing was lost.".into(),
+                vec![("reconnect", "Reconnect folder", "reconnect-folder", Look::Primary), ("choose", "Choose a different folder", "choose-folder", Look::Outline)],
+            ),
+            ("idb", _) => (
+                "Saving in this browser".into(),
+                if f.supported {
+                    "Work lives in this browser only. Use Export to keep a copy, or choose a folder to save to disk.".into()
+                } else {
+                    "This browser cannot pick folders, so work lives in this browser only. Use Export to keep a copy. Chrome and Edge can save to a folder.".into()
+                },
+                if f.supported { vec![("choose", "Choose a folder instead", "choose-folder", Look::Outline)] } else { vec![] },
+            ),
+            _ => (
+                format!("Saving to {}", f.name),
+                "Changes are saved automatically a moment after you make them.".into(),
+                vec![("choose", "Change folder", "choose-folder", Look::Outline)],
+            ),
+        };
+        egui::Frame::none().fill(t.surface).stroke(Stroke::new(1.0, if f.permission == "prompt" { t.warn_line } else { t.line })).rounding(10.0).inner_margin(Margin::symmetric(20.0, 14.0)).show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            let r = ui.label(RichText::new(&title).font(theme::sans_semi(14.0)).color(t.ink));
+            ctl.heading("home-storage-title", 2, &title, TEXT, r.rect);
+            let r = ui.label(RichText::new(&text).font(theme::sans(13.0)).color(t.muted));
+            ctl.text("home-storage-text", &text, TEXT, r.rect);
+            ui.add_space(10.0);
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing.x = 8.0;
+                for (what, label, id, look) in &buttons {
+                    if widgets::button(ctl, ui, t, C::new(id, label, TEXT), label, *look, 0.0) {
+                        acts.push(HomeAct::Folder(what));
+                    }
+                }
+            });
+        });
+        ui.add_space(28.0);
+    } else {
     let line = if storage.is_empty() { "Changes are saved automatically a moment after you make them.".to_string() } else { storage.to_string() };
     egui::Frame::none().fill(t.surface).stroke(Stroke::new(1.0, t.line)).rounding(10.0).inner_margin(Margin::symmetric(20.0, 14.0)).show(ui, |ui| {
         ui.set_width(ui.available_width());
@@ -127,6 +175,7 @@ fn body(ui: &mut Ui, ctl: &mut Ctl, t: &Tokens, h: &mut Home, storage: &str, nar
         ctl.status("home-storage", &line, TEXT, r.rect);
     });
     ui.add_space(28.0);
+    }
 
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing.x = 12.0;

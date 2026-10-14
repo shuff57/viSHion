@@ -58,6 +58,16 @@ impl IdbStore {
         idb_get(&self.db, "kv", key).await
     }
 
+    /// Write `kv/<key>` (the folder handle the JS app keeps as `root`).
+    pub async fn kv_set(&self, key: &str, value: &JsValue) -> Result<()> {
+        idb_put(&self.db, "kv", key, value).await
+    }
+
+    /// Delete `kv/<key>`.
+    pub async fn kv_delete(&self, key: &str) -> Result<()> {
+        idb_delete_many(&self.db, "kv", &[key.to_string()]).await
+    }
+
     pub fn close(&self) {
         self.db.close();
     }

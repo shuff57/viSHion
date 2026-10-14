@@ -42,7 +42,7 @@ mod app_tests;
 #[cfg(test)]
 mod a11y_critic_tests;
 
-pub use host::{Card, StagedItem, Cmd, Conn, Dispatch, Event, Inbox, ReadOutcome};
+pub use host::{Card, FolderInfo, StagedItem, Cmd, Conn, Dispatch, Event, Inbox, ReadOutcome};
 pub use twin::{Node, Part, Reg};
 
 /// Web only: call once after eframe started; makes the canvas a non-tabbable, AT-hidden surface and names
@@ -1103,6 +1103,7 @@ impl App {
                     self.session = Some(sess);
                     self.boot = Boot::Ready;
                 }
+                Event::Folder(f) => self.home.folder = Some(f),
                 Event::Projects(cards) => {
                     self.home.cards = Some(cards);
                     self.home.asked = false;

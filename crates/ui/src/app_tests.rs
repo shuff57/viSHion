@@ -236,6 +236,39 @@ fn empty_store_and_failure_have_a_screen() {
     assert!(app.nodes().iter().any(|n| matches!(n, Node::Status { text, .. } if text == "boom")));
 }
 
+#[test]
+fn home_storage_card_has_the_four_states_of_the_js_app() {
+    use crate::host::FolderInfo;
+    let ctx = egui::Context::default();
+    let inbox = Inbox::new(ctx.clone());
+    let mut app = App::new(ctx.clone()).with_host(Box::new(|_| {}), inbox.clone());
+    inbox.push(Event::Empty { storage: "Saved in this browser".into() });
+    let input = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 800.0))),
+        ..Default::default()
+    };
+    let ids = |app: &App| -> Vec<String> { app.controls().iter().map(|c| c.id.clone()).collect() };
+    let cases: [(FolderInfo, &[&str], &[&str]); 4] = [
+        (FolderInfo { mode: "none".into(), permission: "granted".into(), supported: true, ..Default::default() }, &["choose-folder", "use-browser"], &["reconnect-folder"]),
+        (FolderInfo { mode: "folder".into(), name: "Scans".into(), permission: "prompt".into(), supported: true }, &["reconnect-folder", "choose-folder"], &["use-browser"]),
+        (FolderInfo { mode: "idb".into(), permission: "granted".into(), supported: true, ..Default::default() }, &["choose-folder"], &["use-browser", "reconnect-folder"]),
+        (FolderInfo { mode: "idb".into(), permission: "granted".into(), supported: false, ..Default::default() }, &[], &["choose-folder"]),
+    ];
+    for (info, has, hasnt) in cases {
+        inbox.push(Event::Folder(info.clone()));
+        for _ in 0..3 {
+            let _ = ctx.run(input.clone(), |c| app.step(c, false));
+        }
+        let got = ids(&app);
+        for h in has {
+            assert!(got.iter().any(|g| g == h), "{info:?}: no {h} in {got:?}");
+        }
+        for h in hasnt {
+            assert!(!got.iter().any(|g| g == h), "{info:?}: unexpected {h}");
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------------------------------------
 // Blind critic (phase 4 review screen): behaviour of js/ui/review.js + header.js that the screen lacks.
 // Each test names the JS behaviour it is checked against and is expected to FAIL until fixed.

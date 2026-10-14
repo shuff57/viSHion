@@ -168,6 +168,9 @@ pub enum AnyStore {
     Fs(vishion_store::fs::FsStore),
     #[cfg(target_arch = "wasm32")]
     Idb(vishion_store::idb::IdbStore),
+    /// A folder the person chose with the browser's folder picker.
+    #[cfg(target_arch = "wasm32")]
+    Fsa(vishion_store::fsa::FsaStore),
 }
 
 impl Store for AnyStore {
@@ -179,6 +182,8 @@ impl Store for AnyStore {
                 AnyStore::Fs(s) => s.get(key).await,
                 #[cfg(target_arch = "wasm32")]
                 AnyStore::Idb(s) => s.get(key).await,
+                #[cfg(target_arch = "wasm32")]
+                AnyStore::Fsa(s) => s.get(key).await,
             }
         }
     }
@@ -190,6 +195,8 @@ impl Store for AnyStore {
                 AnyStore::Fs(s) => s.put(key, value).await,
                 #[cfg(target_arch = "wasm32")]
                 AnyStore::Idb(s) => s.put(key, value).await,
+                #[cfg(target_arch = "wasm32")]
+                AnyStore::Fsa(s) => s.put(key, value).await,
             }
         }
     }
@@ -201,6 +208,8 @@ impl Store for AnyStore {
                 AnyStore::Fs(s) => s.list(prefix).await,
                 #[cfg(target_arch = "wasm32")]
                 AnyStore::Idb(s) => s.list(prefix).await,
+                #[cfg(target_arch = "wasm32")]
+                AnyStore::Fsa(s) => s.list(prefix).await,
             }
         }
     }
@@ -212,6 +221,8 @@ impl Store for AnyStore {
                 AnyStore::Fs(s) => s.delete(key).await,
                 #[cfg(target_arch = "wasm32")]
                 AnyStore::Idb(s) => s.delete(key).await,
+                #[cfg(target_arch = "wasm32")]
+                AnyStore::Fsa(s) => s.delete(key).await,
             }
         }
     }
@@ -641,6 +652,8 @@ impl Backend {
                 }
                 Err(e) => Event::Notice { text: format!("Could not build the zip: {e}"), error: true },
             },
+            // the folder card is a browser thing: the web executor answers it, a native host has no such card
+            Cmd::Folder(_) => Event::Many(vec![]),
             Cmd::ListProjects => self.list_event(now).await,
             Cmd::OpenProject { slug } => self.open(Some(&slug), now).await,
             Cmd::CreateProject { name } => match self.projects.create_project(&name, now).await {
