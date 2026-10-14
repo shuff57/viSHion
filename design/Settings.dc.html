@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Settings</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap">
+<style>
+body{margin:0;background:#EEF1F5}
+a{color:var(--ink)}
+a:hover{color:var(--accent)}
+button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
+.ghost{background:transparent;border:0;border-radius:8px;color:inherit;font:inherit;cursor:pointer}
+.ghost:hover{background:var(--hover)}
+</style>
+</helmet>
+
+<div style="{{tk}}">
+<div style="position: relative; min-height: 900px; box-sizing: border-box; overflow: hidden; background: var(--bg); color: var(--ink); font-family: 'Instrument Sans', system-ui, sans-serif; font-size: 14px; line-height: 1.4">
+
+  <div aria-hidden="true" style="position: absolute; inset: 0">
+    <div style="height: 64px; background: var(--surface); border-bottom: 1px solid var(--line)"></div>
+    <div style="max-width: 1120px; margin: 0 auto; padding: 40px 24px">
+      <div style="width: 420px; max-width: 100%; height: 40px; border-radius: 6px; background: var(--hover)"></div>
+      <div style="height: 12px; margin-top: 40px; border-radius: 6px; background: var(--hover)"></div>
+      <div style="height: 340px; margin-top: 24px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface)"></div>
+    </div>
+  </div>
+  <div aria-hidden="true" style="position: absolute; inset: 0; background: var(--scrim)"></div>
+
+  <div role="dialog" aria-modal="true" aria-labelledby="settings-title" style="position: relative; width: 600px; max-width: calc(100% - 32px); max-height: 836px; margin: 32px auto; box-sizing: border-box; display: flex; flex-direction: column; border-radius: 12px; background: var(--surface); box-shadow: 0 24px 64px -8px rgba(5,7,11,.5)">
+
+    <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 12px 12px 28px; border-bottom: 1px solid var(--line)">
+      <h1 id="settings-title" style="margin: 0; font-family: 'Source Serif 4', Georgia, serif; font-size: 24px; font-weight: 600; line-height: 1.2">Settings</h1>
+      <a href="Batch.dc.html" class="ghost" aria-label="Close settings" style="width: 44px; height: 44px; display: flex; align-items: center; justify-content: center; text-decoration: none">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </a>
+    </div>
+
+    <div style="flex: 1; min-height: 0; overflow-y: auto; padding: 8px 28px 24px">
+
+      <section style="display: flex; flex-direction: column; gap: 14px; padding: 20px 0; border-bottom: 1px solid var(--soft)">
+        <h2 style="margin: 0; font-size: 16px; font-weight: 600">Appearance</h2>
+        <div style="display: flex; flex-direction: column; gap: 6px">
+          <span id="theme-label" style="font-weight: 600">Theme</span>
+          <div role="group" aria-labelledby="theme-label" style="display: flex; align-self: flex-start; gap: 2px; padding: 3px; background: var(--hover); border-radius: 10px">
+            <sc-for list="{{themes}}" as="t" hint-placeholder-count="3">
+              <button type="button" aria-pressed="{{t.on}}" onClick="{{t.pick}}" style="{{t.style}}">{{t.label}}</button>
+            </sc-for>
+          </div>
+        </div>
+      </section>
+
+      <section style="display: flex; flex-direction: column; gap: 14px; padding: 20px 0; border-bottom: 1px solid var(--soft)">
+        <h2 style="margin: 0; font-size: 16px; font-weight: 600">Transcription server</h2>
+        <div style="display: flex; flex-direction: column; gap: 6px">
+          <label for="st-ocr" style="font-weight: 600">Server address</label>
+          <input id="st-ocr" type="text" value="http://localhost:8188" autocomplete="off" spellcheck="false" style="height: 44px; padding: 0 12px; box-sizing: border-box; border: 1px solid var(--line2); border-radius: 8px; background: var(--surface); color: var(--ink); font: inherit">
+          <p style="margin: 0; font-size: 13px; color: var(--muted)">A llama.cpp server running the vision model.</p>
+        </div>
+        <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px">
+          <button type="button" onClick="{{runTest}}" style="height: 44px; padding: 0 16px; border: 1px solid var(--line2); border-radius: 8px; background: var(--surface); color: var(--ink); font: inherit; font-weight: 600; cursor: pointer">Test connection</button>
+          <span role="status" style="{{testStyle}}">{{testText}}</span>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 6px">
+          <label for="st-key" style="font-weight: 600">API key</label>
+          <input id="st-key" type="password" autocomplete="off" style="height: 44px; padding: 0 12px; box-sizing: border-box; border: 1px solid var(--line2); border-radius: 8px; background: var(--surface); color: var(--ink); font: inherit">
+          <p style="margin: 0; font-size: 13px; color: var(--muted)">Kept in this browser only. It is never written to a project folder or an export.</p>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 6px">
+          <label for="st-timeout" style="font-weight: 600">Give up on a page after (seconds)</label>
+          <input id="st-timeout" type="number" value="180" min="10" style="width: 140px; height: 44px; padding: 0 12px; box-sizing: border-box; border: 1px solid var(--line2); border-radius: 8px; background: var(--surface); color: var(--ink); font: inherit">
+          <p style="margin: 0; font-size: 13px; color: var(--muted)">A page that takes longer is marked as failed and the batch moves on.</p>
+        </div>
+        <label for="st-demo" style="display: flex; align-items: flex-start; gap: 12px; padding: 10px 12px; box-sizing: border-box; border: 1px solid var(--line2); border-radius: 8px; cursor: pointer">
+          <input id="st-demo" type="checkbox" style="flex: none; width: 18px; height: 18px; margin: 2px 0 0; accent-color: var(--ink)">
+          <span><span style="display: block; font-weight: 600">Demo mode</span><span style="display: block; font-size: 13px; color: var(--muted)">Uses sample text instead of a model, so you can try the app without a server.</span></span>
+        </label>
+      </section>
+
+      <section style="display: flex; flex-direction: column; gap: 14px; padding: 20px 0; border-bottom: 1px solid var(--soft)">
+        <h2 style="margin: 0; font-size: 16px; font-weight: 600">Spelling check</h2>
+        <div style="display: flex; flex-direction: column; gap: 6px">
+          <label for="st-judge" style="font-weight: 600">Spelling helper address</label>
+          <input id="st-judge" type="text" value="http://localhost:8189" autocomplete="off" spellcheck="false" style="height: 44px; padding: 0 12px; box-sizing: border-box; border: 1px solid var(--line2); border-radius: 8px; background: var(--surface); color: var(--ink); font: inherit">
+          <p style="margin: 0; font-size: 13px; color: var(--muted)">Optional. A second local model that suggests course words for misspelled ones.</p>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 6px">
+          <label for="st-jmode" style="font-weight: 600">How to suggest</label>
+          <select id="st-jmode" style="height: 44px; padding: 0 12px; border: 1px solid var(--line2); border-radius: 8px; background: var(--surface); color: var(--ink); font: inherit">
+            <option>Auto</option>
+            <option>Typesafe</option>
+            <option>Local model</option>
+            <option>Built-in matching only</option>
+          </select>
+          <p style="margin: 0; font-size: 13px; color: var(--muted)">Auto asks the helper model and falls back to built-in matching. A helper that fails never blocks a transcript.</p>
+        </div>
+      </section>
+
+      <section style="display: flex; flex-direction: column; gap: 14px; padding: 20px 0; border-bottom: 1px solid var(--soft)">
+        <h2 style="margin: 0; font-size: 16px; font-weight: 600">Export defaults</h2>
+        <div style="display: flex; flex-wrap: wrap; gap: 14px">
+          <div style="flex: 1 1 160px; display: flex; flex-direction: column; gap: 6px">
+            <label for="st-fmt" style="font-weight: 600">Combined file</label>
+            <select id="st-fmt" style="height: 44px; padding: 0 12px; border: 1px solid var(--line2); border-radius: 8px; background: var(--surface); color: var(--ink); font: inherit">
+              <option>Word (.docx)</option>
+              <option>Markdown (.md)</option>
+              <option>Plain text (.txt)</option>
+            </select>
+          </div>
+          <div style="flex: 1 1 160px; display: flex; flex-direction: column; gap: 6px">
+            <label for="st-sep" style="font-weight: 600">Between pages</label>
+            <select id="st-sep" style="height: 44px; padding: 0 12px; border: 1px solid var(--line2); border-radius: 8px; background: var(--surface); color: var(--ink); font: inherit">
+              <option>A “Page N” line</option>
+              <option>A page break</option>
+              <option>Nothing</option>
+            </select>
+          </div>
+          <div style="flex: 1 1 160px; display: flex; flex-direction: column; gap: 6px">
+            <label for="st-txt" style="font-weight: 600">Text to export</label>
+            <select id="st-txt" style="height: 44px; padding: 0 12px; border: 1px solid var(--line2); border-radius: 8px; background: var(--surface); color: var(--ink); font: inherit">
+              <option>Corrected</option>
+              <option>Original</option>
+              <option>Both</option>
+            </select>
+          </div>
+        </div>
+      </section>
+
+      <section style="display: flex; flex-direction: column; gap: 14px; padding: 20px 0 4px">
+        <h2 style="margin: 0; font-size: 16px; font-weight: 600">Storage</h2>
+        <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px">
+          <span style="color: var(--muted)">Folder: Transcriber</span>
+          <button type="button" style="height: 44px; padding: 0 16px; border: 1px solid var(--line2); border-radius: 8px; background: var(--surface); color: var(--ink); font: inherit; font-weight: 600; cursor: pointer">Change folder</button>
+          <button type="button" class="ghost" style="height: 44px; padding: 0 12px; font-weight: 600">Use browser storage</button>
+        </div>
+        <label for="st-orig" style="display: flex; align-items: flex-start; gap: 12px; padding: 10px 12px; box-sizing: border-box; border: 1px solid var(--line2); border-radius: 8px; cursor: pointer">
+          <input id="st-orig" type="checkbox" style="flex: none; width: 18px; height: 18px; margin: 2px 0 0; accent-color: var(--ink)">
+          <span><span style="display: block; font-weight: 600">Keep untouched originals</span><span style="display: block; font-size: 13px; color: var(--muted)">Saves each upload as it came, next to the resized copy. Uses more disk space.</span></span>
+        </label>
+      </section>
+    </div>
+
+    <div style="display: flex; justify-content: flex-end; padding: 14px 28px; border-top: 1px solid var(--line)">
+      <a href="Batch.dc.html" style="display: inline-flex; align-items: center; height: 44px; padding: 0 22px; box-sizing: border-box; border-radius: 8px; background: var(--ink); color: var(--on-ink); font-weight: 600; text-decoration: none">Done</a>
+    </div>
+  </div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"dark":{"editor":"boolean","default":false},"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { theme: 'light', test: null };
+  }
+
+  tk() {
+    const L = { bg: '#EEF1F5', surface: '#FFFFFF', ink: '#141B2D', 'on-ink': '#FFFFFF', muted: '#5A6477', line: '#D3D9E2', line2: '#BCC5D2', soft: '#E3E8EF', hover: '#E4E9F0', accent: '#26358F', ok: '#176B45', scrim: 'rgba(20,27,45,.5)' };
+    const D = { bg: '#0F131C', surface: '#171C28', ink: '#E8ECF3', 'on-ink': '#0F131C', muted: '#9AA5B8', line: '#2B3345', line2: '#3E4A63', soft: '#222A3A', hover: '#232B3B', accent: '#9DB0FF', ok: '#5FD39A', scrim: 'rgba(5,7,11,.62)' };
+    const dark = this.props.dark === true || this.props.dark === 'true' || this.state.theme === 'dark';
+    const T = dark ? D : L;
+    return Object.keys(T).map((k) => '--' + k + ':' + T[k]).join(';') + ';display:contents;';
+  }
+
+  renderVals() {
+    const st = this.state;
+    const segOn = 'height:38px;padding:0 16px;border:0;border-radius:8px;font:inherit;font-weight:600;cursor:pointer;background:var(--surface);color:var(--ink);box-shadow:0 1px 2px rgba(20,27,45,.18);';
+    const segOff = 'height:38px;padding:0 16px;border:0;border-radius:8px;font:inherit;font-weight:600;cursor:pointer;background:transparent;color:var(--muted);';
+    const themes = [['auto', 'System'], ['light', 'Light'], ['dark', 'Dark']].map((t) => ({
+      label: t[1],
+      on: st.theme === t[0],
+      style: st.theme === t[0] ? segOn : segOff,
+      pick: () => this.setState({ theme: t[0] })
+    }));
+    let testText = '';
+    if (st.test === 'ok') testText = 'Connected.';
+    return {
+      tk: this.tk(),
+      themes: themes,
+      testText: testText,
+      testStyle: 'color:var(--ok);font-weight:600;',
+      runTest: () => this.setState({ test: 'ok' })
+    };
+  }
+}
+</script>
+</body>
+</html>

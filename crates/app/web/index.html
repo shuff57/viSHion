@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>viSHion</title>
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<style>
+  /* paint the page in the app's own background before the first frame (tokens: --bg light/dark) */
+  :root { color-scheme: light dark; }
+  html, body { margin: 0; height: 100%; background: #EEF1F5; }
+  @media (prefers-color-scheme: dark) { html, body { background: #0F131C; } }
+  canvas { width: 100%; height: 100%; display: block; }
+  /* hidden-DOM twin (a11y): laid over the canvas with every control at the rectangle it is drawn in, so touch
+     exploration and magnifier tracking land in the right place; invisible (the canvas draws the focus ring) and
+     never hit by the pointer (clicks go to the canvas; assistive technology activates through the DOM).
+     overflow: clip, unlike hidden, can never be scrolled, so focus() on an off-screen control cannot shift it. */
+  #controls { position: fixed; inset: 0; overflow: clip; pointer-events: none; }
+  /* everything in the twin is invisible and unselectable except the transcript (.tx-clip), which is real text: its
+     ancestors are left alone (an element at opacity 0 hides all that is in it). */
+  #controls *:not(.tx-clip):not(.tx-clip *):not(:has(.tx-clip)) { opacity: 0; user-select: none; }
+  #controls p, #controls h1, #controls h2, #controls h3, #controls ul { margin: 0; padding: 0; list-style: none; }
+  /* the transcript as DOM text, laid over the canvas where the page puts it (css/components.css `.tx-text`):
+     the browser wraps it, so a user stylesheet, text spacing, minimum font size, find-in-page and selection work */
+  @font-face { font-family: "Instrument Sans"; font-weight: 400; font-display: swap; src: url("fonts/instrument-sans-latin-400-normal.woff2") format("woff2"); }
+  @font-face { font-family: "Instrument Sans"; font-weight: 600; font-display: swap; src: url("fonts/instrument-sans-latin-600-normal.woff2") format("woff2"); }
+  @font-face { font-family: "Source Serif 4"; font-weight: 400; font-style: normal; font-display: swap; src: url("fonts/source-serif-4-latin-400-normal.woff2") format("woff2"); }
+  @font-face { font-family: "Source Serif 4"; font-weight: 600; font-style: normal; font-display: swap; src: url("fonts/source-serif-4-latin-600-normal.woff2") format("woff2"); }
+  @font-face { font-family: "Source Serif 4"; font-weight: 400; font-style: italic; font-display: swap; src: url("fonts/source-serif-4-latin-400-italic.woff2") format("woff2"); }
+  @font-face { font-family: "Hack"; font-weight: 400; font-display: swap; src: url("fonts/hack-latin-400-normal.ttf") format("truetype"); }
+  @font-face { font-family: "STIX Two Math"; font-display: swap; src: url("stix-two-math.otf") format("opentype"); }
+  /* An opaque background under the text lets the browser draw it with sub-pixel (LCD) anti-aliasing, as it does the
+     JS app's text: on a transparent layer over the canvas it falls back to grey. The pane is the surface colour; every
+     piece of text carries it (`p.tx`, `.txc`), the transcript box as a whole does not, for the canvas shows through. */
+  #controls .tx-clip { position: absolute; overflow: auto; scrollbar-width: none; overscroll-behavior: none; pointer-events: none; }
+  #controls .tx-clip.tx-still { overflow: clip; }
+  #controls [inert] .tx-clip { visibility: hidden; }
+  #controls p.tx {
+    position: absolute; margin: 0; padding: 1px 0; pointer-events: auto; cursor: text; touch-action: pinch-zoom;
+    font: 22px/1.7 "Source Serif 4", Georgia, "Times New Roman", serif; color: var(--ink, #1B2230);
+    overflow-wrap: anywhere; user-select: text;
+  }
+  /* a word on the last row of a line reaches 44px (8px past its text box each way, 9 with the room for rounding):
+     the line has room for it under its text, so nothing of the line overflows into the next one. The screen
+     spaces lines without this room (`web::measure` takes it off), so the layout is the JS app's. */
+  #controls p.tx:has(.w) { padding-bottom: 9px; padding-bottom: max(1px, calc(9px - (1lh - 1.35em) / 2)); }
+  #controls p.tx, #controls .txc:not(.pill) { background-color: var(--surface, #FFFFFF); }
+  #controls p.tx.margin { font: 16px/1.5 "Instrument Sans", system-ui, sans-serif; color: var(--muted, #5A6478); }
+  #controls p.tx.plain { white-space: pre-wrap; overflow-wrap: anywhere; padding: 0; font: 13px/1.65 ui-monospace, "SF Mono", Menlo, Consolas, monospace; cursor: auto; }
+  #controls p.tx[data-reading] { text-decoration: underline 3px var(--accent, #2F5BEA); text-underline-offset: 7px; text-decoration-skip-ink: none; }
+  #controls p.tx .b { font-weight: 600; }
+  #controls p.tx .i { font-style: italic; }
+  #controls p.tx .c { font: 0.85em ui-monospace, "SF Mono", Menlo, Consolas, monospace; background: var(--sunken, #F3F5F8); border-radius: 3px; padding: 0 2px; }
+  #controls p.tx .lead { color: var(--ink, #1B2230); font-weight: 600; }
+  #controls p.tx del { color: var(--muted, #5A6478); }
+  #controls p.tx.display { text-align: center; }
+  #controls p.tx .tx-math { position: relative; }
+  /* katex.min.css (fetched with the typesetter) sets the size, 1.21em, and the display margin, 1em, as the JS app has them */
+  /* a formula wider than the column (400% zoom, a narrow window) scrolls inside its own box instead of being cut
+     off by the clip (WCAG 1.4.10); `data-wide` is set by the page when it measures. A formula that fits is
+     inline math, laid out as before. */
+  #controls p.tx .tx-math.disp { display: block; margin: 0; max-width: 100%; overflow-x: auto; overflow-y: hidden; }
+  #controls p.tx .tx-math[data-wide] { display: inline-block; max-width: 100%; overflow-x: auto; overflow-y: hidden; vertical-align: middle; }
+  /* what a selection or a find-in-page holds of a formula: its TeX, transparent text laid over it (the typeset
+     MathML is for the eye: a selection reads its symbols one per line) */
+  #controls p.tx .tx-math math, #controls p.tx .tx-math .katex-html { user-select: none; }
+  #controls p.tx .tx-hit { position: absolute; left: 0; top: 0; bottom: 0; right: 0; overflow: hidden; white-space: nowrap; color: transparent; forced-color-adjust: none;
+    font: 10px/1.2 ui-monospace, "SF Mono", Menlo, Consolas, monospace; user-select: text; pointer-events: none; }
+  /* the end of a line: a break in the text a selection gives, no height */
+  #controls p.tx .tx-nl, #controls .tx-clip > .tx-nl { display: block; height: 0; overflow: hidden; white-space: pre; }
+  #controls p.tx math { font-family: "STIX Two Math", "Cambria Math", math; }
+  /* the TeX source stands in for a formula until the typesetter arrives (about a quarter of a second): quiet, not
+     the red of a formula that failed */
+  #controls p.tx .tx-math.src { font: 0.85em ui-monospace, "SF Mono", Menlo, Consolas, monospace; color: var(--muted, #5A6478); }
+  #controls p.tx .katex-error { font: 0.85em ui-monospace, "SF Mono", Menlo, Consolas, monospace; color: var(--bad, #B3261E); }
+  /* the rest of the transcript pane is text too (css/components.css `.who-head`, `.legend`, `.tx-foot`, base `.pill`,
+     `.stream`): placed by the screen, laid out and measured by the page */
+  #controls .txc { position: absolute; margin: 0; padding: 0; pointer-events: auto; cursor: text; user-select: text; touch-action: pinch-zoom;
+    font: 14px/1.4 "Instrument Sans", system-ui, sans-serif; color: var(--ink, #1B2230); overflow-wrap: anywhere; }
+  #controls .txc.name { font: 600 32px/1.15 "Source Serif 4", Georgia, "Times New Roman", serif; }
+  #controls .txc.meta, #controls .txc.foot { color: var(--muted, #5A6478); }
+  #controls .txc.foot { font-size: 13px; }
+  #controls .txc.stream { font: 20px/1.7 "Source Serif 4", Georgia, "Times New Roman", serif; white-space: pre-wrap; }
+  #controls .txc.legend { display: flex; flex-wrap: wrap; gap: 6px 20px; font-size: 13px; color: var(--muted, #5A6478); overflow-wrap: normal; }
+  #controls .txc.legend .lg { display: flex; align-items: center; gap: 8px; }
+  #controls .txc.legend .k { padding: 0 6px; border-radius: 4px; }
+  #controls .txc.legend .k.warn { background: var(--warn, #FFE8A3); color: var(--ink, #1B2230); }
+  #controls .txc.legend .k.bad { background: var(--bad-bg, #FCE9E7); color: var(--bad, #B3261E); text-decoration: underline dashed var(--bad, #B3261E); text-decoration-thickness: 2px; text-underline-offset: 3px; }
+  #controls .txc.legend .k.ok { color: var(--ink, #1B2230); text-decoration: underline; text-decoration-color: var(--ok, #1F7A4D); text-decoration-thickness: 2px; text-underline-offset: 3px; }
+  #controls .txc.pill { width: max-content !important; box-sizing: border-box; padding: 6px 14px; border-radius: 999px; font-weight: 600; white-space: nowrap; overflow-wrap: normal; cursor: default; }
+  #controls .txc.pill.ok { background: var(--ok-bg, #E3F4EA); color: var(--ok, #1F7A4D); }
+  #controls .txc.pill.warn { background: var(--warn, #FFE8A3); color: var(--ink, #1B2230); }
+  #controls .txc.pill.bad { background: var(--bad-bg, #FCE9E7); color: var(--bad, #B3261E); }
+  #controls .txc.pill.busy { background: var(--hover, #E8ECF2); color: var(--ink, #1B2230); }
+  #controls .txc.pill.queued { box-shadow: inset 0 0 0 1px var(--line2, #D5DAE3); color: var(--muted, #5A6478); }
+  @media (forced-colors: active) {
+    #controls .txc.pill, #controls .txc.legend .k { border: 1px solid CanvasText; }
+  }
+  /* flagged words (css/components.css `.w`): the painted word is 4px of padding round the text as in the JS app; the
+     button itself reaches 8px further up and down (44px high, the same margin takes it back: the line is not taller) */
+  #controls p.tx .w {
+    position: relative; isolation: isolate; display: inline-block; margin: -8px 0; padding: 8px 4px; border: 0; background: transparent;
+    font: inherit; color: inherit; line-height: 1.35; cursor: pointer; text-align: inherit; outline: none;
+    /* one box as long as it fits the column (shrink-to-fit); a word longer than the column breaks instead of being cut off */
+    max-width: 100%; overflow-wrap: anywhere;
+    /* a 44px target on lines closer than 44px overlaps the next line's box: the word wins there */
+    z-index: 1;
+  }
+  #controls p.tx .w::before { content: ""; position: absolute; inset: 8px 0; z-index: -1; border-radius: 4px; }
+  #controls p.tx .w.suggest::before { background: var(--warn, #FFE8A3); }
+  #controls p.tx .w.illegible { color: var(--bad, #B3261E); text-decoration: underline dashed var(--bad, #B3261E); text-decoration-thickness: 2px; text-underline-offset: 5px; }
+  #controls p.tx .w.illegible::before { background: var(--bad-bg, #FCE9E7); }
+  #controls p.tx .w.checked { text-decoration: underline; text-decoration-color: var(--ok, #1F7A4D); text-decoration-thickness: 2px; text-underline-offset: 5px; }
+  #controls p.tx .w:hover::before { box-shadow: 0 0 0 1px var(--line2, #D5DAE3); }
+  #controls p.tx .w.sel::before { outline: 2px solid var(--ink, #1B2230); outline-offset: 2px; }
+  @media (forced-colors: active) {
+    #controls p.tx .w::before { border: 1px solid ButtonBorder; }
+    #controls p.tx .w.sel::before { outline-color: Highlight; }
+  }
+  /* live regions: always in the document (one that appears together with its text is often not spoken) */
+  .live { position: absolute; left: 0; top: 0; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  /* what is on the page before the first frame, and instead of it when the app cannot start: plain text, so a
+     screen reader has something to say while the 1.8 MB download runs (the JS app is DOM and has its text at once) */
+  #boot { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px;
+          padding: 24px; text-align: center; font: 18px/1.4 system-ui, sans-serif; color: #1B2230; }
+  #boot p { margin: 0; max-width: 40em; }
+  #boot .detail { font-size: 14px; opacity: .8; }
+  @media (prefers-color-scheme: dark) { #boot { color: #E6EAF2; } }
+  /* Windows contrast themes: the page behind the canvas takes the system colours */
+  @media (forced-colors: active) { html, body { background: Canvas; } #boot { color: CanvasText; } }
+</style>
+</head>
+<body>
+<canvas id="c" tabindex="-1" aria-hidden="true"></canvas>
+<div id="controls"></div>
+<div id="announce" class="live" role="status" aria-live="polite" aria-atomic="true"></div>
+<div id="announce-alert" class="live" role="alert" aria-live="assertive" aria-atomic="true"></div>
+<div id="boot"><p id="boot-status" role="status">Loading viSHion&hellip;</p><div id="boot-error" role="alert"></div></div>
+<noscript>viSHion needs JavaScript and WebAssembly.</noscript>
+<script type="module">
+import init, { start } from './vishion_app.js';
+try {
+  await init();
+  await start('c');
+  window.__ready = true;
+  document.getElementById('boot')?.remove();
+} catch (e) {
+  window.__error = String(e);
+  console.error(e);
+  // say why, in text: without WebGL (a remote desktop, a blocklisted GPU, a locked-down browser) the canvas
+  // cannot be created and the page would be blank for everyone, not only for a screen reader
+  const msg = /webgl/i.test(window.__error)
+    ? 'viSHion could not start: this browser has no WebGL, which it draws with. Turn on hardware acceleration in the browser settings, or open viSHion in another browser.'
+    : 'viSHion could not start. Reload the page; if it happens again, try another browser.';
+  const st = document.getElementById('boot-status');
+  if (st) st.textContent = '';
+  const box = document.getElementById('boot-error');
+  if (box) {
+    const p = document.createElement('p');
+    p.textContent = msg;
+    const d = document.createElement('p');
+    d.className = 'detail';
+    d.textContent = window.__error;
+    box.append(p, d);
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,161 @@
+{
+  "functional": {
+    "count": "3",
+    "stored": "stored: {\"theme\":\"dark\"}",
+    "fontOk": true,
+    "violations": [],
+    "cspHeader": "default-src 'self'; script-src 'self' https://cdn.jsdelivr.net 'sha256-1E5ezg6KKp4xOwY/5fOsJBORK7Re+Fka9Lsd/x7zRq4=' 'wasm-unsafe-eval' 'sha256-dpikx7oThnbBu9Q0YzKjDyBIgplC9/QxopvWZMHnHx8='; style-src 'self' https://cdn.jsdelivr.net 'unsafe-inline'; font-src 'self' https://cdn.jsdelivr.net; img-src 'self' blob: data:; connect-src 'self' https: http://localhost:* http://127.0.0.1:*; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
+    "cspConsoleErrors": [],
+    "allConsole": [
+      "error: Failed to load resource: the server responded with a status of 404 (Not Found)"
+    ],
+    "wasm": {
+      "path": "/s2-leptos-csp-577185d1c8cfce7d_bg.wasm",
+      "status": 200,
+      "content-type": "application/wasm",
+      "cache-control": "public, max-age=31536000, immutable",
+      "content-encoding": "gzip"
+    },
+    "js": {
+      "path": "/s2-leptos-csp-577185d1c8cfce7d.js",
+      "status": 200,
+      "content-type": "text/javascript; charset=utf-8",
+      "cache-control": "public, max-age=31536000, immutable",
+      "content-encoding": "gzip"
+    },
+    "font": {
+      "path": "/fonts/caveat-600-logo.woff2",
+      "status": 200,
+      "content-type": "font/woff2",
+      "cache-control": "public, max-age=31536000, immutable"
+    },
+    "index": {
+      "status": 200,
+      "content-type": "text/html; charset=utf-8",
+      "cache-control": "public, max-age=0, must-revalidate",
+      "content-encoding": "gzip"
+    },
+    "tokensCss": {
+      "status": 200,
+      "content-type": "text/css; charset=utf-8",
+      "cache-control": "public, max-age=0, must-revalidate",
+      "content-encoding": "gzip"
+    }
+  },
+  "negative": {
+    "no_wasm_unsafe_eval": {
+      "mounted": false,
+      "h1Font": null,
+      "violations": [
+        "script-src wasm-eval"
+      ],
+      "console": [
+        "pageerror: WebAssembly.instantiateStreaming(): Compiling or instantiating WebAssembly module violates the following Content Security policy directive because 'unsafe-eval' is not an allowed source of script in the following Content Security Policy directive: \"script-src 'self' https://cdn.jsdelivr.net 'sha256-1E5ezg6KKp4xOwY/5fOsJBORK7Re+Fka9Lsd/x7zRq4=' 'sha256-dpikx7oThnbBu9Q0YzKjDyBIgplC9/QxopvWZMHnHx8='\"."
+      ]
+    },
+    "no_inline_hash": {
+      "mounted": false,
+      "h1Font": null,
+      "violations": [
+        "script-src-elem inline"
+      ],
+      "console": [
+        "error: Executing inline script violates the following Content Security Policy directive 'script-src 'self' https://cdn.jsdelivr.net 'sha256-1E5ezg6KKp4xOwY/5fOsJBORK7Re+Fka9Lsd/x7zRq4=' 'wasm-unsafe-eval''. Either the 'unsafe-inline' keyword, a hash ('sha256-dpikx7oThnbBu9Q0YzKjDyBIgplC9/QxopvWZMHnHx8='), or a nonce ('nonce-...') is required to enable inline execution. The action has been blocked."
+      ]
+    },
+    "strict_style_no_unsafe_inline": {
+      "mounted": true,
+      "h1Font": "Caveat",
+      "violations": [
+        "style-src-attr inline"
+      ],
+      "console": [
+        "error: Applying inline style violates the following Content Security Policy directive 'style-src 'self' https://cdn.jsdelivr.net'. Either the 'unsafe-inline' keyword, a hash ('sha256-Atzl71Ntt1fouDRSzpzGNAHHIGOF5zpC3hambbsDFNk='), or a nonce ('nonce-...') is required to enable inline execution. Note that hashes do not apply to event handlers, style attributes and javascript: navigations unless the 'unsafe-hashes' keyword is present. The action has been blocked."
+      ]
+    }
+  },
+  "sizes": {
+    "wasm": {
+      "raw": 69161,
+      "gzip": 29011,
+      "brotli": 24495
+    },
+    "js_glue": {
+      "raw": 25399,
+      "gzip": 5614,
+      "brotli": 4903
+    }
+  },
+  "timing": [
+    {
+      "app": "leptos",
+      "n": 10,
+      "cold_ready_ms": 37.20000001788139,
+      "warm_ready_ms": 27.19999998807907,
+      "cold_load_ms": 32.70000001788139,
+      "warm_load_ms": 22.5,
+      "cold_all": [
+        38,
+        38,
+        39,
+        42,
+        37,
+        35,
+        36,
+        35,
+        37,
+        36
+      ],
+      "warm_all": [
+        27,
+        26,
+        25,
+        26,
+        28,
+        27,
+        30,
+        26,
+        26,
+        31
+      ],
+      "cold_transfer_bytes": 37564,
+      "warm_transfer_bytes": 600,
+      "cspViolations": []
+    },
+    {
+      "app": "legacy",
+      "n": 10,
+      "cold_ready_ms": 240.09999999403954,
+      "warm_ready_ms": 113.30000001192093,
+      "cold_load_ms": 270.7000000178814,
+      "warm_load_ms": 133.7000000178814,
+      "cold_all": [
+        221,
+        215,
+        208,
+        346,
+        237,
+        304,
+        240,
+        222,
+        391,
+        255
+      ],
+      "warm_all": [
+        113,
+        113,
+        111,
+        108,
+        110,
+        113,
+        119,
+        116,
+        114,
+        117
+      ],
+      "cold_transfer_bytes": 307278,
+      "warm_transfer_bytes": 11100,
+      "cspViolations": []
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+[package]
+name = "s3_compat"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wasm-bindgen = "=0.2.129"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+web-sys = { version = "0.3", features = [
+  "Window", "Storage", "IdbFactory", "IdbOpenDbRequest", "IdbDatabase", "IdbTransaction",
+  "IdbTransactionMode", "IdbObjectStore", "IdbRequest", "DomException", "Blob", "BlobPropertyBag", "Event", "File",
+] }
+
+[features]
+# keeps every number's original text (needed to avoid 1e21 / 0.000001 / 1e16 reformatting)
+arbprec = ["serde_json/arbitrary_precision"]
+# correctly rounded float parsing (default serde_json parsing can be 1 ULP off)
+frt = ["serde_json/float_roundtrip"]
+
+[profile.release]
+opt-level = "s"

@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Subject words</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap">
+<style>
+body{margin:0;background:#EEF1F5}
+a{color:var(--ink)}
+a:hover{color:var(--accent)}
+button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
+.ghost{background:transparent;border:0;border-radius:8px;color:inherit;font:inherit;cursor:pointer}
+.ghost:hover{background:var(--hover)}
+.btn{height:44px;padding:0 16px;border:1px solid var(--line2);border-radius:8px;background:var(--surface);color:var(--ink);font:inherit;font-weight:600;cursor:pointer}
+</style>
+</helmet>
+
+<div style="{{tk}}">
+<div style="position: relative; min-height: 900px; box-sizing: border-box; overflow: hidden; background: var(--bg); color: var(--ink); font-family: 'Instrument Sans', system-ui, sans-serif; font-size: 14px; line-height: 1.4">
+
+  <div aria-hidden="true" style="position: absolute; inset: 0">
+    <div style="height: 64px; background: var(--surface); border-bottom: 1px solid var(--line)"></div>
+    <div style="max-width: 1120px; margin: 0 auto; padding: 40px 24px">
+      <div style="width: 420px; max-width: 100%; height: 40px; border-radius: 6px; background: var(--hover)"></div>
+      <div style="height: 340px; margin-top: 40px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface)"></div>
+    </div>
+  </div>
+  <div aria-hidden="true" style="position: absolute; inset: 0; background: var(--scrim)"></div>
+
+  <div role="dialog" aria-modal="true" aria-labelledby="gl-title" style="position: relative; width: 600px; max-width: calc(100% - 32px); margin: 48px auto; box-sizing: border-box; display: flex; flex-direction: column; border-radius: 12px; background: var(--surface); box-shadow: 0 24px 64px -8px rgba(5,7,11,.5)">
+
+    <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 12px 12px 28px; border-bottom: 1px solid var(--line)">
+      <h1 id="gl-title" style="margin: 0; font-family: 'Source Serif 4', Georgia, serif; font-size: 24px; font-weight: 600; line-height: 1.2">Subjects and their words</h1>
+      <a href="AssignmentSettings.dc.html" class="ghost" aria-label="Close" style="width: 44px; height: 44px; display: flex; align-items: center; justify-content: center; text-decoration: none">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </a>
+    </div>
+
+    <div style="display: flex; flex-direction: column; gap: 20px; padding: 24px 28px">
+
+      <div style="display: flex; flex-direction: column; gap: 6px">
+        <label for="gl-topic" style="font-weight: 600">Subject</label>
+        <select id="gl-topic" style="height: 44px; padding: 0 12px; border: 1px solid var(--line2); border-radius: 8px; background: var(--surface); color: var(--ink); font: inherit">
+          <option>Intro statistics</option>
+          <option>Calculus</option>
+          <option>Computer science</option>
+          <option>General</option>
+        </select>
+      </div>
+
+      <div style="display: flex; flex-direction: column; gap: 6px">
+        <label for="gl-desc" style="font-weight: 600">Description</label>
+        <input id="gl-desc" type="text" value="Written responses and worked problems from Intro to Statistics" autocomplete="off" style="height: 44px; padding: 0 12px; box-sizing: border-box; border: 1px solid var(--line2); border-radius: 8px; background: var(--surface); color: var(--ink); font: inherit">
+      </div>
+
+      <div style="display: flex; flex-direction: column; gap: 6px">
+        <label for="gl-terms" style="font-weight: 600">Words students use in this subject</label>
+        <textarea id="gl-terms" rows="9" style="padding: 10px 12px; box-sizing: border-box; border: 1px solid var(--line2); border-radius: 8px; background: var(--surface); color: var(--ink); font: inherit; line-height: 1.5; resize: vertical">confidence interval
+confidence level
+margin of error
+standard deviation
+standard error
+sampling distribution
+population
+sample
+point estimate
+hypothesis
+p-value
+z-score
+t-distribution
+outlier
+quartile</textarea>
+        <p style="margin: 0; font-size: 13px; color: var(--muted)">One word or phrase per line, or separated by commas. These are added to the model’s instructions, and used to suggest corrections after a page is read.</p>
+      </div>
+    </div>
+
+    <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 14px 28px; border-top: 1px solid var(--line)">
+      <button type="button" class="ghost" style="height: 44px; padding: 0 12px; font-weight: 600">Restore defaults</button>
+      <span style="flex: 1 1 0"></span>
+      <button type="button" class="btn">Delete subject</button>
+      <button type="button" class="btn">New subject</button>
+      <a href="AssignmentSettings.dc.html" style="display: inline-flex; align-items: center; height: 44px; padding: 0 22px; box-sizing: border-box; border-radius: 8px; background: var(--ink); color: var(--on-ink); font-weight: 600; text-decoration: none">Done</a>
+    </div>
+  </div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"dark":{"editor":"boolean","default":false},"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  tk() {
+    const L = { bg: '#EEF1F5', surface: '#FFFFFF', ink: '#141B2D', 'on-ink': '#FFFFFF', muted: '#5A6477', line: '#D3D9E2', line2: '#BCC5D2', hover: '#E4E9F0', accent: '#26358F', scrim: 'rgba(20,27,45,.5)' };
+    const D = { bg: '#0F131C', surface: '#171C28', ink: '#E8ECF3', 'on-ink': '#0F131C', muted: '#9AA5B8', line: '#2B3345', line2: '#3E4A63', hover: '#232B3B', accent: '#9DB0FF', scrim: 'rgba(5,7,11,.62)' };
+    const dark = this.props.dark === true || this.props.dark === 'true';
+    const T = dark ? D : L;
+    return Object.keys(T).map((k) => '--' + k + ':' + T[k]).join(';') + ';display:contents;';
+  }
+
+  renderVals() {
+    return { tk: this.tk() };
+  }
+}
+</script>
+</body>
+</html>

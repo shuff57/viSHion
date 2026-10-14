@@ -1,0 +1,6 @@
+{
+  // Local-only spike config. Never deploy this: no routes, no account bindings.
+  "name": "vishion-s2-spike",
+  "compatibility_date": "2026-01-14",
+  "assets": { "directory": "./dist" }
+}

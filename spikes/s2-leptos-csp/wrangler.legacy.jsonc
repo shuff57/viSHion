@@ -1,0 +1,6 @@
+{
+  // Serves the current JS app (copied into ./dist-legacy by build.mjs) for comparison.
+  "name": "vishion-s2-legacy",
+  "compatibility_date": "2026-01-14",
+  "assets": { "directory": "./dist-legacy" }
+}

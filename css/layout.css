@@ -1,0 +1,101 @@
+/* Shell: top header, optional alert strip, then one of four views. */
+.app { display: flex; flex-direction: column; height: 100vh; height: 100dvh; }
+.main { position: relative; flex: 1; min-height: 0; }
+.view { display: none; height: 100%; }
+.app[data-view="home"] #home,
+.app[data-view="inbox"] #inbox,
+.app[data-view="add"] #add { display: block; overflow: auto; }
+.app[data-view="review"] #project { display: grid; }
+
+/* ---------- Header ---------- */
+.topbar {
+  flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 24px;
+  min-height: 64px; padding: 8px 24px;
+  background: var(--surface); border-bottom: 1px solid var(--line);
+}
+.brand {
+  display: flex; align-items: center; min-height: 44px; padding: 0; border: 0; background: none;
+  font-size: 15px; font-weight: 600; text-decoration: none; color: var(--ink);
+}
+.brand:hover { color: var(--accent); }
+
+/* Logo: rests as clean type. On first load and on hover, handwriting is scanned into type. */
+.logo { height: 32px; width: auto; display: block; overflow: visible; }
+.lg-hand { font: 600 68px "Caveat", cursive; fill: var(--accent); clip-path: inset(0 0 0 100%); }
+.lg-clean { font: 600 64px var(--mono); fill: var(--ink); }
+.lg-clean tspan { fill: var(--accent); }
+.lg-bar { fill: var(--accent); opacity: 0; }
+.logo.intro .lg-hand, .brand:hover .lg-hand, .brand:focus-visible .lg-hand { animation: lg-hand 1.6s ease-in-out both; }
+.logo.intro .lg-clean, .brand:hover .lg-clean, .brand:focus-visible .lg-clean { animation: lg-clean 1.6s ease-in-out both; }
+.logo.intro .lg-bar, .brand:hover .lg-bar, .brand:focus-visible .lg-bar { animation: lg-bar 1.6s ease-in-out both; }
+@keyframes lg-hand { from { clip-path: inset(0); } to { clip-path: inset(0 0 0 100%); } }
+@keyframes lg-clean { from { clip-path: inset(0 100% 0 0); } to { clip-path: inset(0); } }
+@keyframes lg-bar { 0% { opacity: 1; transform: translateX(0); } 92% { opacity: 1; } 100% { opacity: 0; transform: translateX(300px); } }
+.crumb {
+  display: flex; align-items: center; gap: 6px; min-height: 44px; padding: 0; border: 0; background: none;
+  font-weight: 500; color: var(--ink); text-decoration: none; max-width: 36ch;
+}
+.crumb span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.crumb:hover { color: var(--accent); }
+.topbar-right { margin-left: auto; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.save-state { display: flex; align-items: center; gap: 6px; color: var(--muted); white-space: nowrap; }
+.save-state[data-s="saved"] .ico { color: var(--ok); }
+.save-state[data-s="error"] { color: var(--bad); font-weight: 600; }
+.student-nav { display: flex; align-items: center; gap: 4px; }
+.student-nav .who { display: flex; flex-direction: column; align-items: center; min-width: 96px; text-align: center; }
+.student-nav .who b { font-weight: 600; }
+.student-nav .who span { font-size: 13px; color: var(--muted); }
+
+.banner-slot:empty { display: none; }
+.banner-slot { display: grid; gap: 1px; background: var(--line); border-bottom: 1px solid var(--line); }
+.banner { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding: 10px 24px; background: var(--bad-bg); }
+.banner.warn { background: var(--warn-bg); }
+.banner .ico { color: var(--bad); }
+.banner.warn .ico { color: var(--ink); }
+.banner p { flex: 1 1 320px; max-width: none; }
+
+/* ---------- Page-style views (home, inbox, add) ---------- */
+.page-inner { width: 100%; max-width: 1120px; margin: 0 auto; padding: 40px 24px 56px; }
+.page-title { font-family: var(--serif); font-size: 36px; line-height: 1.15; font-weight: 600; }
+.page-sub { margin-top: 8px; color: var(--muted); }
+.section-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; margin-top: 40px; }
+.section-title { font-family: var(--serif); font-size: 24px; line-height: 1.2; font-weight: 600; }
+
+/* ---------- Review: scan | text ---------- */
+.review { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); min-height: 0; }
+.review[data-layout="text"] { grid-template-columns: minmax(0, 1fr); }
+.review[data-layout="text"] #doc-pane { display: none; }
+.review > .pane { min-width: 0; min-height: 0; overflow: auto; }
+.scan { display: flex; flex-direction: column; background: var(--scanbg); }
+.scan-head {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 8px;
+  padding: 4px 12px 4px 20px; background: var(--scanhead); border-bottom: 1px solid var(--scanline);
+}
+.scan-head b { font-weight: 600; }
+.scan-tools { display: flex; align-items: center; gap: 2px; }
+.scan-pages {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 20px;
+  background: var(--scanhead); border-bottom: 1px solid var(--scanline);
+}
+.review > .pane.scan { overflow: hidden; }
+.scan-stage { flex: 1; min-height: 0; overflow: auto; display: block; padding: 32px 32px 56px; }
+.scan-stage.is-zoomed { cursor: zoom-out; }
+.scan-stage:not(.is-zoomed) { cursor: zoom-in; }
+.text { display: flex; flex-direction: column; background: var(--surface); border-left: 1px solid var(--line); }
+.review[data-layout="text"] .text { border-left: 0; }
+.tx-inner { flex: 1; width: 100%; max-width: 760px; margin: 0 auto; padding: 32px 40px 24px; }
+.tray-wrap { flex: none; position: sticky; bottom: 0; z-index: 2; border-top: 1px solid var(--line); background: var(--sunken); box-shadow: 0 -8px 16px -12px rgba(20, 27, 45, 0.25); }
+.tray { width: 100%; max-width: 760px; margin: 0 auto; padding: 12px 40px 24px; }
+
+@media (max-width: 900px) {
+  .review, .review[data-layout="text"] { display: block !important; overflow: auto; }
+  .review > .pane, .review > .pane.scan { overflow: visible; }
+  .scan-stage { max-height: 80vh; }
+  .text { border-left: 0; border-top: 1px solid var(--line); }
+  .tx-inner { padding: 24px 20px 20px; }
+  .tray { padding: 12px 20px 24px; }
+  .page-inner { padding: 28px 16px 48px; }
+  .page-title { font-size: 30px; }
+  .topbar { padding: 8px 16px; gap: 4px 16px; }
+  .scan-stage { padding: 20px 16px 32px; }
+}

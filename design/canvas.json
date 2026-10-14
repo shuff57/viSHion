@@ -1,0 +1,112 @@
+{
+  "v": 3,
+  "createdOnFiles": {
+    "v": 1,
+    "at": "2026-10-11T00:57:00Z"
+  },
+  "title": "Handwriting Transcriber",
+  "launch": {
+    "view": "canvas"
+  },
+  "pages": [],
+  "boards": {
+    "Main.dc.html": {
+      "x": 0,
+      "y": 0,
+      "w": 1440,
+      "h": 900,
+      "title": "Review a transcript",
+      "expand": "fill",
+      "is_interactive": true
+    },
+    "Batch.dc.html": {
+      "x": 1520,
+      "y": 0,
+      "w": 1440,
+      "h": 900,
+      "title": "Assignment inbox",
+      "expand": "fill",
+      "is_interactive": true
+    },
+    "Add.dc.html": {
+      "x": 0,
+      "y": 1020,
+      "w": 1440,
+      "h": 900,
+      "title": "Add pages",
+      "expand": "fill"
+    },
+    "Phone.dc.html": {
+      "x": 1520,
+      "y": 1020,
+      "w": 390,
+      "h": 844,
+      "title": "Capture on phone (later)"
+    },
+    "Projects.dc.html": {
+      "x": 0,
+      "y": 2040,
+      "w": 1440,
+      "h": 900,
+      "title": "Assignments home",
+      "expand": "fill",
+      "is_interactive": true
+    },
+    "Settings.dc.html": {
+      "x": 1520,
+      "y": 2040,
+      "w": 1440,
+      "h": 900,
+      "title": "Settings",
+      "expand": "fill",
+      "is_interactive": true
+    },
+    "Export.dc.html": {
+      "x": 0,
+      "y": 3060,
+      "w": 1440,
+      "h": 900,
+      "title": "Export transcripts",
+      "expand": "fill",
+      "is_interactive": true
+    },
+    "States.dc.html": {
+      "x": 1520,
+      "y": 3060,
+      "w": 1440,
+      "h": 1500,
+      "title": "System states",
+      "expand": "fill"
+    },
+    "AssignmentSettings.dc.html": {
+      "x": 0,
+      "y": 4680,
+      "w": 1440,
+      "h": 900,
+      "title": "Assignment settings",
+      "expand": "fill"
+    },
+    "Glossary.dc.html": {
+      "x": 1520,
+      "y": 4680,
+      "w": 1440,
+      "h": 900,
+      "title": "Subjects and their words",
+      "expand": "fill"
+    }
+  },
+  "order": [
+    "Main.dc.html",
+    "Batch.dc.html",
+    "Add.dc.html",
+    "Phone.dc.html",
+    "Projects.dc.html",
+    "Settings.dc.html",
+    "Export.dc.html",
+    "States.dc.html",
+    "AssignmentSettings.dc.html",
+    "Glossary.dc.html"
+  ],
+  "notes": {},
+  "designSystems": []
+}

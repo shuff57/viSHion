@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>viSHion logo options</title>
+<style>
+  @font-face { font-family:'Instrument Sans'; font-weight:600; src:url(fonts/instrument-sans-latin-600-normal.woff2) format('woff2'); }
+  @font-face { font-family:'Source Serif 4'; font-style:italic; src:url(fonts/source-serif-4-latin-400-italic.woff2) format('woff2'); }
+  @font-face { font-family:'Source Serif 4'; font-weight:600; src:url(fonts/source-serif-4-latin-600-normal.woff2) format('woff2'); }
+  :root { --bg:#EEF1F5; --card:#fff; --ink:#141B2D; --accent:#26358F; --muted:#5b647a; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#0F131C; --card:#171C28; --ink:#E8ECF3; --accent:#8FA0FF; --muted:#9aa3b8; } }
+  body { margin:0; padding:32px 16px; background:var(--bg); color:var(--ink); font:15px/1.4 'Instrument Sans',system-ui,sans-serif; }
+  h1 { font-size:20px; margin:0 0 4px; } p.sub { margin:0 0 24px; color:var(--muted); }
+  .grid { display:grid; gap:20px; grid-template-columns:repeat(auto-fit,minmax(300px,1fr)); max-width:1100px; }
+  .card { background:var(--card); border-radius:14px; padding:20px; cursor:pointer; }
+  .card svg { width:100%; height:auto; display:block; }
+  .card b { display:inline-block; background:var(--accent); color:var(--card); border-radius:6px; padding:0 8px; margin-right:8px; }
+  .card span { color:var(--muted); display:block; margin-top:8px; }
+
+  /* A: scan converts scribble to type, ping-pongs */
+  .a-word  { font:600 56px 'Instrument Sans',system-ui,sans-serif; fill:var(--ink); animation:a-type 5s ease-in-out infinite alternate; }
+  .a-word tspan { fill:var(--accent); }
+  .a-scrib { fill:none; stroke:var(--ink); stroke-width:3; stroke-linecap:round; animation:a-scr 5s ease-in-out infinite alternate; opacity:.55; }
+  .a-bar   { fill:var(--accent); animation:a-bar 5s ease-in-out infinite alternate; }
+  @keyframes a-type { 0%,12% { clip-path:inset(0 100% 0 0); } 88%,100% { clip-path:inset(0 0 0 0); } }
+  @keyframes a-scr  { 0%,12% { clip-path:inset(0 0 0 0); }   88%,100% { clip-path:inset(0 0 0 100%); } }
+  @keyframes a-bar  { 0%,12% { transform:translateX(0); }    88%,100% { transform:translateX(300px); } }
+
+  /* B: viewfinder snaps onto the word, handwritten underline draws */
+  .b-word  { font:600 56px 'Instrument Sans',system-ui,sans-serif; fill:var(--ink); }
+  .b-word tspan { fill:var(--accent); }
+  .b-br    { fill:none; stroke:var(--accent); stroke-width:5; stroke-linecap:round; stroke-linejoin:round;
+             transform-origin:180px 60px; animation:b-snap .7s cubic-bezier(.2,1.4,.4,1) .2s both; }
+  .b-ul    { fill:none; stroke:var(--accent); stroke-width:3; stroke-linecap:round; stroke-dasharray:1; stroke-dashoffset:1;
+             animation:b-draw .8s ease-out .9s forwards; }
+  .b-dot   { fill:var(--accent); animation:b-pulse 1.6s ease-in-out 1.8s infinite; }
+  @keyframes b-snap  { from { transform:scale(1.35); opacity:0; } to { transform:none; opacity:1; } }
+  @keyframes b-draw  { to { stroke-dashoffset:0; } }
+  @keyframes b-pulse { 50% { opacity:.2; } }
+
+  /* C: ink-drop eye with ripples, italic serif wordmark */
+  .c-eye   { fill:none; stroke:var(--ink); stroke-width:3.5; stroke-linecap:round; stroke-dasharray:1; stroke-dashoffset:1; animation:b-draw 1s ease-out forwards; }
+  .c-pupil { fill:var(--accent); transform-origin:60px 60px; animation:c-pop .5s cubic-bezier(.2,1.6,.4,1) .9s both; }
+  .c-rip   { fill:none; stroke:var(--accent); stroke-width:2; transform-origin:60px 60px; opacity:0; animation:c-rip 3s ease-out 1.4s infinite; }
+  .c-rip:nth-of-type(2) { animation-delay:2.4s; }
+  .c-word  { font:italic 400 52px 'Source Serif 4',Georgia,serif; fill:var(--ink); opacity:0; animation:c-in .6s ease-out 1.2s forwards; }
+  .c-word tspan { font-style:normal; font-weight:600; fill:var(--accent); }
+  @keyframes c-pop { from { transform:scale(0); } to { transform:none; } }
+  @keyframes c-rip { 0% { transform:scale(.4); opacity:.8; } 100% { transform:scale(1); opacity:0; } }
+  @keyframes c-in  { from { opacity:0; transform:translateX(-8px); } to { opacity:1; transform:none; } }
+
+  @media (prefers-reduced-motion: reduce) { * { animation-duration:.01s !important; animation-delay:0s !important; animation-iteration-count:1 !important; } }
+</style>
+</head>
+<body>
+<h1>viSHion: 3 logo options</h1>
+<p class="sub">Click a card to replay its animation.</p>
+<div class="grid">
+
+  <div class="card">
+    <svg viewBox="0 0 360 120" role="img" aria-label="viSHion logo A">
+      <path class="a-scrib" d="M30 72 q8.8 -36 17.6 0 t17.6 0 t17.6 0 t17.6 0 t17.6 0 t17.6 0 t17.6 0 t17.6 0 t17.6 0 t17.6 0 t17.6 0 t17.6 0 t17.6 0 t17.6 0 t17.6 0 t17.6 0 t17.6 0"/>
+      <text class="a-word" x="30" y="82" textLength="300" lengthAdjust="spacingAndGlyphs">vi<tspan>SH</tspan>ion</text>
+      <rect class="a-bar" x="28" y="22" width="4" height="76" rx="2"/>
+    </svg>
+    <span><b>A</b>Scan. Handwriting is read into type, then back again.</span>
+  </div>
+
+  <div class="card">
+    <svg viewBox="0 0 360 120" role="img" aria-label="viSHion logo B">
+      <text class="b-word" x="180" y="76" text-anchor="middle">vi<tspan>SH</tspan>ion</text>
+      <g class="b-br">
+        <path d="M46 36 V22 H64 M296 22 H314 V36 M314 84 V98 H296 M64 98 H46 V84"/>
+      </g>
+      <path class="b-ul" pathLength="1" d="M80 92 C120 84 170 100 240 90 S290 88 300 90"/>
+      <circle class="b-dot" cx="322" cy="22" r="4"/>
+    </svg>
+    <span><b>B</b>Viewfinder. An OCR bounding box locks on, then a pen underlines.</span>
+  </div>
+
+  <div class="card">
+    <svg viewBox="0 0 360 120" role="img" aria-label="viSHion logo C">
+      <circle class="c-rip" cx="60" cy="60" r="52"/>
+      <circle class="c-rip" cx="60" cy="60" r="52"/>
+      <path class="c-eye" pathLength="1" d="M10 60 Q60 14 110 60 Q60 106 10 60 Z"/>
+      <circle class="c-pupil" cx="60" cy="60" r="15"/>
+      <text class="c-word" x="136" y="76">vi<tspan>SH</tspan>ion</text>
+    </svg>
+    <span><b>C</b>Ink eye. A drop lands in the eye and ripples out; serif italic nods to handwriting.</span>
+  </div>
+
+</div>
+<script>
+  // replay: swap in a fresh clone so CSS animations restart
+  document.querySelector('.grid').addEventListener('click', e => {
+    const c = e.target.closest('.card');
+    if (c) c.replaceWith(c.cloneNode(true));
+  });
+</script>
+</body>
+</html>

@@ -1,0 +1,84 @@
+name: rust
+
+on:
+  push:
+    branches: [rust-rewrite, main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  WASM_BINDGEN_VERSION: 0.2.129
+
+jobs:
+  test-and-web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Core stays pure (no egui / web-sys / tokio)
+        run: |
+          if cargo tree -p vishion-core --edges normal | grep -E '(egui|eframe|web-sys|tokio)'; then
+            echo "vishion-core depends on a forbidden crate"; exit 1
+          fi
+
+      - name: cargo test
+        run: cargo test --workspace --locked
+
+      # .cargo/config.toml passes --cfg=web_sys_unstable_apis to every wasm32 build (web clipboard).
+      - name: wasm32 build
+        run: cargo build -p vishion-app --lib --target wasm32-unknown-unknown --release --locked
+
+      - name: wasm32 workspace build (all crates, bin included)
+        run: cargo build --workspace --target wasm32-unknown-unknown --locked
+
+      - name: Install wasm-bindgen-cli (must match Cargo.lock)
+        run: cargo install wasm-bindgen-cli --version "$WASM_BINDGEN_VERSION" --locked
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: crates/app/web/package-lock.json
+
+      - name: Web build (wasm-bindgen + CSP-bearing _headers)
+        working-directory: crates/app/web
+        run: |
+          npm ci
+          node build.mjs
+
+      - name: Deploy-leak check (.assetsignore keeps crates/, target/, Cargo.* out of the asset dir)
+        working-directory: crates/app/web
+        run: node check-assetsignore.mjs
+
+      - name: CSP check (wrangler dev + Chrome, zero violations)
+        working-directory: crates/app/web
+        env:
+          CHROME: /usr/bin/google-chrome
+        run: node check.mjs
+
+      # The native binary needs a GL context: software Mesa under Xvfb. Not yet proven on a hosted runner.
+      - name: Native vs web parity (same demo assignment, same controls, 44pt targets)
+        continue-on-error: true
+        working-directory: crates/app/web
+        env:
+          CHROME: /usr/bin/google-chrome
+          LIBGL_ALWAYS_SOFTWARE: "1"
+        run: |
+          sudo apt-get update && sudo apt-get install -y xvfb libgl1-mesa-dri libxkbcommon-x11-0
+          cargo build -p vishion-app --locked
+          xvfb-run -a node parity.mjs
+
+      - name: Store oracle (JS writes -> Rust reads, rewrites -> JS reloads deep-equal; IDB + folder)
+        working-directory: tools/store-oracle
+        env:
+          CHROME: /usr/bin/google-chrome
+        run: |
+          npm ci
+          node build.mjs
+          node run.mjs

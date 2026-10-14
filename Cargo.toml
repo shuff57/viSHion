@@ -1,0 +1,51 @@
+[workspace]
+resolver = "2"
+members = ["crates/core", "crates/store", "crates/store-oracle", "crates/net", "crates/ui", "crates/app"]
+# spikes/* are standalone throwaway crates with their own Cargo.lock; keep them out of the workspace.
+exclude = ["spikes", "crates/vendor"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "UNLICENSED"
+publish = false
+
+[workspace.dependencies]
+vishion-core = { path = "crates/core" }
+vishion-store = { path = "crates/store" }
+vishion-net = { path = "crates/net" }
+vishion-ui = { path = "crates/ui" }
+serde = { version = "1", features = ["derive"] }
+# S3 rule 1: preserve_order + arbitrary_precision so unknown fields and big numbers round-trip.
+serde_json = { version = "1", features = ["preserve_order", "arbitrary_precision"] }
+# Pinned to 0.28 while latex-rust requires it (plan rule 6).
+# No `default_fonts`: egui's own faces are 1.4 MB of wasm. The review screen bundles Instrument Sans, Source
+# Serif 4 and a Latin subset of Hack (ui/assets/fonts). latex-rust is vendored for the same reason (see
+# crates/vendor/PATCHES.md), otherwise its default egui features switch them back on.
+# The renderer (`glow` or `wgpu`) is chosen by vishion-app features, not here.
+eframe = { version = "0.28", default-features = false, features = ["accesskit"] }
+egui = { version = "0.28", default-features = false }
+
+# eframe 0.28.1 does not compile against web-sys >= 0.3.77 once `--cfg=web_sys_unstable_apis` is set
+# (see .cargo/config.toml): `Navigator::clipboard()` stopped returning an Option. One-line patch, see
+# crates/vendor/PATCHES.md. Drop this when eframe is upgraded (plan rule 6).
+[patch.crates-io]
+eframe = { path = "crates/vendor/eframe" }
+# Font atlas gamma (text weight), one line, see crates/vendor/PATCHES.md.
+egui_glow = { path = "crates/vendor/egui_glow" }
+# The same gamma knob for the wgpu renderer, see crates/vendor/PATCHES.md.
+egui-wgpu = { path = "crates/vendor/egui-wgpu" }
+# Text advances are not rounded to whole pixels (one line), see crates/vendor/PATCHES.md.
+epaint = { path = "crates/vendor/epaint" }
+# latex-rust 2.1.1 with `egui` built without default_fonts (wasm size, plan risk "wasm size").
+latex-rust = { path = "crates/vendor/latex-rust" }
+# Orphan handling no longer depends on the order of the nodes in an update (one block), see crates/vendor/PATCHES.md.
+accesskit_consumer = { path = "crates/vendor/accesskit_consumer" }
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+# names are only for profiling; wasm-bindgen output and the native binary are smaller without them
+strip = "symbols"

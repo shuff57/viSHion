@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <style>
+    .o { fill:none; stroke:#141B2D; stroke-width:5; stroke-linecap:round; stroke-linejoin:round; }
+    .p { fill:#26358F; }
+    @media (prefers-color-scheme: dark) { .o { stroke:#E8ECF3; } .p { fill:#8FA0FF; } }
+  </style>
+  <path class="o" d="M4 32 Q32 6 60 32 Q32 58 4 32 Z"/>
+  <circle class="p" cx="32" cy="32" r="9"/>
+</svg>

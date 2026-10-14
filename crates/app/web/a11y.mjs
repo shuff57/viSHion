@@ -1,0 +1,472 @@
+// Accessibility check of the web build (phase 4): the hidden-DOM twin of the review screen, in Chrome.
+//   - ariaSnapshot assertions: landmarks, headings, groups, lists, roles and names, math, dialog
+//   - axe-core over the page in several states (review, inbox, dialog, phone, forced colours)
+//   - keyboard: focus restored after actions and dialogs, a new screen's heading takes focus, no trap
+//   - announcements through the live regions
+//   - 44px targets, twin laid over the canvas where the widget is drawn, reading order = visual order
+//   - prefers-reduced-motion, forced-colors, 200% and 400% zoom (reflow at 640 and 320 CSS px)
+// Screen readers cannot run headless: crates/ui/A11Y.md is the manual NVDA / VoiceOver pass.
+// Usage: node crates/app/web/a11y.mjs   (run build.mjs first; CHROME env overrides the browser path)
+import { chromium } from 'playwright-core';
+import { createRequire } from 'node:module';
+import fs from 'node:fs';
+import { serve } from './serve.mjs';
+
+const require = createRequire(import.meta.url);
+const axeSource = fs.readFileSync(require.resolve('axe-core/axe.min.js'), 'utf8');
+const exe = process.env.CHROME
+  || (process.platform === 'win32' ? 'C:/Program Files/Google/Chrome/Application/chrome.exe' : '/usr/bin/google-chrome');
+const failures = [];
+const expect = (ok, msg) => { console.log((ok ? 'ok   ' : 'FAIL ') + msg); if (!ok) failures.push(msg); };
+
+const { port, stop } = await serve(+(process.env.PORT || 8789));
+const base = `http://127.0.0.1:${port}`;
+let browser;
+
+/** Open the demo in a new context; returns helpers bound to that page. */
+async function open(label, { query = '', viewport = { width: 1280, height: 800 }, ...ctxOpts } = {}) {
+  // bypassCSP only so axe-core can be injected; the CSP itself is asserted by check.mjs
+  const ctx = await browser.newContext({ viewport, bypassCSP: true, ...ctxOpts });
+  const page = await ctx.newPage();
+  const errors = [];
+  page.on('pageerror', e => errors.push(e.message));
+  await page.goto(`${base}/?demo=1&theme=light${query}`, { waitUntil: 'load' });
+  for (let i = 0; i < 300; i++) {
+    if (await page.evaluate(() => window.__ready === true || !!window.__error)) break;
+    await page.waitForTimeout(100);
+  }
+  const pump = async (n = 5) => { for (let i = 0; i < n; i++) { await page.mouse.move(viewport.width - 30 + (i % 3), viewport.height - 30 + i); await page.waitForTimeout(70); } };
+  await pump(8);
+  await page.waitForSelector('#controls [data-id]', { timeout: 20000 });
+  const api = {
+    label, ctx, page, errors, pump,
+    active: () => page.evaluate(() => { const a = document.activeElement; return a ? (a.getAttribute('data-id') || a.tagName.toLowerCase() + (a.id ? '#' + a.id : '')) : null; }),
+    ids: () => page.evaluate(() => [...document.querySelectorAll('#controls button, #controls input')].map(e => e.dataset.id)),
+    has: async (id) => (await api.ids()).includes(id) || await page.evaluate((i) => !!document.querySelector(`#controls [data-id="${i}"]`), id),
+    attr: (id, n) => page.evaluate(([i, a]) => document.querySelector(`#controls [data-id="${i}"]`)?.getAttribute(a) ?? null, [id, n]),
+    text: (id) => page.evaluate((i) => document.querySelector(`#controls [data-id="${i}"]`)?.textContent ?? null, id),
+    wait: async (fn, ms = 6000) => { const t0 = Date.now(); while (Date.now() - t0 < ms) { if (await fn()) return true; await pump(2); } return false; },
+    announced: () => page.evaluate(() => [document.getElementById('announce').textContent, document.getElementById('announce-alert').textContent]),
+    snapshot: () => page.locator('body').ariaSnapshot(),
+    tabTo: async (id, limit = 120) => {
+      await page.mouse.click(Math.round(viewport.width / 2), 3);
+      for (let i = 0; i < limit; i++) { await page.keyboard.press('Tab'); if ((await api.active()) === id) return true; }
+      return false;
+    },
+    async axe(tag, { modal = false } = {}) {
+      await page.evaluate(axeSource);
+      // a modal dialog takes the page behind it out of the tree on purpose: no main landmark or h1 is the point
+      const off = modal ? ['landmark-one-main', 'page-has-heading-one', 'region'] : [];
+      const res = await page.evaluate(async (off) => {
+        const rules = Object.fromEntries(off.map(r => [r, { enabled: false }]));
+        const r = await window.axe.run(document, { rules, runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa', 'best-practice'] } });
+        return r.violations.map(v => ({ id: v.id, impact: v.impact, help: v.help, nodes: v.nodes.slice(0, 4).map(n => n.target.join(' ') + ' :: ' + (n.failureSummary || '').split('\n').slice(0, 2).join(' | ')) }));
+      }, off);
+      expect(res.length === 0, `axe-core: no violations [${tag}]` + (res.length ? '\n' + JSON.stringify(res, null, 1) : ''));
+      return res;
+    },
+    /** Rectangles of every twin control, in DOM order, from the document. */
+    rects: () => page.evaluate(() => [...document.querySelectorAll('#controls button, #controls input, #controls [tabindex="0"]')].map(e => {
+      const r = e.getBoundingClientRect();
+      return { id: e.dataset.id, x: r.x, y: r.y, w: r.width, h: r.height, disabled: e.disabled === true, tag: e.tagName.toLowerCase(), region: e.closest('[data-region]')?.dataset.region };
+    })),
+    close: () => ctx.close(),
+  };
+  return api;
+}
+
+try {
+  browser = await chromium.launch({
+    executablePath: exe,
+    args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'],
+  });
+
+  // ---------------------------------------------------------------- review screen: structure
+  {
+    const a = await open('review');
+    const { page } = a;
+    const snap = await a.snapshot();
+    console.log(snap.split('\n').slice(0, 14).join('\n') + '\n...');
+    const has = (re, msg) => expect(re.test(snap), msg);
+    has(/^- banner:/m, 'landmark: banner (header) with the student navigation and Done');
+    has(/^- main:/m, 'landmark: main');
+    has(/- region "Page image":/, 'landmark: region "Page image" inside main');
+    has(/- region "Transcript":/, 'landmark: region "Transcript" inside main');
+    has(/^- complementary "Word panel":/m, 'landmark: complementary "Word panel" (the tray)');
+    has(/heading "Maya R\." \[level=1\]/, 'heading: the student is the one h1');
+    has(/heading "Page 1 of 2" \[level=2\]/, 'heading: the page is an h2');
+    has(/heading "Check this word" \[level=2\]/, 'heading: the word panel is an h2');
+    has(/group "Layout":[\s\S]*button "Side by side" \[pressed\]/, 'group "Layout" with a pressed toggle');
+    has(/list "Pages":\s+- listitem:\s+- button "Page 1, 3 words to check" \[pressed\]/, 'the page strip is a list of pages with the current one pressed');
+    has(/list "Choices for this word":\s+- listitem:\s+- button "confidence\. Course word, 90% match"/, 'the choices for a word are a list');
+    has(/textbox "Type what the word says"/, 'textbox with its accessible name');
+    has(/button "Spelling to check: confidance\. Show options\."/, 'a flagged word is a button inside its sentence, named for what it asks');
+    has(/- paragraph: 4 words to check/, 'the count of words to check is read in place (not a live region: one utterance per action)');
+    has(/- paragraph:[\s\S]{0,20}Spelling to check[\s\S]{0,20}Couldn.t read[\s\S]{0,20}You checked it/, 'the legend of the colours is text');
+    expect(/- math "x bar plus or minus 1\.96 times the fraction s over square root of n end fraction equals/.test(snap)
+      && !snap.includes('\\\\' + 'bar{x}'), 'math: role=math with its spoken name, and no text under it (the TeX is not read a second time)');
+    const sentenceOrder = await page.evaluate(() => [...document.querySelectorAll('#controls p[data-id^="line-"]')].map(p => p.textContent.trim()).filter(Boolean).slice(0, 3));
+    expect(/^The 95%/.test(sentenceOrder[0]), 'the text twin reads the transcript in line order: ' + JSON.stringify(sentenceOrder[0]));
+    // every control has a name and nothing focusable is aria-hidden
+    const bad = await page.evaluate(() => [...document.querySelectorAll('#controls button, #controls input, #controls [tabindex="0"]')]
+      .filter(e => !(e.getAttribute('aria-label') || e.textContent || '').trim()).map(e => e.dataset.id));
+    expect(bad.length === 0, 'every control has an accessible name' + (bad.length ? ': ' + bad : ''));
+    const hidden = await page.evaluate(() => [...document.querySelectorAll('[aria-hidden="true"]')].flatMap(e => [e, ...e.querySelectorAll('button, input, [tabindex]')])
+      .filter(e => e.tabIndex >= 0 && e.tagName !== 'CANVAS' && !e.hasAttribute('disabled')).map(e => e.tagName + '#' + e.id));
+    expect(hidden.length === 0, 'nothing tabbable inside aria-hidden' + (hidden.length ? ': ' + hidden : ''));
+
+    // ---- reading order = visual order (region, then 16px row band, then x)
+    const rects = (await a.rects()).filter(r => r.w > 0 && r.region !== undefined);
+    let outOfOrder = [];
+    for (let i = 1; i < rects.length; i++) {
+      const p = rects[i - 1], c = rects[i];
+      if (p.region !== c.region) continue;
+      const pk = [Math.floor(p.y / 16), p.x], ck = [Math.floor(c.y / 16), c.x];
+      if (ck[0] < pk[0] || (ck[0] === pk[0] && ck[1] < pk[1])) outOfOrder.push(`${p.id} -> ${c.id}`);
+    }
+    expect(outOfOrder.length === 0, 'DOM order follows the on-screen order within each region' + (outOfOrder.length ? ': ' + outOfOrder.slice(0, 6) : ''));
+
+    // ---- 44px targets, inside the viewport, over the canvas where they are drawn
+    const small = rects.filter(r => !r.disabled && r.tag !== 'div' && (r.w < 43.5 || r.h < 43.5)).map(r => `${r.id} ${r.w}x${r.h}`);
+    expect(small.length === 0, 'every control is at least 44 x 44 CSS px' + (small.length ? ': ' + small : ''));
+    const off = rects.filter(r => r.x < -1 || r.x + r.w > 1281 || r.w > 1281).map(r => r.id);
+    expect(off.length === 0, 'no control is placed outside the viewport horizontally' + (off.length ? ': ' + off : ''));
+    // ---- text nodes too: headings, lines, counts, math and landmarks are laid over where they are drawn (touch
+    // exploration, magnifier tracking and the highlight of a screen reader follow the rectangle)
+    const geo = await page.evaluate(() => {
+      const box = (e) => { const r = e.getBoundingClientRect(); // a line with words has room under it for their 44px reach (padding-bottom over 1px): the lines are spaced without it
+      const reach = Math.max(0, (parseFloat(getComputedStyle(e).paddingBottom) || 0) - 1);
+      return { id: e.dataset.id, x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height - reach) }; };
+      const q = (s) => [...document.querySelectorAll(s)].map(box);
+      const g = (i) => { const e = document.querySelector('#controls [data-id="' + i + '"]'); return e ? box(e) : null; };
+      return {
+        text: q('#controls h1, #controls h2, #controls h3, #controls p, #controls [role=alert]').filter((b) => b.id !== 'toast'),
+        landmarks: q('#controls [role=banner], #controls [role=main], #controls [role=complementary], #controls [role=region]'),
+        h1: g('student-name'), pane: g('transcript'), lines: q('#controls p[data-id^="line-"]'), tray: g('region-3'),
+      };
+    });
+    const flat = geo.text.filter((b) => b.w <= 0 || b.h <= 0 || b.x < -1 || b.x + b.w > 1282).map((b) => `${b.id} ${b.w}x${b.h}@${b.x},${b.y}`);
+    expect(flat.length === 0, 'every heading, line and count has a rectangle inside the window' + (flat.length ? ': ' + flat.slice(0, 6) : ''));
+    const stacked = geo.text.filter((b) => b.x === 0 && b.w > 1200).map((b) => b.id);
+    expect(stacked.length === 0, 'text is not stacked full width at the left edge' + (stacked.length ? ': ' + stacked.slice(0, 6) : ''));
+    expect(geo.landmarks.length >= 4 && geo.landmarks.every((b) => b.w > 0 && b.h > 0), 'landmarks and regions have the rectangle of what they hold: ' + JSON.stringify(geo.landmarks.map((b) => b.id + ':' + b.w + 'x' + b.h)));
+    expect(geo.h1 && geo.pane && geo.h1.x >= geo.pane.x - 4 && geo.h1.x + geo.h1.w <= geo.pane.x + geo.pane.w + 4, 'the h1 is inside the transcript pane where it is drawn: ' + JSON.stringify([geo.h1, geo.pane]));
+    expect(geo.lines.length > 0 && geo.lines.every((b) => b.x >= geo.pane.x - 4 && b.x + b.w <= geo.pane.x + geo.pane.w + 8), 'every transcript line is inside the transcript pane');
+    // lines do not overlap one another (the highlight of one is not drawn over its neighbour)
+    const sorted = [...geo.lines].sort((p, c) => p.y - c.y);
+    const overlap = sorted.filter((b, i) => i > 0 && b.y < sorted[i - 1].y + sorted[i - 1].h - 3).map((b) => b.id);
+    expect(overlap.length === 0, 'transcript lines do not overlap' + (overlap.length ? ': ' + overlap.slice(0, 4) : ''));
+
+    // alignment end to end: a real mouse click at the centre of the twin's rectangle reaches the widget there
+    const zin = rects.find(r => r.id === 'zoom-in');
+    await page.mouse.click(zin.x + zin.w / 2, zin.y + zin.h / 2);
+    expect(await a.wait(async () => (await a.attr('zoom-out', 'disabled')) === null), 'the twin rectangle of "Zoom in" is where the canvas draws it (a click there zooms)');
+    await page.mouse.click(zin.x - 50, zin.y + zin.h / 2); // "Fit" is the middle button of the three
+    await a.pump(4);
+    expect((await a.snapshot()).includes('button "Zoom out"'), 'twin still intact after the click');
+
+    // ---- canvas: out of the tree, out of the Tab order
+    const canvas = await page.evaluate(() => { const c = document.getElementById('c'); return { t: c.getAttribute('tabindex'), h: c.getAttribute('aria-hidden') }; });
+    expect(canvas.t === '-1' && canvas.h === 'true', 'canvas is tabindex=-1 and aria-hidden');
+
+    // ---- what the legacy tree says that a first twin missed
+    has(/button "Fit the page to the pane, zoom 100%"/, 'zoom: the level is part of the name of the fit button');
+    has(/- img "The scanned handwritten page"/, 'the page image has a text alternative');
+    has(/paragraph: 2 pages, \d+ words/, 'the page and word count are exposed');
+    expect(await page.evaluate(() => [...document.querySelectorAll('#controls del')].some(d => d.textContent === 'probably')),
+      'strikethrough text is a deletion in the transcript twin, not plain text');
+
+    await a.axe('review screen, tray open');
+
+    // ---- announcements
+    const word = await page.evaluate(() => [...document.querySelectorAll('#controls button[data-id^="word-"]')].map(b => b.dataset.id).find(i => /-c:0$/.test(i)));
+    expect(await a.tabTo(word), 'Tab reaches a flagged word');
+    await page.keyboard.press('Enter');
+    expect(await a.wait(async () => await a.has('alt-suggested')), 'Enter opens the word');
+    expect(await a.tabTo('alt-suggested'), 'Tab reaches the suggestion');
+    await page.keyboard.press('Enter');
+    expect(await a.wait(async () => /suggested word/.test((await a.announced())[0])), 'accepting a suggestion is announced: ' + JSON.stringify(await a.announced()));
+    const act = await a.active();
+    expect(act && act !== 'body', 'focus is still on a control after the decision: ' + act);
+    expect(/Next, word \d+ of \d+: .+\. (Nothing is chosen for it yet|Already chosen)\.|All words checked/.test((await a.announced())[0]),
+      'the decision says which word the panel moved on to, so a second Enter is not blind: ' + JSON.stringify(await a.announced()));
+    expect(await a.tabTo('copy'), 'Tab reaches Copy text');
+    await page.keyboard.press('Enter');
+    expect(await a.wait(async () => /Copied Maya R\./.test((await a.announced())[0])), 'the toast is spoken through the live region: ' + JSON.stringify(await a.announced()));
+    expect(await page.evaluate(() => ![...document.querySelectorAll('#controls [data-region="2"] p')].some(p => /Copied/.test(p.textContent))),
+      'the toast is spoken through the live region and is not a paragraph of the transcript');
+    // ---- reordering a page announces where it went
+    expect(await a.tabTo('page-p-maya-1'), 'Tab reaches the first page in the strip');
+    await page.keyboard.press('Alt+ArrowRight');
+    expect(await a.wait(async () => /Moved to position 2 of 2/.test((await a.announced())[0])), 'Alt+Arrow on a page says its new place: ' + JSON.stringify(await a.announced()));
+    await page.keyboard.press('Alt+ArrowLeft');
+    await a.pump(4);
+    // ---- the tray: closing it puts focus on the word
+    expect(await a.tabTo('tray-close'), 'Tab reaches the tray close button');
+    await page.keyboard.press('Enter');
+    expect(await a.wait(async () => ((await a.active()) || '').startsWith('word-')), 'closing the tray returns focus to a word: ' + await a.active());
+
+    expect(await a.tabTo('next-student') || await a.tabTo('prev-student'), 'Tab reaches student navigation');
+    await page.keyboard.press('Enter');
+    expect(await a.wait(async () => /student \d of \d/.test((await a.announced())[0])), 'moving to another student says who: ' + JSON.stringify(await a.announced()));
+
+    // ---- focus restore: a dialog gives focus back to what opened it
+    expect(await a.tabTo('settings'), 'Tab reaches Settings');
+    await page.keyboard.press('Enter');
+    expect(await a.wait(async () => (await a.text('dialog-title')) === 'Settings'), 'Settings opens');
+    expect((await a.active()) === 'theme-auto', 'focus moves to the first control of the dialog (not the last): ' + await a.active());
+    const dlg = await a.snapshot();
+    expect(/dialog "Settings":/.test(dlg), 'the dialog is a landmark-like dialog named "Settings"');
+    expect(await page.evaluate(() => document.querySelector('#controls [role=dialog]')?.getAttribute('aria-modal')) === 'true', 'aria-modal=true');
+    expect(!/button "Done, next student"/.test(dlg), 'the screen behind the dialog is not in the tree');
+    await a.axe('settings dialog', { modal: true });
+    expect(/textbox "Server address"/.test(dlg) && /button "Model, /.test(dlg) && /button "Where the model runs, /.test(dlg) && /textbox "Course words/.test(dlg), 'Settings reaches the model and the course words');
+    expect(/button "Combined file, Markdown/.test(dlg) && /button "Between pages, /.test(dlg) && /button "Text to export, Corrected"/.test(dlg) && /group "Theme":[\s\S]*button "System"/.test(dlg), 'Settings reaches the export options as selects and the theme as a pressed-state group');
+    expect(/heading "Model" \[level=3\]/.test(dlg), 'Settings sections are h3 under the dialog h2');
+    const behind = await page.evaluate(() => [...document.querySelectorAll('#controls > [data-region], #controls > [role=main]')]
+      .filter(e => e.getAttribute('role') !== 'dialog').map(e => e.hasAttribute('inert') && e.getAttribute('aria-hidden') === 'true'));
+    expect(behind.length > 0 && behind.every(Boolean), 'everything behind the dialog is inert and aria-hidden');
+    // Tab goes round inside the dialog (and Escape always leaves it): it never walks out to the page behind
+    const seen = new Set();
+    for (let i = 0; i < 8; i++) {
+      await page.keyboard.press('Tab');
+      seen.add(await page.evaluate(() => document.activeElement?.closest('[role=dialog]') ? document.activeElement.dataset.id : 'OUTSIDE:' + document.activeElement?.tagName));
+    }
+    expect(![...seen].some(x => x.startsWith('OUTSIDE')), 'Tab stays in the dialog: ' + [...seen]);
+    await page.keyboard.press('Shift+Tab');
+    expect(await page.evaluate(() => !!document.activeElement?.closest('[role=dialog]')), 'Shift+Tab stays in the dialog');
+    await page.keyboard.press('Escape');
+    expect(await a.wait(async () => (await a.active()) === 'settings'), 'Escape closes the dialog and focus returns to Settings: ' + await a.active());
+
+    // ---- a new screen: focus goes to its heading
+    expect(await a.tabTo('crumb'), 'Tab reaches the back crumb');
+    await page.keyboard.press('Enter');
+    expect(await a.wait(async () => (await a.text('inbox-title')) !== null), 'the overview opens');
+    expect(await a.wait(async () => (await a.active()) === 'inbox-title'), 'focus moves to the new screen\'s h1 (not left on <body>): ' + await a.active());
+    const inbox = await a.snapshot();
+    expect(/checkbox "Select [^"]+"/.test(inbox), 'inbox rows have real checkboxes');
+    expect(/- region "Unit 5 written response"/.test(inbox) || /- main:/.test(inbox), 'inbox is inside main');
+    await a.axe('inbox');
+    await page.keyboard.press('Space');
+    // keyboard never trapped: Tab walks out of the twin within a bounded number of presses
+    let left = false;
+    await page.mouse.click(640, 3);
+    for (let i = 0; i < 150 && !left; i++) {
+      await page.keyboard.press('Tab');
+      const inside = await page.evaluate(() => !!document.activeElement?.closest('#controls'));
+      left = !inside && (await a.active()) !== 'canvas#c';
+    }
+    expect(left, 'Tab leaves the page content again (no keyboard trap)');
+    expect(a.errors.length === 0, 'no page errors' + (a.errors.length ? ': ' + a.errors : ''));
+    await a.close();
+  }
+
+  // ---------------------------------------------------------------- state the page and the twin must agree on
+  {
+    const a = await open('state');
+    const { page } = a;
+    // WCAG 2.4.2: the tab names the assignment, as js/main.js does
+    expect(/^.+ \| viSHion$/.test(await page.title()), 'document title names the assignment: ' + JSON.stringify(await page.title()));
+    // a typed fix leaves the text box empty in the twin as it is on the canvas (the box keeps focus)
+    const val = () => page.evaluate(() => document.querySelector('#controls [data-id="typed-word"]')?.value ?? null);
+    const pageBefore = await page.evaluate(() => document.querySelector('#controls [data-id^="page-"][aria-pressed="true"]')?.dataset.id);
+    await page.evaluate(() => document.querySelector('#controls [data-id="word-p-maya-1-i:0"]').focus());
+    await page.keyboard.press('Enter');
+    // the text box is on the page whichever word the panel has open: wait for the panel to be on THIS word (its note
+    // says the model could not read it), or text typed before the pick is applied lands on the word that was open
+    expect(await a.wait(async () => /could not read this word/.test((await a.text('tray-note')) || '') && await a.has('typed-word')), 'the illegible word opens its text box');
+    await page.evaluate(() => document.querySelector('#controls [data-id="typed-word"]').focus());
+    await page.keyboard.type('mean');
+    expect(await val() === 'mean', 'typing shows in the twin box');
+    await page.keyboard.press('Enter');
+    expect(await a.wait(async () => (await val()) === ''), 'after the typed word is used the box is empty, not stale: ' + JSON.stringify(await val()));
+    expect(await a.wait(async () => /Used .mean.\./.test((await a.announced())[0])), 'the typed decision is announced: ' + JSON.stringify(await a.announced()));
+    // the page is named exactly when the decision carried the panel to another page (the cross-page case
+    // itself is the alt-marked fixture below)
+    const pageNow = () => page.evaluate(() => document.querySelector('#controls [data-id^="page-"][aria-pressed="true"]')?.dataset.id);
+    const told = /Now on page/.test((await a.announced())[0]);
+    expect(told === ((await pageNow()) !== pageBefore), `the page is named only when it changed (was ${pageBefore}, now ${await pageNow()}, told ${told}): ` + JSON.stringify(await a.announced()));
+    // a control that dims under the keyboard stays where it is (aria-disabled, still in the Tab order) and says why
+    expect(await a.tabTo('zoom-in'), 'Tab reaches Zoom in');
+    for (let i = 0; i < 7; i++) { await page.keyboard.press('Enter'); await a.pump(4); }
+    expect(await a.active() === 'zoom-in', 'at the largest zoom focus stays on Zoom in: ' + await a.active());
+    expect(await a.wait(async () => /largest/.test((await a.announced())[0])), 'and Enter says why: ' + JSON.stringify(await a.announced()));
+    expect(await a.attr('zoom-in', 'aria-disabled') === 'true', 'Zoom in is aria-disabled at 400%');
+    await a.close();
+  }
+
+  // ---------------------------------------------------------------- controls that used to be silent
+  {
+    const a = await open('silent');
+    const { page } = a;
+    const press = async (id, key = 'Enter') => { await page.evaluate((i) => document.querySelector(`#controls [data-id="${i}"]`).focus(), id); await page.keyboard.press(key); await a.pump(4); };
+    await press('layout-text');
+    expect(await a.wait(async () => /text only/i.test((await a.announced())[0])), 'Text only is announced: ' + JSON.stringify(await a.announced()));
+    await press('layout-split');
+    expect(await a.wait(async () => /side by side/i.test((await a.announced())[0])), 'Side by side is announced: ' + JSON.stringify(await a.announced()));
+    await press('transcript', 'ArrowDown');
+    expect(await a.wait(async () => /Line 1 of \d+/.test((await a.announced())[0])), 'moving the underline says the line: ' + JSON.stringify(await a.announced()));
+    await press('zoom-out');
+    expect(await a.wait(async () => /smallest/.test((await a.announced())[0])), 'a dimmed Zoom out says why: ' + JSON.stringify(await a.announced()));
+    expect(await a.attr('zoom-out', 'aria-disabled') === 'true' && await a.attr('zoom-out', 'disabled') === null, 'Zoom out stays in the Tab order');
+    await press('word-p-maya-1-i:0');
+    expect(await a.wait(async () => await a.has('use-typed')), 'the word panel has Use this');
+    await press('use-typed');
+    expect(await a.wait(async () => /Type the word first/.test((await a.announced())[0])), 'Use this with nothing typed says so: ' + JSON.stringify(await a.announced()));
+    expect(await a.wait(async () => (await a.active()) === 'typed-word'), 'and focus goes to the box: ' + await a.active());
+    await press('tray-close');
+    expect(await a.wait(async () => /Word panel closed/.test((await a.announced())[0])), 'closing the panel is announced: ' + JSON.stringify(await a.announced()));
+    await a.close();
+  }
+
+  // ---------------------------------------------------------------- a decision that crosses pages, repeats, reasons
+  {
+    const a = await open('cross');
+    const { page } = a;
+    // marking the page's first word as written-in-full-alt carries the panel to a word on page 2
+    await page.evaluate(() => document.querySelector('#controls [data-id="word-p-maya-1-i:0"]').focus());
+    await page.keyboard.press('Enter');
+    expect(await a.wait(async () => await a.has('alt-marked')), 'the word panel offers "alt-marked"');
+    await page.evaluate(() => document.querySelector('#controls [data-id="alt-marked"]').focus());
+    await page.keyboard.press('Enter');
+    expect(await a.wait(async () => /Now on page 2 of 2/.test((await a.announced())[0])), 'a decision that moves to the other page says so: ' + JSON.stringify(await a.announced()));
+    // Original is dimmed while nothing is corrected: the twin says why (the JS group has a title)
+    const reload = await open('reason');
+    const g = await reload.page.evaluate(() => { const b = document.querySelector('#controls [data-id="ver-original"]'); return { btn: b?.getAttribute('aria-description'), grp: b?.closest('[role=group]')?.getAttribute('aria-description'), dis: b?.getAttribute('aria-disabled') === 'true' }; });
+    expect(g.dis === true && /Nothing has been corrected/.test(g.btn || '') && /Nothing has been corrected/.test(g.grp || ''), 'disabled Original says why on the button and its group: ' + JSON.stringify(g));
+    // the same words twice are two announcements (a live region only reads what changed)
+    await reload.page.evaluate(() => { window.__w = 0; new MutationObserver(() => { window.__w++; }).observe(document.getElementById('announce'), { childList: true, characterData: true, subtree: true }); });
+    const writes = [];
+    for (let i = 0; i < 3; i++) {
+      await reload.page.evaluate(() => document.querySelector('#controls [data-id="copy"]').focus());
+      await reload.page.keyboard.press('Enter'); await reload.pump(6); await reload.page.waitForTimeout(600);
+      writes.push(await reload.page.evaluate(() => window.__w));
+    }
+    expect(writes[0] > 0 && writes[1] > writes[0] && writes[2] > writes[1], 'pressing Copy text three times writes the live region three times: ' + writes);
+    await reload.close();
+    await a.close();
+  }
+
+  // ---------------------------------------------------------------- 400% on a phone: every header tool is where it is drawn
+  {
+    const a = await open('phone 400%', { viewport: { width: 320, height: 568 }, deviceScaleFactor: 2 });
+    const { page } = a;
+    const r = await page.evaluate(() => { const b = document.querySelector('#controls [data-id="settings"]').getBoundingClientRect(); return { x: b.x, y: b.y, w: b.width, h: b.height }; });
+    expect(r.y >= 0 && r.y + r.h <= 568 && r.x >= 0 && r.x + r.w <= 320, 'Settings is inside the 320 x 568 viewport: ' + JSON.stringify(r));
+    // the pixels under the twin rect must not be the page pane (it was drawn beneath it)
+    const url = 'data:image/png;base64,' + (await page.screenshot()).toString('base64');
+    const pane = await page.evaluate(async ([u, r]) => {
+      const i = new Image(); i.src = u; await i.decode(); const c = document.createElement('canvas'); c.width = i.width; c.height = i.height;
+      const x = c.getContext('2d'); x.drawImage(i, 0, 0); const d = x.getImageData(0, 0, i.width, i.height).data; let n = 0, t = 0;
+      for (let yy = Math.round(r.y * 2) + 2; yy < (r.y + r.h) * 2 - 2; yy += 4) for (let xx = Math.round(r.x * 2) + 2; xx < (r.x + r.w) * 2 - 2; xx += 4) { const k = (yy * i.width + xx) * 4; t++; if (d[k] < 235 && d[k + 2] > d[k] + 8 && d[k + 1] > 190) n++; }
+      return t ? n / t : 1;
+    }, [url, r]);
+    expect(pane < 0.1, 'Settings is drawn (not under the page pane): ' + Math.round(pane * 100) + '% pane colour');
+    await a.close();
+  }
+
+  // ---------------------------------------------------------------- display preferences
+  {
+    const a = await open('prefs', { reducedMotion: 'reduce', forcedColors: 'active', colorScheme: 'dark' });
+    const attrs = await a.page.evaluate(() => ({ m: document.getElementById('controls').dataset.reducedMotion, c: document.getElementById('controls').dataset.highContrast }));
+    expect(attrs.m === '1', 'prefers-reduced-motion is read at start (no easing)');
+    expect(attrs.c === '1', 'forced-colors is read at start (high contrast tokens)');
+    expect(await a.tabTo('done'), 'the screen works under forced colours: Tab reaches Done');
+    await a.axe('forced colours, reduced motion, dark');
+    const bg = await a.page.evaluate(() => getComputedStyle(document.body).backgroundColor);
+    expect(!!bg, 'page background follows the system colours in forced-colors mode: ' + bg);
+    await a.close();
+  }
+
+  // ---------------------------------------------------------------- zoom: 200% and 400% reflow
+  for (const [zoom, w, h] of [[2, 640, 400], [4, 320, 256]]) {
+    const a = await open(`zoom ${zoom * 100}%`, { viewport: { width: w, height: h }, deviceScaleFactor: zoom });
+    const { page } = a;
+    const doc = await page.evaluate(() => ({ sw: document.documentElement.scrollWidth, cw: document.documentElement.clientWidth, iw: innerWidth, dpr: devicePixelRatio }));
+    expect(doc.dpr === zoom && doc.sw <= doc.cw, `${zoom * 100}%: no horizontal page scroll (${doc.sw} <= ${doc.cw} CSS px at dpr ${doc.dpr})`);
+    const rects = (await a.rects()).filter(r => r.w > 0 && r.tag !== 'div');
+    const wide = rects.filter(r => r.x < -1 || r.x + r.w > doc.cw + 1).map(r => `${r.id}@${Math.round(r.x)}+${Math.round(r.w)}`);
+    expect(wide.length === 0, `${zoom * 100}%: every control fits the ${doc.cw}px width (content reflows, no sideways scroll)` + (wide.length ? ': ' + wide.slice(0, 8) : ''));
+    expect(await a.has('done'), `${zoom * 100}%: Done is still reachable`);
+    expect(await a.tabTo('done'), `${zoom * 100}%: Tab reaches Done`);
+    const snap = await a.snapshot();
+    expect(/heading "Maya R\." \[level=1\]/.test(snap) && /- main:/.test(snap), `${zoom * 100}%: same structure (h1, main)`);
+    await a.axe(`${zoom * 100}% zoom`);
+    await a.close();
+  }
+
+  // ---------------------------------------------------------------- keyboard focus is never off screen
+  for (const [w, h, o] of [[390, 844, {}], [640, 400, { deviceScaleFactor: 2 }], [320, 256, { deviceScaleFactor: 4 }]]) {
+    const a = await open(`tab ${w}x${h}`, { viewport: { width: w, height: h }, ...o });
+    const { page } = a;
+    await page.mouse.click(w / 2, 2);
+    const off = [];
+    for (let i = 0; i < 60; i++) {
+      await page.keyboard.press('Tab'); await a.pump(3);
+      const r = await page.evaluate(() => { const e = document.activeElement; if (!e?.dataset?.id) return null; const b = e.getBoundingClientRect(); return { id: e.dataset.id, top: b.top, bottom: b.bottom, h: innerHeight }; });
+      if (r && (r.bottom > r.h + 1 || r.top < -1) && !off.includes(r.id)) off.push(r.id);
+    }
+    expect(off.length === 0, `${w}x${h}: every Tab stop is scrolled into view (WCAG 2.4.7, 2.4.11)` + (off.length ? ': ' + off.slice(0, 8) : ''));
+    await a.close();
+  }
+  // ---------------------------------------------------------------- Tab and Shift+Tab visit every control of every dialog
+  for (const [dlgName, trigger, vp] of [['Settings', 'settings', { width: 1280, height: 800 }], ['Settings', 'settings', { width: 1280, height: 1800 }],
+    ['Change student', 'change-student', { width: 1280, height: 800 }], ['Remove page', 'remove', { width: 1280, height: 800 }],
+    ['Remove page', 'remove', { width: 390, height: 844 }], ['Change student', 'change-student', { width: 390, height: 844 }],
+    ['Settings', 'settings', { width: 390, height: 844 }], ['Transcribe again', 'transcribe-again', { width: 1280, height: 800 }]]) {
+    const a = await open(`dialog tab ${dlgName} ${vp.width}x${vp.height}`, { viewport: vp });
+    const { page } = a;
+    if (trigger === 'transcribe-again') {
+      // a page with a decision on it asks before it is read again
+      await page.evaluate(() => document.querySelector('#controls [data-id="word-p-maya-1-c:0"]').focus()); await a.pump(3);
+      await page.keyboard.press('Enter'); await a.pump(8);
+      await page.evaluate(() => document.querySelector('#controls [data-id="alt-written"]').focus()); await a.pump(3);
+      await page.keyboard.press('Enter'); await a.pump(8);
+    }
+    await page.evaluate((id) => document.querySelector(`#controls [data-id="${id}"]`).focus(), trigger);
+    await a.pump(3);
+    await page.keyboard.press('Enter');
+    await a.pump(8);
+    const ids = await page.evaluate(() => [...document.querySelectorAll('#controls [role=dialog] [data-id]')]
+      .filter((e) => e.matches('button,input,textarea,select,[tabindex]') && !e.disabled && e.getAttribute('aria-disabled') !== 'true').map((e) => e.dataset.id));
+    const walk = async (key) => {
+      const got = [];
+      for (let i = 0; i < ids.length + 6; i++) {
+        await page.keyboard.press(key); await page.waitForTimeout(80); await a.pump(1);
+        got.push(await page.evaluate(() => document.activeElement?.closest('[role=dialog]') ? document.activeElement.dataset.id : 'OUTSIDE:' + document.activeElement?.tagName));
+      }
+      return got;
+    };
+    const fwd = await walk('Tab');
+    expect(ids.length > 0 && ids.every((i) => fwd.includes(i)), `${dlgName} ${vp.width}x${vp.height}: Tab reaches every control` + ids.filter((i) => !fwd.includes(i)).map((i) => ' [' + i + ']').join(''));
+    expect(!fwd.some((x) => x.startsWith('OUTSIDE')), `${dlgName} ${vp.width}x${vp.height}: Tab never leaves the dialog or falls to body`);
+    const back = await walk('Shift+Tab');
+    expect(ids.every((i) => back.includes(i)), `${dlgName} ${vp.width}x${vp.height}: Shift+Tab reaches every control` + ids.filter((i) => !back.includes(i)).map((i) => ' [' + i + ']').join(''));
+    expect(!back.some((x) => x.startsWith('OUTSIDE')), `${dlgName} ${vp.width}x${vp.height}: Shift+Tab never leaves the dialog or falls to body`);
+    const vis = await page.evaluate(() => { const e = document.activeElement; const b = e.getBoundingClientRect(); return b.bottom <= innerHeight + 1 && b.top >= -1; });
+    expect(vis, `${dlgName} ${vp.width}x${vp.height}: the focused control is on screen`);
+    await a.close();
+  }
+  // ---------------------------------------------------------------- Ctrl+Z takes back the last choice and says so
+  {
+    const a = await open('undo');
+    const { page } = a;
+    await page.evaluate(() => document.querySelector('#controls [data-id="word-p-maya-1-c:0"]').focus()); await a.pump(3);
+    await page.keyboard.press('Enter'); await a.pump(8);
+    await page.evaluate(() => document.querySelector('#controls [data-id="alt-suggested"]').focus()); await a.pump(3);
+    await page.keyboard.press('Enter'); await a.pump(8);
+    await page.keyboard.press('Control+z'); await a.pump(8);
+    expect(await a.wait(async () => /Undid the last choice/.test((await a.announced()).join(' '))), 'Ctrl+Z after a choice says it was undone: ' + JSON.stringify(await a.announced()));
+    await page.keyboard.press('Control+z'); await a.pump(8);
+    expect(await a.wait(async () => /Nothing to undo/.test((await a.announced()).join(' '))), 'Ctrl+Z with nothing to undo says so');
+    await a.close();
+  }
+} catch (e) {
+  console.error(e);
+  failures.push('exception: ' + (e && e.message));
+} finally {
+  if (browser) await browser.close();
+  stop();
+}
+console.log(failures.length ? `\n${failures.length} FAILED` : '\nall accessibility checks passed');
+process.exit(failures.length ? 1 : 0);

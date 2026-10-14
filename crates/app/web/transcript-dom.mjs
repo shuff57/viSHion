@@ -1,0 +1,371 @@
+// The transcript is real DOM text on the web (units, inline markdown, math as MathML, flagged words as inline
+// buttons), laid over the canvas: the person's own CSS reaches it, as it does in the JS app (WCAG 1.4.12 text
+// spacing, 1.4.4 resize, 1.4.10 reflow), and find-in-page and selection work on it.
+// Usage: node crates/app/web/transcript-dom.mjs   (run build.mjs first)
+import { chromium } from 'playwright-core';
+import { serve } from './serve.mjs';
+
+const exe = process.env.CHROME
+  || (process.platform === 'win32' ? 'C:/Program Files/Google/Chrome/Application/chrome.exe' : '/usr/bin/google-chrome');
+const failures = [];
+const expect = (ok, msg) => { console.log((ok ? 'ok   ' : 'FAIL ') + msg); if (!ok) failures.push(msg); };
+const { port, stop } = await serve(+(process.env.PORT || 8791));
+let browser;
+
+async function open(viewport, query = 'demo=1&theme=light&tray=0') {
+  const ctx = await browser.newContext({ viewport, bypassCSP: true, permissions: ['clipboard-read', 'clipboard-write'] });
+  const page = await ctx.newPage();
+  await page.goto(`http://127.0.0.1:${port}/?${query}`, { waitUntil: 'load' });
+  for (let i = 0; i < 300 && !(await page.evaluate(() => window.__ready === true || !!window.__error)); i++) await page.waitForTimeout(100);
+  const pump = async (n = 5) => { for (let i = 0; i < n; i++) { await page.mouse.move(viewport.width - 30 + (i % 3), viewport.height - 30 + i); await page.waitForTimeout(70); } };
+  await pump(8);
+  await page.waitForSelector('#controls p.tx', { timeout: 20000 });
+  await pump(6);
+  return { ctx, page, pump };
+}
+
+// the lines as the browser lays them out, and the foot of the page (drawn by egui below the transcript)
+const lines = (page) => page.evaluate(() => [...document.querySelectorAll('#controls p.tx[data-line]')].map((p) => {
+  const r = p.getBoundingClientRect();
+  return { id: p.dataset.id, top: r.top, bottom: r.bottom, left: r.left, width: r.width, height: r.height, fits: p.scrollHeight <= Math.ceil(r.height) + 1, text: p.textContent };
+}));
+const foot = (page) => page.evaluate(() => { const b = document.querySelector('#controls [data-id="text-view"]'); return b ? b.getBoundingClientRect().top : null; });
+
+try {
+  browser = await chromium.launch({ executablePath: exe, args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'] });
+
+  // 1. The transcript is visible text in the page, not an invisible twin of a picture of text
+  {
+    const { ctx, page, pump } = await open({ width: 1280, height: 800 });
+    const vis = await page.evaluate(() => {
+      const p = document.querySelector('#controls p.tx[data-line]');
+      let o = 1, hidden = false;
+      for (let e = p; e; e = e.parentElement) {
+        const cs = getComputedStyle(e);
+        o *= parseFloat(cs.opacity);
+        if (cs.visibility === 'hidden' || cs.display === 'none') hidden = true;
+      }
+      const cs = getComputedStyle(p);
+      return { o, hidden, font: cs.fontFamily, size: cs.fontSize, lh: cs.lineHeight, color: cs.color, text: p.innerText };
+    });
+    expect(vis.o === 1 && !vis.hidden, 'a transcript line is painted (opacity 1, visible): ' + JSON.stringify({ o: vis.o, hidden: vis.hidden }));
+    expect(/Source Serif 4/.test(vis.font) && vis.size === '22px' && vis.lh === '37.4px', 'in the JS app\'s face and measure (22px / 1.7 serif): ' + [vis.font, vis.size, vis.lh]);
+    expect(/^The 95% confidance interval/.test(vis.text), 'its text reads as a sentence with the flagged word in place: ' + JSON.stringify(vis.text));
+    const math = await page.evaluate(() => ({ ml: document.querySelectorAll('#controls p.tx math').length, src: document.querySelectorAll('#controls p.tx .tx-math.src').length }));
+    expect(math.ml >= 2 && math.src === 0, 'formulas are MathML in the line (KaTeX output): ' + JSON.stringify(math));
+    const twin = await page.evaluate(() => document.querySelectorAll('#controls p[data-id^="line-"]').length);
+    expect(twin === (await lines(page)).length, 'there is one element per line (no hidden twin of the transcript to read twice): ' + twin);
+    const sel = await page.evaluate(() => { const p = document.querySelector('#controls p.tx[data-line]'); getSelection().selectAllChildren(p); return getSelection().toString(); });
+    expect(/95% confidance interval/.test(sel), 'text can be selected: ' + JSON.stringify(sel.slice(0, 40)));
+    await page.evaluate(() => getSelection().removeAllRanges());
+    // find-in-page: the browser's own search, through window.find, lands in the transcript
+    const found = await page.evaluate(() => { getSelection().removeAllRanges(); return window.find('commute time') && !!getSelection().anchorNode && !!getSelection().anchorNode.parentElement.closest('p.tx'); });
+    expect(found, 'find-in-page finds words in the transcript');
+    await pump(2);
+    await ctx.close();
+  }
+
+  // 2. A user stylesheet with the WCAG 1.4.12 text spacing (and a larger size) reflows the transcript, and the
+  //    page below it moves down with it
+  {
+    const { ctx, page, pump } = await open({ width: 1280, height: 800 });
+    const before = await lines(page);
+    const footBefore = await foot(page);
+    const wBefore = before[0].width;
+    await page.addStyleTag({ content: '#controls p.tx { line-height: 2.2 !important; letter-spacing: 0.12em !important; word-spacing: 0.16em !important; font-size: 26px !important; }' });
+    await pump(10);
+    await page.waitForTimeout(600);
+    await pump(4);
+    const after = await lines(page);
+    expect(after.length === before.length, 'same lines after the stylesheet: ' + after.length);
+    const grew = after.filter((l, i) => l.height > before[i].height + 4).length;
+    expect(grew >= after.length - 1, `lines are taller (${grew} of ${after.length}) and wrap onto more rows`);
+    expect(after[0].width === wBefore, 'the column keeps its width (it reflows inside it)');
+    const tall = (await page.evaluate(() => getComputedStyle(document.querySelector('#controls p.tx[data-line]')).lineHeight));
+    expect(parseFloat(tall) >= 57, 'the user\'s line-height applies (2.2 x 26px): ' + tall);
+    const clipped = after.filter((l) => !l.fits).map((l) => l.id);
+    expect(clipped.length === 0, 'no line is clipped: ' + clipped);
+    let overlap = 0;
+    for (let i = 1; i < after.length; i++) if (after[i].top < after[i - 1].bottom - 1) overlap++;
+    expect(overlap === 0, 'lines do not overlap after reflow: ' + overlap);
+    const spans = after.every((l, i) => i === 0 || l.top - after[i - 1].bottom > -1 && l.top - after[i - 1].bottom < 16);
+    expect(spans, 'the screen made room: each line starts where the one above ends (a margin note has 14px above it)');
+    const footAfter = await foot(page);
+    // the page below the transcript is drawn by egui: it follows the browser's layout
+    expect(footBefore !== null && footAfter > footBefore + 30, `content after the transcript moved down: ${footBefore} -> ${footAfter}`);
+    // a smaller size comes back to the original layout
+    await page.evaluate(() => { for (const s of document.querySelectorAll('style')) if (/line-height: 2\.2/.test(s.textContent)) s.remove(); });
+    await pump(8);
+    await page.waitForTimeout(500);
+    await pump(3);
+    const back = await lines(page);
+    expect(back.every((l, i) => Math.abs(l.height - before[i].height) < 2), 'removing the stylesheet restores the layout');
+    await ctx.close();
+  }
+
+  // 3. Minimum font size and zoom: the same text honours the browser's own settings
+  {
+    const { ctx, page, pump } = await open({ width: 1280, height: 800 });
+    const before = await lines(page);
+    await page.addStyleTag({ content: '#controls p.tx { font-size: 34px !important; }' });
+    await pump(10);
+    await page.waitForTimeout(600);
+    const after = await lines(page);
+    expect(after[0].height > before[0].height * 1.2 && after.every((l) => l.fits), 'a larger font size reflows without clipping: ' + [before[0].height, after[0].height]);
+    await ctx.close();
+  }
+
+  // 4. A word in the DOM transcript still selects through the control layer; the wheel over the text scrolls the page
+  {
+    const { ctx, page, pump } = await open({ width: 1280, height: 800 });
+    const w = await page.evaluate(() => { const b = document.querySelector('#controls p.tx button.w'); const r = b.getBoundingClientRect(); return { id: b.dataset.id, x: r.x + r.width / 2, y: r.y + r.height / 2, text: b.textContent }; });
+    expect(w.text === 'confidance', 'a flagged word is an inline button with its word as text: ' + w.text);
+    const trayBefore = await page.evaluate(() => !!document.querySelector('#controls [data-id="tray-count"]'));
+    await page.mouse.click(w.x, w.y);
+    await pump(6);
+    await page.waitForTimeout(300);
+    const tray = await page.evaluate(() => ({ tray: !!document.querySelector('#controls [data-id="tray-count"]'), sel: document.querySelector('#controls button.w.sel')?.dataset.id }));
+    expect(!trayBefore && tray.tray && tray.sel === w.id, 'a click on the word opens the word panel with that word selected: ' + JSON.stringify(tray));
+    await ctx.close();
+  }
+  {
+    const { ctx, page, pump } = await open({ width: 1280, height: 600 });
+    const last = async () => (await lines(page)).at(-1).top;
+    const t0 = await last();
+    const p0 = await page.evaluate(() => { const r = document.querySelector('#controls p.tx[data-line]').getBoundingClientRect(); return [r.x + 80, r.y + 10]; });
+    await page.mouse.move(p0[0], p0[1]);
+    await page.mouse.wheel(0, 240);
+    await pump(6);
+    await page.waitForTimeout(400);
+    const t1 = await last();
+    expect(t1 < t0 - 50, `the wheel over the text scrolls the page: ${t0} -> ${t1}`);
+    // a click on a line (not on a word) underlines it, as in the JS app
+    const ln = await page.evaluate(() => { const p = document.querySelectorAll('#controls p.tx[data-line]')[3]; const r = p.getBoundingClientRect(); return { id: p.dataset.id, x: r.x + 40, y: r.y + 8 }; });
+    await page.mouse.click(ln.x, ln.y);
+    await pump(6);
+    await page.waitForTimeout(300);
+    const reading = await page.evaluate(() => document.querySelector('#controls p.tx[data-reading]')?.dataset.id || null);
+    expect(reading === ln.id, 'a click on a line underlines it: ' + reading + ' / ' + ln.id);
+    await ctx.close();
+  }
+
+  // 5. WCAG 1.4.12 sheet (line-height 1.5, letter 0.12em, word 0.16em): a word's 44px reach stays inside its line,
+  //    so it does not run into the next line's box
+  {
+    const { ctx, page, pump } = await open({ width: 1280, height: 800 });
+    await page.addStyleTag({ content: '#controls p.tx { line-height: 1.5 !important; letter-spacing: 0.12em !important; word-spacing: 0.16em !important; }' });
+    await pump(10);
+    await page.waitForTimeout(500);
+    await pump(3);
+    const ls = await lines(page);
+    expect(ls.every((l) => l.fits), 'with the text spacing sheet no line overflows its box (a word on a wrapped row stays inside): ' + ls.filter((l) => !l.fits).map((l) => l.id));
+    const over = await page.evaluate(() => {
+      const out = [];
+      for (const b of document.querySelectorAll('#controls p.tx button.w')) {
+        const r = b.getBoundingClientRect();
+        const mid = document.elementFromPoint(r.x + r.width / 2, r.y + r.height - 3);
+        // (another word on the row below may lie over it; text of another line may not)
+        if (mid && mid !== b && !mid.matches('button.w') && mid.closest('p') !== b.closest('p')) out.push(b.dataset.id + ' -> ' + (mid && (mid.dataset.id || mid.tagName)));
+      }
+      return out;
+    });
+    expect(over.length === 0, 'the foot of a word is not taken by the text of the next line: ' + over);
+    await ctx.close();
+  }
+
+  // 6. Copy: the selection comes out of the page as the text of the transcript, lines apart, formulas as TeX
+  {
+    const { ctx, page, pump } = await open({ width: 1280, height: 800 });
+    await page.bringToFront();
+    await page.evaluate(() => navigator.clipboard.writeText('SEED'));
+    await page.evaluate(() => getSelection().selectAllChildren(document.querySelector('#controls .tx-clip:has(p.tx)')));
+    await page.keyboard.press('Control+c');
+    await page.waitForTimeout(300);
+    const clip = await page.evaluate(() => navigator.clipboard.readText());
+    expect(clip !== 'SEED' && /confidance interval/.test(clip), 'Ctrl+C copies the selected transcript: ' + JSON.stringify(clip.slice(0, 40)));
+    const rows = clip.split(/\r?\n/);
+    expect(clip.includes('$\\bar{x} \\pm 1.96') && clip.includes('\\frac{s}{\\sqrt{n}}'), 'a formula is copied as its TeX: ' + JSON.stringify(clip.slice(70, 150)));
+    expect(!/samples,about|mean\.probably/.test(clip) && rows.filter((l) => l.length <= 1).length < 2, 'lines are kept apart and no symbol is a line of its own');
+    expect(rows.filter((l) => /^\$/.test(l)).length === 2, 'each formula is a line of its own: ' + JSON.stringify(rows.map((l) => l.slice(0, 12))));
+    // copying with nothing selected in the transcript is still the canvas's: no throw, clipboard untouched
+    await page.evaluate(() => { getSelection().removeAllRanges(); return navigator.clipboard.writeText('SEED2'); });
+    await page.keyboard.press('Control+c');
+    await page.waitForTimeout(200);
+    expect(await page.evaluate(() => navigator.clipboard.readText()) === 'SEED2', 'nothing selected: the clipboard is left alone');
+    await pump(2);
+    await ctx.close();
+  }
+
+  // 7. 400% zoom (320px): a formula wider than the column is a box that scrolls, all of it reachable
+  {
+    const { ctx, page } = await open({ width: 320, height: 1100 });
+    await page.waitForTimeout(500);
+    const r = await page.evaluate(() => [...document.querySelectorAll('#controls p.tx .tx-math')].map((m) => {
+      const p = m.closest('p');
+      const before = m.scrollLeft;
+      m.scrollLeft = 10000;
+      const out = { id: p.dataset.id, need: m.scrollWidth, box: m.clientWidth, line: p.clientWidth, pw: p.scrollWidth, moved: m.scrollLeft - before, over: getComputedStyle(m).overflowX };
+      m.scrollLeft = 0;
+      return out;
+    }));
+    expect(r.length >= 2 && r.every((m) => m.pw <= m.line + 1 && m.box <= m.line + 1), 'no formula makes its line wider than the column: ' + JSON.stringify(r));
+    expect(r.every((m) => m.need <= m.box + 1 || (m.over === 'auto' && m.moved > 0)), 'a formula wider than the column scrolls sideways to its end: ' + JSON.stringify(r.map((m) => [m.need, m.box, m.moved])));
+    // a long unbroken word does not run out of the column either
+    const long = await page.evaluate(() => [...document.querySelectorAll('#controls p.tx')].filter((p) => p.scrollWidth > p.clientWidth + 1).map((p) => p.dataset.id));
+    expect(long.length === 0, 'no line is wider than the column at 320px: ' + long);
+    await ctx.close();
+  }
+
+  // 8. A triple click selects the line without underlining it first; a single click still underlines
+  {
+    const { ctx, page, pump } = await open({ width: 1280, height: 800 });
+    const at = await page.evaluate(() => { const r = document.querySelectorAll('#controls p.tx')[3].getBoundingClientRect(); return [r.left + 50, r.top + 12]; });
+    const reading = () => page.evaluate(() => document.querySelector('#controls p.tx[data-reading]')?.dataset.id || null);
+    await page.mouse.click(at[0], at[1], { clickCount: 3 });
+    let seen = [];
+    for (let i = 0; i < 12; i++) { seen.push(await reading()); await pump(1); }
+    await page.waitForTimeout(400);
+    seen.push(await reading());
+    expect(seen.every((s) => s === null), 'a triple click never underlines the line: ' + JSON.stringify([...new Set(seen)]));
+    expect(/^It does not mean/.test(await page.evaluate(() => getSelection().toString())), 'and it selects it');
+    await ctx.close();
+  }
+  // 9. The word panel is a sheet over the page on a phone and a tablet: no transcript text shows or takes the pointer
+  //    through any part of it (its padding too, not only the controls in it)
+  for (const [w, h, fixed] of [[390, 844, 3], [768, 1024, 0]]) {
+    const { ctx, page, pump } = await open({ width: w, height: h });
+    for (let k = 0; k < fixed; k++) { await page.mouse.move(200, 500); await page.mouse.wheel(0, 350); await pump(4); await page.waitForTimeout(300); }
+    for (let k = 0; k < (fixed ? 0 : 8); k++) {
+      const seen = await page.evaluate(() => { const b = document.querySelector('#controls p.tx button.w'); const r = b.getBoundingClientRect(); const c = document.querySelector('#controls .tx-clip:has(p.tx)').getBoundingClientRect(); return r.top > c.top + 20 && r.bottom < c.bottom - 20; });
+      if (seen) break;
+      await page.mouse.move(w / 2, h / 2); await page.mouse.wheel(0, 300); await pump(3); await page.waitForTimeout(250);
+    }
+    const at = await page.evaluate(() => { const r = document.querySelector('#controls p.tx button.w').getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; });
+    await page.mouse.click(at[0], at[1]);
+    await pump(4); await page.waitForTimeout(1200); await pump(3);
+    const r = await page.evaluate(() => {
+      const t = document.querySelector('#controls [data-id="tray-title"]');
+      if (!t) return { none: true };
+      const y0 = Math.max(0, t.getBoundingClientRect().top - 4);
+      let leak = 0, n = 0;
+      for (let x = 4; x < innerWidth - 4; x += 6) for (let y = y0; y < innerHeight - 2; y += 6) { n++; const e = document.elementFromPoint(x, y); if (e && e.closest && e.closest('p.tx')) leak++; }
+      return { leak, n, y0 };
+    });
+    expect(!r.none && r.leak === 0, `${w}x${h}: transcript text does not show through the word panel: ` + JSON.stringify(r));
+    await ctx.close();
+  }
+
+  // 10. Find-in-page: a hit below the fold is scrolled to, and a formula's text is found on the formula itself
+  {
+    const { ctx, page, pump } = await open({ width: 1280, height: 450 });
+    const geo = (t) => page.evaluate((t) => {
+      const p = [...document.querySelectorAll('#controls p.tx')].find((e) => e.textContent.includes(t));
+      const r = p.getBoundingClientRect(); const c = document.querySelector('#controls .tx-clip:has(p.tx)').getBoundingClientRect();
+      return { top: r.top, bottom: r.bottom, clipTop: c.top, clipBottom: c.bottom };
+    }, t);
+    const before = await geo('likely wide');
+    await page.evaluate(() => { getSelection().removeAllRanges(); window.find('likely wide'); });
+    await pump(10); await page.waitForTimeout(800);
+    const after = await geo('likely wide');
+    expect(before.top > before.clipBottom && after.bottom <= after.clipBottom && after.top >= after.clipTop, `a find hit below the fold is scrolled into view: ${Math.round(before.top)} -> ${Math.round(after.top)}`);
+    // back to the top, then a formula's own text
+    await page.mouse.move(640, 200); await page.mouse.wheel(0, -2000); await pump(6); await page.waitForTimeout(400);
+    for (const needle of ['1.96', '40']) {
+      const hit = await page.evaluate((n) => {
+        getSelection().removeAllRanges();
+        const found = window.find(n);
+        const s = getSelection();
+        if (!found || !s.rangeCount) return { found };
+        const r = s.getRangeAt(0).getBoundingClientRect();
+        const m = (s.anchorNode.nodeType === 1 ? s.anchorNode : s.anchorNode.parentElement).closest('.tx-math');
+        const mr = m && m.getBoundingClientRect();
+        return { found, w: r.width, h: r.height, inMath: !!m && r.left >= mr.left - 1 && r.right <= mr.right + 1 && r.top >= mr.top - 1 && r.bottom <= mr.bottom + 1, tex: !!(m && s.anchorNode.parentElement.closest('[aria-hidden]')) };
+      }, needle);
+      expect(hit.found && hit.w >= 8 && hit.h >= 8 && hit.inMath, `find '${needle}' selects text laid over the typeset formula (a box you can see): ` + JSON.stringify(hit));
+    }
+    await ctx.close();
+  }
+
+  // 11. A drag-selection held at the foot of the transcript scrolls it
+  {
+    const { ctx, page } = await open({ width: 1280, height: 450 });
+    const p0 = await page.evaluate(() => { const r = document.querySelectorAll('#controls p.tx')[0].getBoundingClientRect(); return [r.left + 4, r.top + 10, r.top]; });
+    await page.mouse.move(p0[0], p0[1]); await page.mouse.down();
+    await page.mouse.move(900, 440, { steps: 5 });
+    for (let i = 0; i < 20; i++) { await page.mouse.move(900, 449 - (i % 2)); await page.waitForTimeout(100); }
+    await page.mouse.up();
+    const t1 = await page.evaluate(() => document.querySelectorAll('#controls p.tx')[0].getBoundingClientRect().top);
+    expect(t1 < p0[2] - 40, `a drag-selection held at the foot scrolls the transcript: ${Math.round(p0[2])} -> ${Math.round(t1)}`);
+    await ctx.close();
+  }
+
+  // 12. A formula is one math node named in words, whose children are its typeset MathML (structure for math
+  //     navigation and braille); its TeX source (the text laid over it for find and copy) is not in the tree
+  {
+    const { ctx, page } = await open({ width: 1280, height: 800 });
+    const cdp = await ctx.newCDPSession(page);
+    const { nodes } = await cdp.send('Accessibility.getFullAXTree');
+    const byId = new Map(nodes.map((n) => [n.nodeId, n]));
+    const tex = []; const roles = new Set(); let maths = 0, unnamed = 0, nested = 0;
+    const walk = (n, inMath) => { for (const id of n.childIds || []) { const k = byId.get(id); if (!k) continue; if (!k.ignored) { roles.add(k.role?.value); if (k.role?.value === 'math') nested++; if (k.role?.value === 'StaticText' && /[\\$]/.test(k.name?.value || '')) tex.push(k.name.value); } walk(k, true); } };
+    for (const n of nodes) if (!n.ignored && n.role?.value === 'math') { maths++; if (!(n.name?.value || '').trim()) unnamed++; walk(n); }
+    expect(maths >= 2 && unnamed === 0 && nested === 0 && tex.length === 0 && roles.has('MathMLFraction'), `a formula is one named math node with its MathML under it and no TeX (${maths} formulas): ` + JSON.stringify([unnamed, nested, tex, [...roles]]));
+    await ctx.close();
+  }
+
+  // 13. Paragraph spacing (WCAG 1.4.12) from the person's stylesheet makes room between lines
+  for (const css of ['#controls p.tx { margin-bottom: 24px !important; }', '* { margin-bottom: 1em !important; }']) {
+    const { ctx, page, pump } = await open({ width: 1280, height: 800 });
+    const gaps = () => page.evaluate(() => { const ls = [...document.querySelectorAll('#controls p.tx[data-line]')].map((p) => p.getBoundingClientRect()); return ls.slice(1).map((r, i) => Math.round(r.top - ls[i].bottom)); });
+    const g0 = await gaps();
+    await page.addStyleTag({ content: css });
+    await pump(10); await page.waitForTimeout(800); await pump(4);
+    const g1 = await gaps();
+    expect(g1.every((g, i) => g >= g0[i] + 16), `${css}: each line has at least 16px more room: ` + JSON.stringify([g0, g1]));
+    await ctx.close();
+  }
+
+  // 14. The rest of the pane is real text as well: a user stylesheet with the WCAG 1.4.12 text spacing and another
+  //     typeface reaches the student's name, the counts, the legend, the pill, the stat and the hint, and the
+  //     screen makes room for what grew
+  {
+    const { ctx, page, pump } = await open({ width: 1280, height: 900 });
+    const ids = ['student-name', 'student-meta', 'legend', 'student-status', 'foot-stats', 'foot-hint'];
+    const probe = () => page.evaluate((ids) => ids.map((id) => {
+      const e = document.querySelector(`#controls [data-id="${id}"]`);
+      if (!e) return { id, missing: true };
+      const cs = getComputedStyle(e), r = e.getBoundingClientRect();
+      let o = 1; for (let n = e; n && n.id !== 'controls'; n = n.parentElement) o *= parseFloat(getComputedStyle(n).opacity);
+      return { id, o, ls: cs.letterSpacing, fam: cs.fontFamily, fs: cs.fontSize, top: r.top, bottom: r.bottom, left: r.left, right: r.right, w: r.width, h: r.height };
+    }), ids);
+    const before = await probe();
+    expect(before.every((b) => !b.missing && b.o === 1), 'name, counts, legend, pill, stat and hint are painted DOM text: ' + JSON.stringify(before.map((b) => [b.id, b.o])));
+    expect(before.every((b) => b.ls === 'normal' || parseFloat(b.ls) === 0), 'no letter spacing to begin with');
+    await page.addStyleTag({ content: '* { letter-spacing: 0.12em !important; word-spacing: 0.16em !important; line-height: 1.5 !important; font-family: Georgia, serif !important; }' });
+    await pump(10); await page.waitForTimeout(700); await pump(4);
+    const after = await probe();
+    expect(after.every((a) => parseFloat(a.ls) > 0 && /Georgia/.test(a.fam)), 'the stylesheet reaches every one of them: ' + JSON.stringify(after.map((a) => [a.id, a.ls, a.fam.slice(0, 12)])));
+    expect(after.filter((a) => a.id !== 'student-status').every((a, i) => a.w > 0) && after.find((a) => a.id === 'student-name').w >= before.find((b) => b.id === 'student-name').w, 'the name keeps its column (it reflows inside it)');
+    expect(after.find((a) => a.id === 'student-status').w > before.find((b) => b.id === 'student-status').w + 4, 'the pill grows with its text: ' + [before[3].w, after[3].w]);
+    const by = Object.fromEntries(after.map((a) => [a.id, a]));
+    expect(by['student-name'].bottom <= by['student-meta'].top + 1, 'the name and the count line do not overlap: ' + [by['student-name'].bottom, by['student-meta'].top]);
+    const below = await page.evaluate(() => {
+      const t = (id) => document.querySelector(`#controls [data-id="${id}"]`)?.getBoundingClientRect();
+      return { meta: t('student-meta'), change: t('change-student'), legend: t('legend'), seg: t('ver-corrected'), hint: t('foot-hint'), stats: t('foot-stats'), more: t('text-view') };
+    });
+    expect(below.change.top >= by['student-meta'].bottom - 1, 'Change student stays under the count line: ' + [by['student-meta'].bottom, below.change.top]);
+    expect(below.legend.top >= below.change.bottom - 1 || below.legend.top >= by['student-status'].bottom - 1, 'the legend stays under the name block');
+    expect(below.legend.right <= below.seg.left + 1 || below.seg.top >= below.legend.bottom - 1, 'the legend does not run under Corrected / Original: ' + JSON.stringify([below.legend.right, below.seg.left]));
+    expect(below.hint.top >= below.stats.top - 1, 'the hint follows the stat');
+    expect(before.every((b) => b.h > 0) && after.find((a) => a.id === 'legend').h >= before.find((b) => b.id === 'legend').h, 'the legend is as tall as it came out');
+    await ctx.close();
+  }
+} catch (e) {
+  failures.push(String(e.stack || e));
+  console.error(e);
+} finally {
+  if (browser) await browser.close().catch(() => {});
+  stop();
+}
+console.log(failures.length ? `\n${failures.length} FAILED` : '\nall DOM transcript checks passed');
+process.exit(failures.length ? 1 : 0);

@@ -1,0 +1,21 @@
+[package]
+name = "vishion-s4"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+wasm-bindgen = "=0.2.128"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+web-sys = { version = "0.3", features = ["Request", "RequestInit", "Response", "Headers", "AbortSignal", "AbortController", "ReadableStream", "WorkerGlobalScope"] }
+wasm-streams = "0.7"
+futures-util = { version = "0.3", default-features = false }
+serde_json = { version = "1", features = ["float_roundtrip"] }
+
+[profile.release]
+opt-level = "s"
+lto = true

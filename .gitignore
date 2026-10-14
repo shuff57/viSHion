@@ -3,3 +3,10 @@ bakeoff/models/
 bakeoff/out/
 bakeoff/truth.json
 bakeoff/photos/
+node_modules/
+.wrangler/
+.msgbox/
+_workspace/
+target/
+dist/
+tools/parity/han_order.json

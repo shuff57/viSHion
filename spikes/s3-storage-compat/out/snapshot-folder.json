@@ -1,0 +1,143 @@
+{
+ "files": {
+  "settings.json": {
+   "type": "string",
+   "text": "{\n  \"theme\": \"auto\",\n  \"ocrUrl\": \"http://localhost:8188\",\n  \"judgeUrl\": \"http://localhost:8189\",\n  \"judgeMode\": \"auto\",\n  \"demo\": true,\n  \"keepOriginals\": true,\n  \"timeoutSec\": 180,\n  \"exportFormat\": \"md\",\n  \"exportSeparator\": \"label\",\n  \"exportText\": \"corrected\",\n  \"topics\": {\n    \"General\": {\n      \"description\": \"Everyday handwriting with no special vocabulary.\",\n      \"terms\": []\n    },\n    \"Medical\": {\n      \"description\": \"Clinical notes, charts and medication names.\",\n      \"terms\": [\n        \"hypertension\",\n        \"tachycardia\",\n        \"bradycardia\",\n        \"dyspnea\",\n        \"edema\",\n        \"acetaminophen\",\n        \"ibuprofen\",\n        \"metformin\",\n        \"lisinopril\",\n        \"atorvastatin\",\n        \"auscultation\",\n        \"prn\",\n        \"bid\",\n        \"tid\",\n        \"qid\"\n      ]\n    },\n    \"Math/Education\": {\n      \"description\": \"Lesson plans, student work and mathematics.\",\n      \"terms\": [\n        \"derivative\",\n        \"integral\",\n        \"quadratic\",\n        \"polynomial\",\n        \"coefficient\",\n        \"theorem\",\n        \"hypotenuse\",\n        \"logarithm\",\n        \"asymptote\",\n        \"regression\",\n        \"hypothesis\",\n        \"rubric\",\n        \"formative\",\n        \"summative\",\n        \"scaffold\",\n        \"differentiation\"\n      ]\n    }\n  },\n  \"defaultPrompt\": \"Transcribe the handwriting on this page. Output only the words written on the page, exactly as written, one line of handwriting per line of output.\\nRules:\\n- Copy spelling, abbreviations, numbers, symbols and punctuation exactly. Do not fix spelling or grammar. Do not reword.\\n- Keep the line breaks, and keep bullets and dashes as written. Write arrows and other symbols as the characters you see (for example →), never as LaTeX.\\n- Do not add a title, summary, introduction, explanation, heading or code fence. Do not describe the page or the handwriting.\\n- Do not add any word that is not on the page. Do not repeat a line.\\n- If a word is truly unreadable, write [illegible]. Do not invent a word to fill the gap.\\n- Write ~~word~~ for struck-through text.\\n- Put a margin note on its own line starting with \\\"Margin:\\\".\\n- Use LaTeX inside $...$ or $$...$$ only for mathematical formulas.\\nStart with the first line of handwriting and stop after the last.\",\n  \"readNames\": true,\n  \"straighten\": true,\n  \"provider\": \"local\",\n  \"model\": \"\",\n  \"idleUnloadMin\": 10,\n  \"guessIllegible\": true,\n  \"rememberFixes\": true,\n  \"reference\": []\n}"
+  },
+  "clinic-notes-ecoles/project.json.bak": {
+   "type": "string",
+   "text": "{\n  \"schemaVersion\": 1,\n  \"name\": \"Clinic Notes — Écoles & 日本語 ✓\",\n  \"topic\": \"Medical\",\n  \"prompt\": \"\",\n  \"order\": [\n    \"mv5cwkyyifnic\",\n    \"mv5cwkze33bz9\",\n    \"mv5cwkzu6tsgc\"\n  ],\n  \"created\": 1791815868940,\n  \"updated\": 1791815876110,\n  \"ui\": {\n    \"selectedId\": \"mv5cwkzu6tsgc\"\n  },\n  \"stats\": {\n    \"pages\": 3,\n    \"done\": 2\n  }\n}"
+  },
+  "clinic-notes-ecoles/project.json": {
+   "type": "string",
+   "text": "{\n  \"schemaVersion\": 1,\n  \"name\": \"Clinic Notes — Écoles & 日本語 ✓\",\n  \"topic\": \"Medical\",\n  \"prompt\": \"Spelling: use <b>\\\"quotes\\\"</b> & tabs\\tand newline\\nend\",\n  \"order\": [\n    \"mv5cwkyyifnic\",\n    \"mv5cwkze33bz9\",\n    \"mv5cwkzu6tsgc\",\n    \"oldpage1\"\n  ],\n  \"created\": 1791815868940,\n  \"updated\": 1791815878324,\n  \"ui\": {\n    \"selectedId\": \"mv5cwkzu6tsgc\"\n  },\n  \"stats\": {\n    \"pages\": 4,\n    \"done\": 3\n  }\n}"
+  },
+  "clinic-notes-ecoles/pages/oldpage1.json": {
+   "type": "string",
+   "text": "{\"name\":\"old.jpg\",\"id\":\"oldpage1\",\"status\":\"done\",\"raw\":\"old text\",\"order\":0,\"corrected\":\"old text\",\"boxes\":[],\"corrections\":[],\"timings\":{\"ms\":10,\"tokens\":3},\"error\":\"\",\"rotation\":0}"
+  },
+  "clinic-notes-ecoles/pages/mv5cwkzu6tsgc.json": {
+   "type": "string",
+   "text": "{\"id\":\"mv5cwkzu6tsgc\",\"name\":\"student3.png\",\"order\":2,\"status\":\"done\",\"raw\":\"Staff meeting notes\\n1. Robotics budget due Friday\\n2. Pathways grant report, draft by 10/20\\n3. [illegible] to order sensors\\nMargin: ask about the second cart\\nMean of the quiz scores: $\\\\bar{x} = \\\\frac{\\\\sum x_i}{n}$\",\"corrected\":\"Staff meeting notes\\n1. Robotics budget due Friday\\n2. Pathways grant report, draft by 10/20\\n3. [illegible] to order sensors\\nMargin: ask about the second cart\\nMean of the quiz scores: $\\\\bar{x} = \\\\frac{\\\\sum x_i}{n}$\",\"corrections\":[],\"boxes\":[{\"x\":0.09047619047619047,\"y\":0.37142857142857144,\"w\":0.6666666666666666,\"h\":0.017857142857142856,\"r\":0,\"s\":66},{\"x\":0.07857142857142857,\"y\":0.38571428571428573,\"w\":0.6880952380952381,\"h\":0.025,\"r\":0,\"s\":60},{\"x\":0.07857142857142857,\"y\":0.4625,\"w\":0.75,\"h\":0.04107142857142857,\"r\":0,\"s\":67.66666666666667},{\"x\":0.08571428571428572,\"y\":0.7392857142857143,\"w\":0.6714285714285714,\"h\":0.019642857142857142,\"r\":0,\"s\":60},{\"x\":0.07857142857142857,\"y\":0.7571428571428571,\"w\":0.7023809523809523,\"h\":0.02142857142857143,\"r\":0,\"s\":61.333333333333336},{\"x\":0.07857142857142857,\"y\":0.8303571428571429,\"w\":0.75,\"h\":0.039285714285714285,\"r\":0,\"s\":67}],\"timings\":{\"ms\":2698,\"tokens\":35},\"error\":\"\",\"rotation\":0,\"student\":{\"name\":\"Caleb P.\",\"source\":\"chosen\",\"confirmed\":true},\"reviewed\":false,\"resolved\":{},\"edits\":[],\"guesses\":{\"i:0\":[{\"text\":\"the discriminant\",\"percent\":55},{\"text\":\"discriminant\",\"percent\":25},{\"text\":\"a derivative\",\"percent\":10}]},\"guessed\":true}"
+  },
+  "clinic-notes-ecoles/pages/mv5cwkze33bz9.json": {
+   "type": "string",
+   "text": "{\"id\":\"mv5cwkze33bz9\",\"name\":\"student2.png\",\"order\":1,\"status\":\"done\",\"raw\":\"Pt seen 10/3 c/o headache x2 days\\nBP 142/90, HR 88, afebrile\\nHx of hypertension, on lisinopril 10mg qd\\nMargin: recheck BP in 2 wks\\nPlan: continue meds, low sodium diet\\n~~start metformin~~ not indicated\\nF/U prn\",\"corrected\":\"Pt seen 10/3 c/o headache x2 days\\nBP 142/90, HR 88, afebrile\\nHx of hypertension, on lisinopril 10mg qd\\nMargin: recheck BP in 2 wks\\nPlan: continue meds, low sodium diet\\n~~start metformin~~ not indicated\\nF/U prn\",\"corrections\":[],\"boxes\":[],\"timings\":{\"ms\":2829,\"tokens\":37},\"error\":\"\",\"rotation\":0,\"student\":{\"name\":null,\"source\":\"chosen\",\"confirmed\":true},\"reviewed\":false,\"resolved\":{},\"edits\":[],\"guesses\":{}}"
+  },
+  "clinic-notes-ecoles/pages/mv5cwkyyifnic.json": {
+   "type": "string",
+   "text": "{\"id\":\"mv5cwkyyifnic\",\"name\":\"student1.png\",\"order\":0,\"status\":\"done\",\"raw\":\"Lesson 4: Quadratics\\nSolve x^2 - 5x + 6 = 0 by factoring\\n$x^2 - 5x + 6 = (x-2)(x-3)$\\nso $x = 2$ or $x = 3$\\nMargin: check with the discriminant\\n~~complete the square~~ not needed here\\nVertex form:\\n$$y = a(x-h)^2 + k$$\\nStudents struggled w/ [illegible] on #7\",\"corrected\":\"Lesson 4: Quadratics\\nSolve x^2 - 5x + 6 = 0 by factoring\\n$x^2 - 5x + 6 = (x-2)(x-3)$\\nso $x = 2$ or $x = 3$\\nMargin: check with the discriminant\\n~~complete the square~~ not needed here\\nVertex form:\\n$$y = a(x-h)^2 + k$$\\nStudents struggled w/ [illegible] on #7\",\"corrections\":[],\"boxes\":[{\"x\":0.07857142857142857,\"y\":0.18928571428571428,\"w\":0.7023809523809523,\"h\":0.039285714285714285,\"r\":0,\"s\":51},{\"x\":0.07857142857142857,\"y\":0.2785714285714286,\"w\":0.7666666666666667,\"h\":0.02142857142857143,\"r\":0,\"s\":55.666666666666664},{\"x\":0.07857142857142857,\"y\":0.3,\"w\":0.7666666666666667,\"h\":0.02142857142857143,\"r\":0,\"s\":55.666666666666664},{\"x\":0.10952380952380952,\"y\":0.4642857142857143,\"w\":0.6047619047619047,\"h\":0.017857142857142856,\"r\":0,\"s\":48.666666666666664},{\"x\":0.07857142857142857,\"y\":0.48392857142857143,\"w\":0.6547619047619048,\"h\":0.019642857142857142,\"r\":0,\"s\":52.333333333333336},{\"x\":0.07857142857142857,\"y\":0.5553571428571429,\"w\":0.7166666666666667,\"h\":0.020535714285714286,\"r\":0,\"s\":62},{\"x\":0.07857142857142857,\"y\":0.5758928571428572,\"w\":0.7166666666666667,\"h\":0.020535714285714286,\"r\":0,\"s\":62},{\"x\":0.07857142857142857,\"y\":0.6464285714285715,\"w\":0.7785714285714286,\"h\":0.04107142857142857,\"r\":0,\"s\":68},{\"x\":0.07857142857142857,\"y\":0.8464285714285714,\"w\":0.6666666666666666,\"h\":0.023214285714285715,\"r\":0,\"s\":69.33333333333333}],\"timings\":{\"ms\":3726,\"tokens\":52},\"error\":\"\",\"rotation\":0,\"student\":{\"name\":\"Ana\",\"source\":\"chosen\",\"confirmed\":true},\"reviewed\":false,\"resolved\":{},\"edits\":[],\"guesses\":{\"i:0\":[{\"text\":\"the discriminant\",\"percent\":55},{\"text\":\"discriminant\",\"percent\":25},{\"text\":\"a derivative\",\"percent\":10}]},\"guessed\":true}"
+  },
+  "clinic-notes-ecoles/originals/mv5cwkzu6tsgc.png": {
+   "type": "File",
+   "mime": "image/png",
+   "size": 130820,
+   "sha": "f084a468f74319dcd2de79ce78eb456c5b4dbed070423652036d9da3801c130e"
+  },
+  "clinic-notes-ecoles/originals/mv5cwkze33bz9.png": {
+   "type": "File",
+   "mime": "image/png",
+   "size": 136065,
+   "sha": "1ebafe173cdb5546a80baa8e31e0cce5129e04e79bbf622c0dd6ff3f05e40a20"
+  },
+  "clinic-notes-ecoles/originals/mv5cwkyyifnic.png": {
+   "type": "File",
+   "mime": "image/png",
+   "size": 136037,
+   "sha": "ff57d00ab2835c04084627c8b1984187bc1554ad173b00fa5f6c39cba216f88c"
+  },
+  "clinic-notes-ecoles/images/oldpage1.jpg": {
+   "type": "File",
+   "mime": "image/jpeg",
+   "size": 4,
+   "sha": "32461d5bd1773012acef0ba15636752949bd7c2ce50f9172159d9f56cf0dd9af"
+  },
+  "clinic-notes-ecoles/images/mv5cwkzu6tsgc.jpg": {
+   "type": "File",
+   "mime": "image/jpeg",
+   "size": 82991,
+   "sha": "18d224c2a4336e310e31cfcaf1e97c80c22221d62ae8791e563201c99f492ccc"
+  },
+  "clinic-notes-ecoles/images/mv5cwkze33bz9.jpg": {
+   "type": "File",
+   "mime": "image/jpeg",
+   "size": 86768,
+   "sha": "141852cf10d68551a3e0d32f86b1d89c78c8e32ac7e56ede268cb2b13ab5ea78"
+  },
+  "clinic-notes-ecoles/images/mv5cwkyyifnic.jpg": {
+   "type": "File",
+   "mime": "image/jpeg",
+   "size": 86109,
+   "sha": "4e65aa9471db6de2809c62aaa5d8cc74e2a32f0faeb0088668418f8f846bbb6e"
+  },
+  "clinic-notes-ecoles/exports/notes.md": {
+   "type": "string",
+   "text": "# export\n"
+  },
+  "clinic-notes-ecoles/exports/bytes.bin": {
+   "type": "File",
+   "mime": "application/octet-stream",
+   "size": 5,
+   "sha": "ad6170c304e1b0a6cfe3b1ba6b40c065f646428f623f664ad31d54b98735195c"
+  },
+  "clinic-notes-ecoles/exports/ab.bin": {
+   "type": "File",
+   "mime": "application/octet-stream",
+   "size": 3,
+   "sha": "06df4f7e1394f1c57cc6583fba4d8060a5a66f4f4771c14aeff6b9af8a28c9b3"
+  },
+  "algebra-quadratics/project.json.bak": {
+   "type": "string",
+   "text": "{\n  \"schemaVersion\": 1,\n  \"name\": \"Algebra: Quadratics\",\n  \"topic\": \"Math/Education\",\n  \"prompt\": \"Transcribe carefully.\",\n  \"order\": [\n    \"mv5cwas48waqu\",\n    \"mv5cwaslxkux9\",\n    \"mv5cwat3fmq1e\",\n    \"mv5cwatjqgoob\"\n  ],\n  \"created\": 1791815855724,\n  \"updated\": 1791815865659,\n  \"ui\": {\n    \"selectedId\": \"mv5cwatjqgoob\"\n  },\n  \"stats\": {\n    \"pages\": 4,\n    \"done\": 3\n  }\n}"
+  },
+  "algebra-quadratics/project.json": {
+   "type": "string",
+   "text": "{\n  \"schemaVersion\": 1,\n  \"name\": \"Algebra: Quadratics\",\n  \"topic\": \"Math/Education\",\n  \"prompt\": \"Transcribe carefully.\",\n  \"order\": [\n    \"mv5cwas48waqu\",\n    \"mv5cwaslxkux9\",\n    \"mv5cwat3fmq1e\",\n    \"mv5cwatjqgoob\"\n  ],\n  \"created\": 1791815855724,\n  \"updated\": 1791815868933,\n  \"ui\": {\n    \"selectedId\": \"mv5cwaslxkux9\",\n    \"layout\": \"text\"\n  },\n  \"stats\": {\n    \"pages\": 4,\n    \"done\": 4\n  },\n  \"futureMetaField\": {\n    \"a\": [\n      1,\n      2,\n      {\n        \"b\": null\n      }\n    ],\n    \"note\": \"unknown to the Rust model\"\n  }\n}"
+  },
+  "algebra-quadratics/pages/mv5cwatjqgoob.json": {
+   "type": "string",
+   "text": "{\"id\":\"mv5cwatjqgoob\",\"name\":\"student4.png\",\"order\":3,\"status\":\"done\",\"raw\":\"Lesson 4: Quadratics\\nSolve x^2 - 5x + 6 = 0 by factoring\\n$x^2 - 5x + 6 = (x-2)(x-3)$\\nso $x = 2$ or $x = 3$\\nMargin: check with the discriminant\\n~~complete the square~~ not needed here\\nVertex form:\\n$$y = a(x-h)^2 + k$$\\nStudents struggled w/ [illegible] on #7\",\"corrected\":\"Lesson 4: Quadratics\\nSolve x^2 - 5x + 6 = 0 by factoring\\n$x^2 - 5x + 6 = (x-2)(x-3)$\\nso $x = 2$ or $x = 3$\\nMargin: check with the discriminant\\n~~complete the square~~ not needed here\\nVertex form:\\n$$y = a(x-h)^2 + k$$\\nStudents struggled w/ [illegible] on #7\",\"corrections\":[{\"applied\":false,\"word\":\"Quadratics\",\"term\":\"quadratic\",\"conf\":0.9}],\"boxes\":[{\"x\":0.09047619047619047,\"y\":0.21071428571428572,\"w\":0.6023809523809524,\"h\":0.017857142857142856,\"r\":0,\"s\":61},{\"x\":0.07857142857142857,\"y\":0.28035714285714286,\"w\":0.7023809523809523,\"h\":0.039285714285714285,\"r\":0,\"s\":67.33333333333333},{\"x\":0.07857142857142857,\"y\":0.37142857142857144,\"w\":0.7642857142857142,\"h\":0.020535714285714286,\"r\":0,\"s\":68},{\"x\":0.07857142857142857,\"y\":0.3919642857142857,\"w\":0.7642857142857142,\"h\":0.020535714285714286,\"r\":0,\"s\":68},{\"x\":0.11666666666666667,\"y\":0.5553571428571429,\"w\":0.6047619047619047,\"h\":0.017857142857142856,\"r\":0,\"s\":50},{\"x\":0.07857142857142857,\"y\":0.5696428571428571,\"w\":0.6571428571428571,\"h\":0.025,\"r\":0,\"s\":51.333333333333336},{\"x\":0.07857142857142857,\"y\":0.6464285714285715,\"w\":0.719047619047619,\"h\":0.04107142857142857,\"r\":0,\"s\":53.666666666666664},{\"x\":0.07857142857142857,\"y\":0.7375,\"w\":0.7642857142857142,\"h\":0.04107142857142857,\"r\":0,\"s\":56},{\"x\":0.07857142857142857,\"y\":0.85,\"w\":0.6095238095238096,\"h\":0.019642857142857142,\"r\":0,\"s\":46.333333333333336}],\"timings\":{\"ms\":3753,\"tokens\":52},\"error\":\"\",\"rotation\":0,\"student\":{\"name\":\"Aaliyah M.\",\"source\":\"chosen\",\"confirmed\":true},\"reviewed\":false,\"resolved\":{},\"edits\":[],\"guesses\":{\"i:0\":[{\"text\":\"the discriminant\",\"percent\":55},{\"text\":\"discriminant\",\"percent\":25},{\"text\":\"a derivative\",\"percent\":10}]},\"guessed\":true}"
+  },
+  "algebra-quadratics/pages/mv5cwat3fmq1e.json": {
+   "type": "string",
+   "text": "{\"id\":\"mv5cwat3fmq1e\",\"name\":\"student3.png\",\"order\":2,\"status\":\"done\",\"raw\":\"lone surrogate: \\ud800 and trailing \\udfff end\",\"corrected\":\"lone surrogate: \\ud800 and trailing \\udfff end\",\"corrections\":[],\"boxes\":[{\"x\":0.07857142857142857,\"y\":0.09642857142857143,\"w\":0.7666666666666667,\"h\":0.04107142857142857,\"r\":0,\"s\":59.666666666666664},{\"x\":0.07857142857142857,\"y\":0.28035714285714286,\"w\":0.6571428571428571,\"h\":0.025,\"r\":0,\"s\":50.666666666666664},{\"x\":0.07857142857142857,\"y\":0.36964285714285716,\"w\":0.719047619047619,\"h\":0.04285714285714286,\"r\":0,\"s\":53.666666666666664},{\"x\":0.07857142857142857,\"y\":0.4625,\"w\":0.780952380952381,\"h\":0.04107142857142857,\"r\":0,\"s\":60.666666666666664},{\"x\":0.07857142857142857,\"y\":0.6464285714285715,\"w\":0.669047619047619,\"h\":0.04107142857142857,\"r\":0,\"s\":54.333333333333336},{\"x\":0.07857142857142857,\"y\":0.7375,\"w\":0.7309523809523809,\"h\":0.04107142857142857,\"r\":0,\"s\":63.333333333333336}],\"timings\":{\"ms\":2694,\"tokens\":35},\"error\":\"\",\"rotation\":0,\"student\":{\"name\":\"Sofia V.\",\"source\":\"chosen\",\"confirmed\":true},\"reviewed\":false,\"resolved\":{},\"edits\":[],\"guesses\":{\"i:0\":[{\"text\":\"the discriminant\",\"percent\":55},{\"text\":\"discriminant\",\"percent\":25},{\"text\":\"a derivative\",\"percent\":10}]},\"guessed\":true}"
+  },
+  "algebra-quadratics/pages/mv5cwaslxkux9.json": {
+   "type": "string",
+   "text": "{\"id\":\"mv5cwaslxkux9\",\"name\":\"student2.png\",\"order\":1,\"status\":\"done\",\"raw\":\"café café 😀   \\u0001 \\u001f \\\"q\\\" \\\\ </script>  日本語 ‮ /slash\",\"corrected\":\"Pt seen 10/3 c/o headache x2 days\\nBP 142/90, HR 88, afebrile\\nHx of hypertension, on lisinopril 10mg qd\\nMargin: recheck BP in 2 wks\\nPlan: continue meds, low sodium diet\\n~~start metformin~~ not indicated\\nF/U prn\",\"corrections\":[],\"boxes\":[{\"x\":0,\"y\":0.1,\"w\":1,\"h\":0.2,\"r\":0,\"s\":12.5},{\"x\":0.000001,\"y\":1e-7,\"w\":0.30000000000000004,\"h\":0.5,\"r\":0,\"s\":1e+21}],\"timings\":{\"ms\":2817,\"tokens\":37},\"error\":\"\",\"rotation\":0,\"student\":{\"name\":\"Devon T.\",\"source\":\"chosen\",\"confirmed\":true},\"reviewed\":false,\"resolved\":{},\"edits\":[],\"guesses\":{},\"numbers\":{\"a\":1e-7,\"b\":1e+21,\"c\":0.30000000000000004,\"d\":0,\"e\":10000000000000000,\"f\":123456789012345680000,\"g\":0.000001,\"h\":5e-324,\"i\":1.7976931348623157e+308,\"j\":100,\"k\":1.5,\"l\":9007199254740992,\"m\":9007199254740994,\"n\":1e+300,\"o\":0.0000123,\"p\":0.00001,\"q\":1000000000000000,\"r\":4500000000000000},\"intKeys\":{\"1\":\"one\",\"2\":\"two\",\"10\":\"ten\",\"b\":\"b\",\"a\":\"a\"},\"empties\":{\"e\":[],\"o\":{},\"ee\":[[],{}],\"n\":null,\"s\":\"\"}}"
+  },
+  "algebra-quadratics/pages/mv5cwas48waqu.json": {
+   "type": "string",
+   "text": "{\"id\":\"mv5cwas48waqu\",\"name\":\"student1.png\",\"order\":0,\"status\":\"done\",\"raw\":\"Lesson 4: Quadratics\\nSolve x^2 - 5x + 6 = 0 by factoring\\n$x^2 - 5x + 6 = (x-2)(x-3)$\\nso $x = 2$ or $x = 3$\\nMargin: check with the discriminant\\n~~complete the square~~ not needed here\\nVertex form:\\n$$y = a(x-h)^2 + k$$\\nStudents struggled w/ [illegible] on #7\",\"corrected\":\"Lesson 4: Quadratics\\nSolve x^2 - 5x + 6 = 0 by factoring\\n$x^2 - 5x + 6 = (x-2)(x-3)$\\nso $x = 2$ or $x = 3$\\nMargin: check with the discriminant\\n~~complete the square~~ not needed here\\nVertex form:\\n$$y = a(x-h)^2 + k$$\\nStudents struggled w/ [illegible] on #7\\nconfidence\",\"corrections\":[{\"word\":\"confidance\",\"term\":\"confidence\",\"conf\":0.9,\"applied\":true},{\"word\":\"lisinopril\",\"term\":\"lisinopril\",\"conf\":0.30000000000000004,\"applied\":false}],\"boxes\":[{\"x\":0.07857142857142857,\"y\":0.09642857142857143,\"w\":0.6880952380952381,\"h\":0.039285714285714285,\"r\":0,\"s\":66.33333333333333},{\"x\":0.07857142857142857,\"y\":0.1875,\"w\":0.7333333333333333,\"h\":0.04107142857142857,\"r\":0,\"s\":66.66666666666667},{\"x\":0.08571428571428572,\"y\":0.37142857142857144,\"w\":0.6071428571428571,\"h\":0.019642857142857142,\"r\":0,\"s\":49.333333333333336},{\"x\":0.07857142857142857,\"y\":0.4625,\"w\":0.6880952380952381,\"h\":0.04107142857142857,\"r\":0,\"s\":54},{\"x\":0.07857142857142857,\"y\":0.5535714285714286,\"w\":0.75,\"h\":0.02142857142857143,\"r\":0,\"s\":58.666666666666664},{\"x\":0.07857142857142857,\"y\":0.5750000000000001,\"w\":0.75,\"h\":0.02142857142857143,\"r\":0,\"s\":58.666666666666664},{\"x\":0.07857142857142857,\"y\":0.7392857142857143,\"w\":0.611904761904762,\"h\":0.02142857142857143,\"r\":0,\"s\":46.333333333333336},{\"x\":0.10714285714285714,\"y\":0.7553571428571428,\"w\":0.611904761904762,\"h\":0.017857142857142856,\"r\":0,\"s\":46.333333333333336},{\"x\":0.07857142857142857,\"y\":0.8303571428571429,\"w\":0.7023809523809523,\"h\":0.039285714285714285,\"r\":0,\"s\":53.333333333333336}],\"timings\":{\"ms\":3754,\"tokens\":52},\"error\":\"\",\"rotation\":0,\"student\":{\"name\":\"Maya R.\",\"source\":\"chosen\",\"confirmed\":true},\"reviewed\":true,\"resolved\":{\"c:0\":\"suggested\",\"i:0\":\"edited\"},\"edits\":[{\"key\":\"i:0\",\"text\":\"discriminant\",\"at\":1791815868932}],\"guesses\":{\"i:0\":[{\"text\":\"the discriminant\",\"percent\":55},{\"text\":\"discriminant\",\"percent\":25},{\"text\":\"a derivative\",\"percent\":10}]},\"guessed\":true}"
+  },
+  "algebra-quadratics/images/mv5cwatjqgoob.jpg": {
+   "type": "File",
+   "mime": "image/jpeg",
+   "size": 84479,
+   "sha": "75fefba330678f6404f0799ddb0b6b032eb2efab7b4a446ce94f1be87c65f215"
+  },
+  "algebra-quadratics/images/mv5cwat3fmq1e.jpg": {
+   "type": "File",
+   "mime": "image/jpeg",
+   "size": 86809,
+   "sha": "30c22bd8293cf1fa51702197d65ce726194dfda5907bd0e3fd07cccb83fedbd2"
+  },
+  "algebra-quadratics/images/mv5cwaslxkux9.jpg": {
+   "type": "File",
+   "mime": "image/jpeg",
+   "size": 83960,
+   "sha": "c3793a37d77641c90c178be35cb8a690f42e8bf0a6f44a340d9249ac2eff3291"
+  },
+  "algebra-quadratics/images/mv5cwas48waqu.jpg": {
+   "type": "File",
+   "mime": "image/jpeg",
+   "size": 84895,
+   "sha": "4de89b0bbddcb0760bc2e2d996ddf40000337ccd654997433d7c2858c20365ec"
+  }
+ },
+ "kv": {},
+ "ls": {
+  "ocr_settings_v1": "{\"theme\":\"auto\",\"ocrUrl\":\"http://localhost:8188\",\"judgeUrl\":\"http://localhost:8189\",\"judgeMode\":\"auto\",\"apiKey\":\"\",\"demo\":true,\"storage\":\"auto\",\"keepOriginals\":true,\"timeoutSec\":180,\"exportFormat\":\"md\",\"exportSeparator\":\"label\",\"exportText\":\"corrected\",\"topics\":{\"General\":{\"description\":\"Everyday handwriting with no special vocabulary.\",\"terms\":[]},\"Medical\":{\"description\":\"Clinical notes, charts and medication names.\",\"terms\":[\"hypertension\",\"tachycardia\",\"bradycardia\",\"dyspnea\",\"edema\",\"acetaminophen\",\"ibuprofen\",\"metformin\",\"lisinopril\",\"atorvastatin\",\"auscultation\",\"prn\",\"bid\",\"tid\",\"qid\"]},\"Math/Education\":{\"description\":\"Lesson plans, student work and mathematics.\",\"terms\":[\"derivative\",\"integral\",\"quadratic\",\"polynomial\",\"coefficient\",\"theorem\",\"hypotenuse\",\"logarithm\",\"asymptote\",\"regression\",\"hypothesis\",\"rubric\",\"formative\",\"summative\",\"scaffold\",\"differentiation\"]}},\"defaultPrompt\":\"Transcribe the handwriting on this page. Output only the words written on the page, exactly as written, one line of handwriting per line of output.\\nRules:\\n- Copy spelling, abbreviations, numbers, symbols and punctuation exactly. Do not fix spelling or grammar. Do not reword.\\n- Keep the line breaks, and keep bullets and dashes as written. Write arrows and other symbols as the characters you see (for example →), never as LaTeX.\\n- Do not add a title, summary, introduction, explanation, heading or code fence. Do not describe the page or the handwriting.\\n- Do not add any word that is not on the page. Do not repeat a line.\\n- If a word is truly unreadable, write [illegible]. Do not invent a word to fill the gap.\\n- Write ~~word~~ for struck-through text.\\n- Put a margin note on its own line starting with \\\"Margin:\\\".\\n- Use LaTeX inside $...$ or $$...$$ only for mathematical formulas.\\nStart with the first line of handwriting and stop after the last.\",\"noticeSeen\":false,\"readNames\":true,\"straighten\":true,\"provider\":\"local\",\"model\":\"\",\"profiles\":{},\"idleUnloadMin\":10,\"guessIllegible\":true,\"rememberFixes\":true,\"reference\":[]}",
+  "ocr_sessions_v2": "[{\"id\":\"s1\",\"name\":\"Legacy one\",\"created\":1700000000000,\"lastRaw\":\"legacy transcript → one\",\"preRaw\":\"legacy raw\",\"hasImage\":true,\"topic\":\"General\",\"prompt\":\"p\",\"appliedDiff\":[{\"orig\":\"teh\",\"term\":\"the\"}]},{\"id\":\"s2\",\"name\":\"Legacy é\",\"created\":1700000001000,\"lastRaw\":\"two\",\"hasImage\":false,\"extraLegacy\":{\"n\":1.5}}]"
+ }
+}

@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Add pages</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap">
+<style>
+body{margin:0;background:#EEF1F5}
+a{color:var(--ink)}
+a:hover{color:var(--accent)}
+button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
+.ghost{background:transparent;border:0;border-radius:8px;color:inherit;font:inherit;cursor:pointer}
+.ghost:hover{background:var(--hover)}
+.opt:hover{background:var(--sunken)}
+</style>
+</helmet>
+
+<div style="{{tk}}">
+<div style="min-height: 900px; box-sizing: border-box; background: var(--bg); color: var(--ink); font-family: 'Instrument Sans', system-ui, sans-serif; font-size: 14px; line-height: 1.4">
+
+  <header style="display: flex; flex-wrap: wrap; align-items: center; gap: 12px 28px; min-height: 64px; padding: 10px 24px; box-sizing: border-box; background: var(--surface); border-bottom: 1px solid var(--line)">
+    <a href="Projects.dc.html" style="display: flex; align-items: center; min-height: 44px; font-size: 15px; font-weight: 600; text-decoration: none">Handwriting Transcriber</a>
+    <a href="Batch.dc.html" style="display: flex; align-items: center; gap: 6px; min-height: 44px; font-weight: 500; text-decoration: none">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>
+      Unit 5 written response
+    </a>
+  </header>
+
+  <div style="width: 100%; max-width: 1120px; margin: 0 auto; box-sizing: border-box; padding: 40px 24px 56px">
+    <h1 style="margin: 0; font-family: 'Source Serif 4', Georgia, serif; font-size: 36px; font-weight: 600; line-height: 1.15">Add pages</h1>
+
+    <div style="display: flex; flex-wrap: wrap; align-items: flex-start; gap: 32px; margin-top: 28px">
+
+      <div style="flex: 2 1 560px; min-width: 0">
+        <div style="display: flex; flex-direction: column; align-items: center; gap: 16px; padding: 48px 24px; box-sizing: border-box; border: 2px dashed var(--faint); border-radius: 12px; background: var(--surface); text-align: center">
+          <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" style="color: var(--ink)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 16V4M7 9l5-5 5 5M4 16v3a1 1 0 001 1h14a1 1 0 001-1v-3"/></svg>
+          <div>
+            <div style="font-family: 'Source Serif 4', Georgia, serif; font-size: 26px; font-weight: 600; line-height: 1.2">Drop photos or scans here</div>
+            <p style="margin: 8px auto 0; max-width: 40ch; color: var(--muted)">PNG, JPG, or WebP, up to 40 MB each. Folders work too, and you can paste from the clipboard.</p>
+          </div>
+          <div style="display: flex; flex-wrap: wrap; justify-content: center; gap: 12px">
+            <button type="button" style="height: 44px; padding: 0 18px; border: 0; border-radius: 8px; background: var(--ink); color: var(--on-ink); font: inherit; font-weight: 600; cursor: pointer">Choose files</button>
+          </div>
+          <p style="margin: 0; font-size: 13px; color: var(--muted)">iPhone photos: in Settings, Camera, Formats, choose Most Compatible so pages save as JPG.</p>
+        </div>
+
+        <div style="display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px; margin-top: 40px">
+          <h2 style="margin: 0; font-family: 'Source Serif 4', Georgia, serif; font-size: 24px; font-weight: 600; line-height: 1.2">Ready to transcribe</h2>
+          <span style="color: var(--muted)">{{totalText}}</span>
+        </div>
+
+        <div role="status" style="display: flex; align-items: flex-start; gap: 12px; margin-top: 14px; padding: 12px 16px; box-sizing: border-box; border: 1px solid var(--warn-line); border-radius: 10px; background: var(--warn-bg)">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex: none; margin-top: 1px"><path d="M12 3l10 18H2L12 3zM12 10v5M12 18v.01"/></svg>
+          <div><div style="font-weight: 600">2 files were skipped</div><div style="margin-top: 2px; font-size: 13px; color: var(--ink)">class-scan.pdf and IMG_4417.heic aren't supported. Save them as PNG, JPG, or WebP and add them again.</div></div>
+        </div>
+
+        <div style="margin-top: 14px; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--surface)">
+          <sc-for list="{{rows}}" as="r" hint-placeholder-count="5">
+            <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; padding: 12px 20px; border-bottom: 1px solid var(--soft)">
+              <div style="position: relative; flex: none; width: 40px; height: 52px; border-radius: 2px; background-color: var(--paper); background-image: repeating-linear-gradient(to bottom, transparent 0, transparent 6px, #C3D4EA 6px, #C3D4EA 7px); box-shadow: 0 1px 2px rgba(20,27,45,.3)" aria-hidden="true">
+                <div style="position: absolute; top: 0; bottom: 0; left: 8px; width: 1px; background: #E7A3A3"></div>
+                <div style="position: absolute; top: 0; bottom: 0; left: 11px; right: 5px; background-image: repeating-linear-gradient(to bottom, transparent 0, transparent 3px, rgba(38,53,143,.55) 3px, rgba(38,53,143,.55) 4px, transparent 4px, transparent 7px)"></div>
+              </div>
+              <div style="flex: 1 1 160px; min-width: 0; font-weight: 600">{{r.file}}</div>
+              <sc-if value="{{r.found}}" hint-placeholder-val="{{ true }}">
+                <div style="flex: 1 1 200px; min-width: 0">
+                  <div style="font-size: 16px; font-weight: 600">{{r.name}}</div>
+                  <div style="margin-top: 2px; font-size: 13px; color: var(--muted)">Read from the top of the page</div>
+                </div>
+              </sc-if>
+              <sc-if value="{{r.missing}}" hint-placeholder-val="{{ false }}">
+                <div style="flex: 1 1 200px; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px">
+                  <span style="padding: 4px 12px; border-radius: 999px; background: var(--warn); font-weight: 600; white-space: nowrap">Name not found</span>
+                  <select id="student-for-missing" aria-label="{{r.selectLabel}}" style="height: 44px; min-width: 160px; padding: 0 12px; border: 1px solid var(--line2); border-radius: 8px; background: var(--surface); color: var(--ink); font: inherit">
+                    <option>Choose a student</option>
+                    <option>Aaliyah M.</option>
+                    <option>Caleb P.</option>
+                    <option>Eli W.</option>
+                    <option>Hannah L.</option>
+                  </select>
+                </div>
+              </sc-if>
+              <button class="ghost" type="button" aria-label="{{r.removeLabel}}" style="flex: none; width: 44px; height: 44px; display: flex; align-items: center; justify-content: center">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+              </button>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+
+      <div style="flex: 1 1 320px; max-width: 440px; min-width: 0; box-sizing: border-box; display: flex; flex-direction: column; gap: 24px; padding: 24px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface)">
+
+        <div style="display: flex; flex-direction: column; gap: 4px">
+          <span style="font-size: 15px; font-weight: 600">Adding to</span>
+          <span style="font-family: 'Source Serif 4', Georgia, serif; font-size: 20px; font-weight: 600; line-height: 1.25">Unit 5 written response</span>
+        </div>
+
+        <div style="display: flex; flex-direction: column; gap: 8px">
+          <label for="topic" style="font-size: 15px; font-weight: 600">Subject</label>
+          <select id="topic" style="height: 44px; padding: 0 12px; border: 1px solid var(--line2); border-radius: 8px; background: var(--surface); color: var(--ink); font: inherit">
+            <option>Intro statistics</option>
+            <option>Calculus</option>
+            <option>Computer science</option>
+            <option>General</option>
+          </select>
+          <p style="margin: 0; font-size: 13px; color: var(--muted)">Used to catch course words that get misread, like "interval" and "integral". Math written on the page is kept as math either way.</p>
+        </div>
+
+        <label class="opt" for="read-names" style="display: flex; align-items: flex-start; gap: 12px; padding: 10px 12px; box-sizing: border-box; border: 1px solid var(--line2); border-radius: 8px; cursor: pointer">
+          <input type="checkbox" id="read-names" checked style="flex: none; width: 18px; height: 18px; margin: 2px 0 0; accent-color: var(--ink)">
+          <span><span style="display: block; font-weight: 600">Read the name at the top of each page</span><span style="display: block; font-size: 13px; color: var(--muted)">You'll pick the student for any page where a name can't be found.</span></span>
+        </label>
+
+        <div style="display: flex; flex-direction: column; gap: 10px">
+          <a href="Batch.dc.html" style="display: flex; align-items: center; justify-content: center; min-height: 48px; box-sizing: border-box; border-radius: 8px; background: var(--ink); color: var(--on-ink); font-size: 15px; font-weight: 600; text-decoration: none">{{ctaText}}</a>
+          <p style="margin: 0; font-size: 13px; color: var(--muted)">{{missingNote}}</p>
+        </div>
+
+      </div>
+    </div>
+  </div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"dark":{"editor":"boolean","default":false},"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  tk() {
+    const L = { bg: '#EEF1F5', surface: '#FFFFFF', sunken: '#F3F5F8', ink: '#141B2D', 'on-ink': '#FFFFFF', muted: '#5A6477', faint: '#8792A6', line: '#D3D9E2', line2: '#BCC5D2', soft: '#E3E8EF', hover: '#E4E9F0', warn: '#FFE27A', 'warn-bg': '#FFF6CF', 'warn-line': '#E6C84F', accent: '#26358F', paper: '#FCFCF8' };
+    const D = { bg: '#0F131C', surface: '#171C28', sunken: '#1D2331', ink: '#E8ECF3', 'on-ink': '#0F131C', muted: '#9AA5B8', faint: '#6F7A90', line: '#2B3345', line2: '#3E4A63', soft: '#222A3A', hover: '#232B3B', warn: '#6B5712', 'warn-bg': '#3A3110', 'warn-line': '#7A6516', accent: '#9DB0FF', paper: '#D8D7CB' };
+    const dark = this.props.dark === true || this.props.dark === 'true';
+    const T = dark ? D : L;
+    return Object.keys(T).map((k) => '--' + k + ':' + T[k]).join(';') + ';display:contents;';
+  }
+  renderVals() {
+    const src = [
+      { file: 'IMG_4412.jpg', name: 'Maya R.' },
+      { file: 'IMG_4413.jpg', name: 'Devon T.' },
+      { file: 'IMG_4414.jpg', name: 'Devon T.' },
+      { file: 'IMG_4415.jpg', name: null },
+      { file: 'IMG_4416.jpg', name: 'Sofia V.' }
+    ];
+    const total = src.length;
+    const missing = src.filter((r) => !r.name).length;
+    const rows = src.map((r) => ({
+      file: r.file,
+      name: r.name || '',
+      found: !!r.name,
+      missing: !r.name,
+      selectLabel: 'Choose a student for ' + r.file,
+      removeLabel: 'Remove ' + r.file
+    }));
+    return {
+      tk: this.tk(),
+      rows: rows,
+      totalText: total + (total === 1 ? ' page' : ' pages'),
+      ctaText: 'Transcribe ' + total + (total === 1 ? ' page' : ' pages'),
+      missingNote: missing === 0
+        ? 'Every page has a student.'
+        : missing + (missing === 1 ? ' page needs' : ' pages need') + ' a student. You can choose one after transcribing.'
+    };
+  }
+}
+</script>
+</body>
+</html>

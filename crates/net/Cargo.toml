@@ -1,0 +1,24 @@
+[package]
+name = "vishion-net"
+description = "OCR client: streaming chat completions (ureq on native, fetch on the web) over a pure SSE parser."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+vishion-core.workspace = true
+serde_json.workspace = true
+base64 = "0.22"
+
+# Blocking HTTP on the host's worker thread (the native app already runs commands there).
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+ureq = "2"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+web-sys = { version = "0.3", features = ["Request", "RequestInit", "Response", "Headers", "ReadableStream", "WorkerGlobalScope", "AbortController", "AbortSignal"] }
+wasm-streams = "0.4"
+futures-util = { version = "0.3", default-features = false }

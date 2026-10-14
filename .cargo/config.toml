@@ -1,0 +1,5 @@
+# web-sys gates some browser APIs (the async Clipboard API eframe uses on the web) behind this cfg.
+# Only the wasm32 target gets it, so native builds and their cache are untouched. An explicit RUSTFLAGS
+# environment variable replaces this setting, so set it there too if you override RUSTFLAGS.
+[target.wasm32-unknown-unknown]
+rustflags = ["--cfg=web_sys_unstable_apis"]

@@ -1,5 +1,5 @@
 """OCR bake-off: serve each model with llama-server, transcribe the test photos, save raw output + CER.
-Run:  python -I run.py [model ...]     (default: all three)
+Run:  python -I run.py [model ...]     (default: all five)
 """
 import base64, io, json, os, re, subprocess, sys, time, urllib.request
 from pathlib import Path
@@ -21,10 +21,13 @@ NANONETS_PROMPT = ("Extract the text from the above document as if you were read
                    "should be wrapped in brackets. Ex: <watermark>OFFICIAL COPY</watermark>. Page numbers should "
                    "be wrapped in brackets. Ex: <page_number>14</page_number> or <page_number>9/22</page_number>. "
                    "Prefer using ☐ and ☑ for check boxes.")
+# Each model lives in models/<dir>/ as model.gguf + mmproj.gguf (sources in README.md).
 MODELS = {
-    "qwen3vl":  {"dir": "qwen3vl",   "prompt": APP_PROMPT,       "extra": ["--temp", "0"]},
-    "paddle":   {"dir": "paddle",    "prompt": "OCR:",           "extra": ["--temp", "0"]},
-    "nanonets": {"dir": "nanonets",  "prompt": NANONETS_PROMPT,  "extra": ["--temp", "0"]},
+    "qwen3vl":   {"dir": "qwen3vl",   "prompt": APP_PROMPT,       "extra": ["--temp", "0"]},  # Qwen3-VL-8B-Instruct Q8_0
+    "qwen25vl":  {"dir": "qwen25vl",  "prompt": APP_PROMPT,       "extra": ["--temp", "0"]},  # ggml-org Qwen2.5-VL-7B-Instruct Q8_0
+    "lumichats": {"dir": "lumichats", "prompt": APP_PROMPT,       "extra": ["--temp", "0"]},  # LumiChats v1.2 Q8_0 + Qwen2.5-VL projector
+    "nanonets":  {"dir": "nanonets",  "prompt": NANONETS_PROMPT,  "extra": ["--temp", "0"]},  # mradermacher Nanonets-OCR2-3B Q8_0
+    "paddle":    {"dir": "paddle",    "prompt": "OCR:",           "extra": ["--temp", "0"]},  # PaddleOCR-VL-1.6-GGUF
 }
 
 
