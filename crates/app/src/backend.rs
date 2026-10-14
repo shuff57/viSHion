@@ -697,6 +697,12 @@ impl Backend {
                 self.stage_pictures(&conn, read_names, preset.as_deref(), &|e| out.borrow_mut().push(e)).await;
                 Event::Many(out.into_inner())
             }
+            Cmd::StageFiles { files, conn, read_names, preset } => {
+                let out = std::cell::RefCell::new(vec![]);
+                let files = files.into_iter().map(|(name, bytes)| Picked { name, bytes }).collect();
+                self.stage_files(files, &conn, read_names, preset.as_deref(), &|e| out.borrow_mut().push(e)).await;
+                Event::Many(out.into_inner())
+            }
             Cmd::CommitStaged { slug, items } => self.commit_staged(&slug, items, now).await,
             Cmd::ImportZip => {
                 let Some(f) = pick_zip().await.pop() else {

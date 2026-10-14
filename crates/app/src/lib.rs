@@ -237,6 +237,11 @@ mod web {
                                     b.read_pages(&slug, ids, conn, &|e| inbox.push(e)).await;
                                     return;
                                 }
+                                if let Cmd::StageFiles { files, conn, read_names, preset } = cmd {
+                                    let files = files.into_iter().map(|(name, bytes)| crate::backend::Picked { name, bytes }).collect();
+                                    b.stage_files(files, &conn, read_names, preset.as_deref(), &|e| inbox.push(e)).await;
+                                    return;
+                                }
                                 if let Cmd::StagePictures { conn, read_names, preset } = cmd {
                                     b.stage_pictures(&conn, read_names, preset.as_deref(), &|e| inbox.push(e)).await;
                                     return;

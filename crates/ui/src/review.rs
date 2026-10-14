@@ -102,6 +102,7 @@ pub(crate) enum Act {
     OpenExport,
     OpenAdd(Option<String>),
     AddChoose,
+    AddDropped(Vec<(String, Vec<u8>)>),
     AddRemove(u64),
     AddPick(u64),
     AddName(u64, String),
@@ -788,6 +789,11 @@ fn apply(
             let read_names = s.settings.get("readNames").and_then(|v| v.as_bool()) != Some(false);
             send(Cmd::StagePictures { conn: s.read_conn(), read_names, preset: s.add.preset.clone() });
         }
+        Act::AddDropped(files) => {
+            s.add.working = true;
+            let read_names = s.settings.get("readNames").and_then(|v| v.as_bool()) != Some(false);
+            send(Cmd::StageFiles { files, conn: s.read_conn(), read_names, preset: s.add.preset.clone() });
+        }
         Act::AddRemove(k) => s.add.rows.retain(|r| r.key != k),
         Act::AddPick(k) => {
             if let Some(r) = s.add.rows.iter_mut().find(|r| r.key == k) {
@@ -1354,6 +1360,37 @@ fn inbox(ctx: &egui::Context, cx: &mut Cx, s: &Session) {
 /// button that saves and starts the run.
 fn add_view(ctx: &egui::Context, cx: &mut Cx, s: &Session) {
     let t = cx.t;
+    // files dropped on the window (a folder is read for the pictures in it)
+    let dropped = ctx.input(|i| i.raw.dropped_files.clone());
+    if !dropped.is_empty() {
+        let mut files: Vec<(String, Vec<u8>)> = vec![];
+        for f in dropped {
+            if let Some(b) = &f.bytes {
+                files.push((f.name.clone(), b.to_vec()));
+            } else if let Some(p) = &f.path {
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    fn walk(p: &std::path::Path, out: &mut Vec<(String, Vec<u8>)>) {
+                        if p.is_dir() {
+                            if let Ok(rd) = std::fs::read_dir(p) {
+                                for e in rd.flatten() {
+                                    walk(&e.path(), out);
+                                }
+                            }
+                        } else if let Ok(b) = std::fs::read(p) {
+                            out.push((p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default(), b));
+                        }
+                    }
+                    walk(p, &mut files);
+                }
+                #[cfg(target_arch = "wasm32")]
+                let _ = p;
+            }
+        }
+        if !files.is_empty() {
+            cx.acts.push(Act::AddDropped(files));
+        }
+    }
     egui::CentralPanel::default().frame(egui::Frame::none().fill(t.bg)).show(ctx, |ui| {
         cx.ctl.scrolls[TEXT as usize] = true;
         egui::ScrollArea::vertical().auto_shrink([false, false]).animated(false).id_source("add-scroll").show(ui, |ui| {
@@ -1394,11 +1431,11 @@ fn add_body(ui: &mut Ui, cx: &mut Cx, s: &Session) {
     // drop zone (a button here: files come from the picker)
     egui::Frame::none().fill(t.surface).stroke(Stroke::new(1.0, t.line2)).rounding(10.0).inner_margin(Margin::symmetric(24.0, 28.0)).show(ui, |ui| {
         ui.set_width(ui.available_width());
-        let big = "Choose photos or scans";
+        let big = "Drop photos or scans here";
         let r = css_text(ui, big, theme::sans_semi(18.0), t.ink, 18.0 * 1.4, ui.available_width(), false);
         cx.ctl.heading("add-drop", 2, big, TEXT, r);
         ui.add_space(6.0);
-        let note = "PNG, JPG, or WebP, up to 40 MB each.";
+        let note = "Drop them here, or choose files. PNG, JPG, or WebP, up to 40 MB each.";
         let r = css_text(ui, note, theme::sans(14.0), t.muted, 14.0 * 1.4, ui.available_width(), false);
         cx.ctl.text("add-types", note, TEXT, r);
         ui.add_space(14.0);

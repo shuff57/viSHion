@@ -56,6 +56,23 @@ impl Rig {
         }
     }
 
+    /// Files dropped on the window in one frame.
+    pub fn drop_files(&mut self, files: Vec<(String, Vec<u8>)>) {
+        self.t += 0.1;
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(self.size.0, self.size.1))),
+            time: Some(self.t),
+            dropped_files: files
+                .into_iter()
+                .map(|(name, b)| egui::DroppedFile { name, bytes: Some(b.into()), ..Default::default() })
+                .collect(),
+            ..Default::default()
+        };
+        let app = &mut self.app;
+        self.out = self.ctx.run(input, |c| app.run_frame(c));
+        self.frames(6);
+    }
+
     pub fn act(&mut self, id: &str) {
         assert!(self.app.controls().iter().any(|c| c.id == id), "no control {id}: {:?}", self.app.controls().iter().map(|c| &c.id).collect::<Vec<_>>());
         self.app.twin_act(id);
@@ -477,5 +494,18 @@ mod tests {
         assert_eq!(s.a.pages.len(), before + 2);
         assert_eq!(s.view, vishion_ui::state::View::Inbox);
         assert!(s.a.pages.values().any(|p| p.student_name() == Some("Nia W.")));
+    }
+
+    /// Dropping pictures on the Add screen stages them like the picker does.
+    #[test]
+    fn add_screen_takes_dropped_files() {
+        let mut r = Rig::demo();
+        r.act("crumb");
+        r.act("add-pages");
+        r.drop_files(vec![("drop1.png".into(), png(200, 300)), ("readme.txt".into(), b"x".to_vec())]);
+        let a = &r.app.session().unwrap().add;
+        assert_eq!(a.rows.len(), 1, "{:?}", a.rows.len());
+        assert_eq!(a.rows[0].item.file_name, "drop1.png");
+        assert_eq!(a.skipped.len(), 1);
     }
 }

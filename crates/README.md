@@ -110,8 +110,8 @@ whenever the inline bootstrap script in `crates/app/web/index.html` changes, so 
   checked like `image.check`, shrunk, levelled when the setting says so, and its name read from the top 14% by
   the model, or from the sample names in demo mode), staged rows with a student chooser (known names or a typed
   one) and Remove, skipped-file and names-down notices, the subject, "Read the name" switch, and Transcribe N
-  pages (`Cmd::CommitStaged`, then the run starts). Not yet: dropping files on the window, paste, the full-size
-  look at a photo with its lines.
+  pages (`Cmd::CommitStaged`, then the run starts). Files dropped on the window are staged too (`Cmd::StageFiles`; a native folder is walked). Not yet: paste
+  (egui has no image paste) and the full-size look at a photo with its lines.
 - home (`ui::home`, Phase 5): the wordmark on the inbox goes there, and an empty store starts there. Lists the
   assignments (`Cmd::ListProjects` -> `Event::Projects`), opens one, creates, renames, duplicates and deletes
   (inline fields and an inline confirm instead of dialogs, so it works with no session). Import zip (`core::export::read_zip`, stored and deflated

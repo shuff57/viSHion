@@ -124,6 +124,10 @@ fn main() -> eframe::Result<()> {
                         Cmd::StagePictures { conn, read_names, preset } => {
                             block_on(backend.stage_pictures(&conn, read_names, preset.as_deref(), &|e| worker_inbox.push(e)));
                         }
+                        Cmd::StageFiles { files, conn, read_names, preset } => {
+                            let files = files.into_iter().map(|(name, bytes)| vishion_app::backend::Picked { name, bytes }).collect();
+                            block_on(backend.stage_files(files, &conn, read_names, preset.as_deref(), &|e| worker_inbox.push(e)));
+                        }
                         cmd => worker_inbox.push(block_on(backend.handle(cmd, now()))),
                     }
                 }

@@ -62,6 +62,8 @@ pub enum Cmd {
     /// files that cannot be added). `preset` is a student chosen beforehand; otherwise, with `read_names`,
     /// the model reads the name at the top of each page.
     StagePictures { conn: Conn, read_names: bool, preset: Option<String> },
+    /// Stage pictures that were dropped on the window (name, bytes), as `StagePictures` stages the picked ones.
+    StageFiles { files: Vec<(String, Vec<u8>)>, conn: Conn, read_names: bool, preset: Option<String> },
     /// Save the staged pictures as new pages: `Event::PagesAdded`.
     CommitStaged { slug: String, items: Vec<StagedItem> },
     /// Ask for a project zip and import it as a new assignment: `Event::Opened`.
