@@ -16,6 +16,8 @@ pub enum After {
     TranscribeAgain(String),
     ReviewAgain(Vec<String>),
     UseProvider(String),
+    /// Export anyway: the kind of file and the scope it was asked for.
+    ExportRun(String, &'static str),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -44,6 +46,11 @@ pub enum Dialog {
         drafts: std::collections::BTreeMap<&'static str, String>,
         open: Option<&'static str>,
     },
+    /// `U.openExport`: who to include (`all` | `ready` | `selected`), what to make.
+    Export {
+        scope: &'static str,
+        open: Option<&'static str>,
+    },
     Confirm {
         title: String,
         text: String,
@@ -56,6 +63,10 @@ pub enum Dialog {
 impl Dialog {
     pub fn settings() -> Dialog {
         Dialog::Settings { drafts: Default::default(), open: None, custom: false }
+    }
+
+    pub fn export(scope: &'static str) -> Dialog {
+        Dialog::Export { scope, open: None }
     }
 
     pub fn assignment() -> Dialog {
@@ -80,6 +91,7 @@ impl Dialog {
                 _ => "theme-auto".into(),
             },
             Dialog::Assignment { .. } => "as-name".into(),
+            Dialog::Export { .. } => "ex-scope-all".into(),
             Dialog::Confirm { .. } => "dialog-cancel".into(),
             Dialog::ChangeStudent { .. } => {
                 // js: the first thing in the body, the select
@@ -104,6 +116,10 @@ pub enum Out {
     Provider(String),
     /// An assignment field changed in the open dialog (it stays open): key, value, what is said.
     Meta(&'static str, serde_json::Value, String),
+    /// Make this kind of export (combined | pages | csv | json | copy | all) for the scope shown.
+    Export(&'static str, &'static str),
+    /// The scope radio changed.
+    Scope(&'static str),
 }
 
 /// Save what was typed in the settings boxes (the JS inputs save on `change`).
@@ -174,8 +190,8 @@ pub fn show(ctx: &egui::Context, ctl: &mut Ctl, t: &Tokens, s: &Session, d: &mut
         ui.painter().rect_filled(r, 0.0, if t.dark { egui::Color32::from_black_alpha(158) } else { egui::Color32::from_rgba_unmultiplied(20, 27, 45, 128) });
     });
     // `.modal.narrow { width: 440px }` for Change student; the others keep their width
-    let narrow = matches!(d, Dialog::ChangeStudent { .. } | Dialog::Settings { .. } | Dialog::Assignment { .. });
-    let width = (screen.width() - 32.0).clamp(280.0, if matches!(d, Dialog::Settings { .. } | Dialog::Assignment { .. }) { 600.0 } else if narrow { 440.0 } else { 480.0 });
+    let narrow = matches!(d, Dialog::ChangeStudent { .. } | Dialog::Settings { .. } | Dialog::Assignment { .. } | Dialog::Export { .. });
+    let width = (screen.width() - 32.0).clamp(280.0, if matches!(d, Dialog::Settings { .. } | Dialog::Assignment { .. } | Dialog::Export { .. }) { 600.0 } else if narrow { 440.0 } else { 480.0 });
     let margin = if narrow { 0.0 } else { 20.0 };
     // `.backdrop { align-items: flex-start; padding: 48px 16px }`
     let anchor = if narrow { (Align2::CENTER_TOP, vec2(0.0, 48.0)) } else { (Align2::CENTER_CENTER, vec2(0.0, 0.0)) };
@@ -194,6 +210,7 @@ pub fn show(ctx: &egui::Context, ctl: &mut Ctl, t: &Tokens, s: &Session, d: &mut
                 match d {
                     Dialog::Settings { drafts, open, custom } => out = settings(ctl, ui, t, s, drafts, open, custom),
                     Dialog::Assignment { drafts, open } => out = assignment(ctl, ui, t, s, drafts, open),
+                    Dialog::Export { scope, open } => out = export(ctl, ui, t, s, scope, open),
                     Dialog::ChangeStudent { pick, new_student, name, all, error, open } => {
                         out = change_student(ctl, ui, t, s, pick, new_student, name, all, error, open)
                     }
@@ -488,6 +505,113 @@ fn section_end(ui: &mut Ui, t: &Tokens, w: f32) {
     let x0 = ui.min_rect().left();
     ui.painter().hline(x0..=x0 + w, y + 0.5, Stroke::new(1.0, t.soft));
     ui.add_space(21.0);
+}
+
+/// `U.openExport`.
+fn export(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, s: &Session, scope: &'static str, open: &mut Option<&'static str>) -> Option<Out> {
+    use serde_json::json;
+    let mut out: Option<Out> = None;
+    ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
+    let w = ui.available_width();
+    if modal_head(ctl, ui, t, w, "Export transcripts") {
+        out = Some(Out::Close);
+    }
+    let groups = s.groups();
+    let ready = groups.iter().filter(|g| g.status == vishion_core::groups::Status::Ready).count();
+    let n_pages: usize = groups.iter().map(|g| g.pages.len()).sum();
+    let chosen = s.multi.len();
+    let list = s.export_pages(scope);
+    let gaps = list.iter().filter(|p| p.status() != "done").count();
+    let summary = if list.is_empty() {
+        "No students are ready to read yet.".to_string()
+    } else if gaps > 0 {
+        format!("{gaps} of {} {} no transcript yet. They will be empty in the export.", list.len(), if list.len() == 1 { "page has" } else { "pages have" })
+    } else {
+        format!("All {} transcribed.", crate::state::plural(list.len(), "page is", "pages are"))
+    };
+    let max_body = (ui.ctx().screen_rect().height() - 96.0 - 69.0 - 73.0).max(120.0);
+    let from = ctl.node_count();
+    let mut clip = ui.clip_rect();
+    egui::ScrollArea::vertical().max_height(max_body).max_width(w).auto_shrink([false, true]).show(ui, |ui| {
+        clip = ui.clip_rect();
+        ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
+        egui::Frame::none().inner_margin(Margin::symmetric(28.0, 24.0)).show(ui, |ui| {
+            ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
+            let iw = w - 56.0;
+            ui.set_width(iw);
+            field_label(ctl, ui, t, iw, "ex-scope-label", "Who to include");
+            let rows: [(&'static str, &'static str, String, bool); 3] = [
+                ("all", "ex-scope-all", format!("Everyone ({}, {})", crate::state::plural(groups.len(), "student", "students"), crate::state::plural(n_pages, "page", "pages")), true),
+                ("ready", "ex-scope-ready", format!("Only students who are ready to read ({ready})"), ready > 0),
+                ("selected", "ex-scope-selected", format!("Only the pages I selected ({chosen})"), chosen > 0),
+            ];
+            for (i, (v, id, label, enabled)) in rows.iter().enumerate() {
+                if i > 0 {
+                    ui.add_space(4.0);
+                }
+                if option_row(ctl, ui, t, id, label, scope == *v) && *enabled {
+                    out = Some(Out::Scope(v));
+                }
+            }
+            ui.add_space(14.0);
+            let opt = |v: &[(&str, &str)]| -> Vec<(String, String)> { v.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect() };
+            let cur = setting_str(s, "exportText", "corrected");
+            if let Some(v) = select_field(ctl, ui, t, iw, open, "ex-mode", "ex-mode-label", "Text", &opt(TXTS), &cur, "ex-mode-") {
+                out = Some(Out::Setting("exportText", json!(v), format!("Text: {}.", opt_label(TXTS, &v))));
+            }
+            ui.add_space(14.0);
+            let cur = setting_str(s, "exportSeparator", "label");
+            if let Some(v) = select_field(ctl, ui, t, iw, open, "ex-sep", "ex-sep-label", "Between pages", &opt(SEPS), &cur, "ex-sep-") {
+                out = Some(Out::Setting("exportSeparator", json!(v), format!("Between pages: {}.", opt_label(SEPS, &v))));
+            }
+            ui.add_space(14.0);
+            let cur = setting_str(s, "exportFormat", "md");
+            if let Some(v) = select_field(ctl, ui, t, iw, open, "ex-fmt", "ex-fmt-label", "Combined file", &opt(FMTS), &cur, "ex-fmt-") {
+                out = Some(Out::Setting("exportFormat", json!(v), format!("Combined file: {}.", opt_label(FMTS, &v))));
+            }
+            ui.add_space(14.0);
+            let r = para(ui, iw, &summary, theme::sans(14.0), if gaps > 0 { t.bad } else { t.muted }, 19.6);
+            ctl.status("ex-summary", &summary, DIALOG, r);
+            ui.add_space(18.0);
+
+            field_label(ctl, ui, t, iw, "ex-kinds-label", "Or export just one kind of file");
+            let kinds: [(&'static str, &'static str, &str, &str); 5] = [
+                ("combined", "ex-combined", "Combined file", "Every student in one document"),
+                ("pages", "ex-pages", "One file per page (.zip)", "A separate file for each page, named by student"),
+                ("csv", "ex-csv", "CSV index", "A spreadsheet of every page and its status"),
+                ("json", "ex-json", "JSON", "All the data, for other tools"),
+                ("copy", "ex-copy", "Copy all text", "Puts the text on your clipboard"),
+            ];
+            for (k, id, title, sub) in kinds {
+                let label = format!("{title}. {sub}");
+                if widgets::button(ctl, ui, t, C::new(id, &label, DIALOG), title, Look::Outline, iw) {
+                    out = Some(Out::Export(k, scope));
+                }
+                ui.add_space(2.0);
+                let r = para(ui, iw, sub, theme::sans(13.0), t.muted, 18.2);
+                ctl.text(&format!("{id}-sub"), sub, DIALOG, r);
+                ui.add_space(8.0);
+            }
+            hint_p(ctl, ui, t, iw, "ex-hint", "Each export is also saved in the assignment\u{2019}s exports folder.");
+            ctl.flush_scroll(ui, &[DIALOG]);
+        });
+    });
+    ctl.clip_since(from, clip);
+    let y = ui.cursor().top();
+    ui.painter().hline(ui.max_rect().x_range(), y + 0.5, Stroke::new(1.0, t.line));
+    ui.add_space(15.0);
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 8.0;
+        ui.add_space(28.0);
+        if widgets::button(ctl, ui, t, C::new("ex-cancel", "Cancel", DIALOG), "Cancel", Look::Outline, 0.0) {
+            out = Some(Out::Close);
+        }
+        if widgets::button(ctl, ui, t, C::new("ex-all", "Download all (.zip)", DIALOG), "Download all (.zip)", Look::Primary, 0.0) {
+            out = Some(Out::Export("all", scope));
+        }
+    });
+    ui.add_space(14.0);
+    out
 }
 
 /// A `<textarea rows=N>`.

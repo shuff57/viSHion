@@ -100,6 +100,9 @@ whenever the inline bootstrap script in `crates/app/web/index.html` changes, so 
 - assignment settings (Phase 6): the inbox's "Assignment settings" opens a dialog for the name, subject (select over
   `settings.topics`) and instructions (multi-line, "Reset to standard"); name and instructions are saved when it
   closes, the subject at once (`dialog::Dialog::Assignment`, `Out::Meta`).
+- export (Phase 6): the inbox's Export opens `Dialog::Export` (scope everyone / ready / selected, the three export
+  selects saved to settings, a summary of empty pages, one button per kind and Download all). Empty pages ask
+  first (Export anyway); files land in `exports/` through `Cmd::Export`, "Copy all text" uses the clipboard.
 - home (`ui::home`, Phase 5): the wordmark on the inbox goes there, and an empty store starts there. Lists the
   assignments (`Cmd::ListProjects` -> `Event::Projects`), opens one, creates, renames, duplicates and deletes
   (inline fields and an inline confirm instead of dialogs, so it works with no session). Import zip (`core::export::read_zip`, stored and deflated

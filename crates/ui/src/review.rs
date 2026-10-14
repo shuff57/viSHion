@@ -99,6 +99,7 @@ pub(crate) enum Act {
     Guess(String),
     OpenSettings,
     OpenAssignment,
+    OpenExport,
     CloseDialog,
     Inbox,
     Home,
@@ -480,6 +481,25 @@ fn spoken_line(unit: &str) -> String {
     out.replace(['*', '`'], "").split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+/// Make one kind of export of the pages in `scope` and deliver it: a file into `exports/`, or the clipboard.
+fn run_export(s: &Session, ctx: &egui::Context, kind: &str, scope: &str, send: &dyn Fn(Cmd), say: &mut dyn FnMut(String, bool)) {
+    let pages = s.export_pages(scope);
+    let list: Vec<&Page> = pages.iter().collect();
+    let get = |k: &str, d: &str| s.settings.get(k).and_then(|v| v.as_str()).unwrap_or(d).to_string();
+    let o = vishion_core::export::Opts::new(&get("exportText", "corrected"), &get("exportSeparator", "label"), &get("exportFormat", "md"));
+    match vishion_core::export::run(kind, &list, &o, &s.a.meta, &crate::home::iso(s.now)) {
+        Some(vishion_core::export::Export::File { name, bytes, .. }) => {
+            send(Cmd::Export { slug: s.slug.clone(), name, bytes });
+            say(format!("Exporting {}\u{2026}", state::plural(list.len(), "page", "pages")), false);
+        }
+        Some(vishion_core::export::Export::Copy(text)) => {
+            ctx.copy_text(text);
+            say("Copied all the text.".into(), false);
+        }
+        None => say("Nothing to export for that choice.".into(), true),
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn apply(
     a: Act,
@@ -746,6 +766,13 @@ fn apply(
         }
         Act::OpenSettings => *dialog = Some(Dialog::settings()),
         Act::OpenAssignment => *dialog = Some(Dialog::assignment()),
+        Act::OpenExport => {
+            if s.pages().is_empty() {
+                say("Add pages first, then export them.".into(), true);
+            } else {
+                *dialog = Some(Dialog::export(if s.multi.is_empty() { "all" } else { "selected" }));
+            }
+        }
         Act::CloseDialog => {
             if let Some(d) = dialog.as_ref() {
                 dialog::commit(s, d);
@@ -835,6 +862,36 @@ fn apply(
                     ctl.say(said);
                     return;
                 }
+                dialog::Out::Scope(sc) => {
+                    if let Some(Dialog::Export { scope, .. }) = dialog.as_mut() {
+                        *scope = sc;
+                    }
+                    return;
+                }
+                dialog::Out::Export(kind, sc) => {
+                    let n = s.export_pages(sc).iter().filter(|p| p.status() != "done").count();
+                    let total = s.export_pages(sc).len();
+                    if total == 0 {
+                        say("Nothing to export for that choice.".into(), true);
+                        return;
+                    }
+                    if n > 0 {
+                        // stacked on the export dialog: Cancel comes back to it
+                        ctl.under = dialog.take().map(|d| (d, "ex-all"));
+                        ctl.want_focus = Some("dialog-cancel".into());
+                        *dialog = Some(Dialog::Confirm {
+                            title: "Some pages are empty".into(),
+                            text: format!("{n} of {total} pages have no transcript. Export anyway?"),
+                            ok: "Export anyway".into(),
+                            danger: false,
+                            then: After::ExportRun(kind.to_string(), sc),
+                        });
+                        return;
+                    }
+                    // the dialog stays open, as in the JS (`run` does not close it)
+                    run_export(s, ctx, kind, sc, &send, &mut say);
+                    return;
+                }
                 dialog::Out::Meta(key, v, said) => {
                     s.set_meta(key, v);
                     ctl.say(said);
@@ -902,6 +959,7 @@ fn apply(
                         say(format!("Where the model runs: {}.", dialog::provider(&id).1), false);
                         back_to = Some("st-provider");
                     }
+                    After::ExportRun(kind, sc) => run_export(s, ctx, &kind, sc, &send, &mut say),
                     After::RemovePage(id) => s.remove_page(&id),
                     After::TranscribeAgain(id) => send(Cmd::Transcribe { slug, ids: vec![id], conn: s.read_conn() }),
                     After::ReviewAgain(ids) => {
@@ -1254,9 +1312,15 @@ fn inbox_body(ui: &mut Ui, cx: &mut Cx, s: &Session) {
     let r = css_text(ui, &sub, theme::sans(14.0), t.muted, 14.0 * 1.4, w, false);
     cx.ctl.text("inbox-sub", &sub, TEXT, r);
     ui.add_space(12.0);
-    if widgets::button(cx.ctl, ui, t, C::new("assignment-settings", "Assignment settings", TEXT), "Assignment settings", Look::Outline, 0.0) {
-        cx.acts.push(Act::OpenAssignment);
-    }
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing.x = 8.0;
+        if widgets::button(cx.ctl, ui, t, C::new("assignment-settings", "Assignment settings", TEXT), "Assignment settings", Look::Outline, 0.0) {
+            cx.acts.push(Act::OpenAssignment);
+        }
+        if widgets::button(cx.ctl, ui, t, C::new("export", "Export", TEXT), "Export", Look::Outline, 0.0) {
+            cx.acts.push(Act::OpenExport);
+        }
+    });
 
     if groups.is_empty() {
         ui.add_space(28.0);

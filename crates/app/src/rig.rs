@@ -368,4 +368,31 @@ mod tests {
         r.act("dialog-close");
         assert_eq!(r.app.session().unwrap().a.meta.prompt(), "");
     }
+
+    /// The export dialog: scope, the summary of empty pages, Export anyway, and files landing in exports/.
+    #[test]
+    fn export_dialog_asks_before_exporting_empty_pages_and_writes_files() {
+        let mut r = Rig::demo();
+        r.act("crumb");
+        r.act("export");
+        assert!(r.has("ex-scope-all") && r.has("ex-all"));
+        // the demo assignment has pages without a transcript: the summary says so, and "Ready" has Ana only
+        assert!(label_of(&r, "ex-scope-ready").contains("(1)"), "{}", label_of(&r, "ex-scope-ready"));
+        r.act("ex-scope-ready");
+        // one ready page: nothing is empty, so no question is asked
+        r.act("ex-combined");
+        let key = format!("{}/exports/", r.slug);
+        let listed = block_on(vishion_store::Store::list(&r.be.projects.store, &key)).unwrap();
+        assert!(listed.iter().any(|k| k.ends_with(".md")), "{listed:?}");
+        // everyone: pages are empty, so a confirmation stacks on the dialog
+        r.act("ex-scope-all");
+        r.act("ex-csv");
+        assert!(r.has("dialog-ok") && label_of(&r, "dialog-ok") == "Export anyway");
+        r.act("dialog-ok");
+        let listed = block_on(vishion_store::Store::list(&r.be.projects.store, &key)).unwrap();
+        assert!(listed.iter().any(|k| k.ends_with("-index.csv")), "{listed:?}");
+        assert!(r.has("ex-all"), "back on the export dialog");
+        r.act("ex-cancel");
+        assert!(!r.has("ex-all"));
+    }
 }

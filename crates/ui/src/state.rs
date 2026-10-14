@@ -1029,6 +1029,30 @@ impl Session {
         self.sync_tray();
     }
 
+    /// `openExport`'s `chosen()` with `flatten`: page copies named after the student (`<name> page N` when a
+    /// student has several), ordered within the student. `scope`: `all` | `ready` | `selected`.
+    pub fn export_pages(&self, scope: &str) -> Vec<Page> {
+        let mut out = vec![];
+        for g in self.groups() {
+            if scope == "ready" && g.status != groups::Status::Ready {
+                continue;
+            }
+            let ids: Vec<&String> = g.pages.iter().filter(|id| scope != "selected" || self.multi.contains(*id)).collect();
+            let n = ids.len();
+            for (i, id) in ids.into_iter().enumerate() {
+                let Some(p) = self.a.page(id) else { continue };
+                let mut c = p.clone();
+                c.set("order", json!(i));
+                c.set("name", json!(if n > 1 { format!("{} page {}", g.name, i + 1) } else { g.name.clone() }));
+                let mut st = c.get("student").and_then(Value::as_object).cloned().unwrap_or_default();
+                st.insert("name".into(), json!(g.name));
+                c.set("student", Value::Object(st));
+                out.push(c);
+            }
+        }
+        out
+    }
+
     /// `S.updateMeta({ key })`: one field of the assignment's `project.json`.
     pub fn set_meta(&mut self, key: &str, v: Value) {
         self.a.meta.set(key, v);

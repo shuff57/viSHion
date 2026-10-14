@@ -54,6 +54,14 @@ pub fn ago(now_ms: i64, then_ms: f64) -> String {
     }
 }
 
+/// `new Date(ms).toISOString()` (UTC, milliseconds).
+pub fn iso(ms: i64) -> String {
+    let days = ms.div_euclid(86_400_000);
+    let rem = ms.rem_euclid(86_400_000);
+    let (y, m, d) = civil(days);
+    format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}.{:03}Z", rem / 3_600_000, rem / 60_000 % 60, rem / 1000 % 60, rem % 1000)
+}
+
 /// Days since 1970-01-01 to (year, month, day) (Hinnant's civil_from_days).
 fn civil(z: i64) -> (i64, i64, i64) {
     let z = z + 719_468;
@@ -277,5 +285,6 @@ mod tests {
         assert_eq!(ago(now, now as f64 - 3.0 * 3_600_000.0), "3 h ago");
         assert_eq!(ago(now, 1_696_000_000_000.0), "Sep 29");
         assert_eq!(ago(now, 0.0), "");
+        assert_eq!(iso(1_700_000_000_123), "2023-11-14T22:13:20.123Z");
     }
 }
