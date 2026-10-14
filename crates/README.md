@@ -74,6 +74,14 @@ node check-assetsignore.mjs
 
 Windows default Chrome path is `C:/Program Files/Google/Chrome/Application/chrome.exe`; Linux `/usr/bin/google-chrome`.
 
+## Opening the web build
+
+The web build is a wasm module and needs a web server: it does not run from a `file://` page, so opening
+`index.html` from disk does not work (decision recorded in `docs/RUST-REWRITE-PLAN.md`). Serve the output
+folder with `wrangler dev`, or any static host that sends the CSP below (it needs `'wasm-unsafe-eval'`).
+Folder saving in the browser needs Chrome or Edge (File System Access); other browsers keep work in
+IndexedDB, and Home says so.
+
 ## CSP
 
 `build.mjs` takes the policy from the repo-root `_headers` unchanged and appends `'wasm-unsafe-eval'` and the
