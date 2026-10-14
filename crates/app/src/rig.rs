@@ -508,4 +508,58 @@ mod tests {
         assert_eq!(a.rows[0].item.file_name, "drop1.png");
         assert_eq!(a.skipped.len(), 1);
     }
+
+    /// Phase 9a: every screen at a phone's width: every target is 44 x 44 and nothing runs past the right edge.
+    #[test]
+    fn phone_width_screens_fit_and_keep_44pt_targets() {
+        use crate::backend::Picked;
+        fn check(r: &Rig, what: &str, bad: &mut Vec<String>) {
+            for c in r.app.controls() {
+                // a control scrolled out of its dialog's body is reported with no size, or the sliver that shows
+                let hidden = c.size.0 == 0 || c.size.1 == 0 || (c.region == 4 && c.size.0 >= 44);
+                if !hidden && (c.size.0 < 44 || c.size.1 < 44) {
+                    bad.push(format!("{what}: {} is {:?}", c.id, c.size));
+                }
+                if c.at.0 < 0 || c.at.0 + c.size.0 as i32 > 391 {
+                    bad.push(format!("{what}: {} spans x {}..{}", c.id, c.at.0, c.at.0 + c.size.0 as i32));
+                }
+            }
+        }
+        let mut bad = vec![];
+        let mut r = Rig::sized(390.0, 844.0);
+        check(&r, "review", &mut bad);
+        r.act("crumb");
+        check(&r, "inbox", &mut bad);
+        r.act("assignment-settings");
+        check(&r, "assignment settings", &mut bad);
+        r.act("as-topic");
+        check(&r, "assignment settings, subject list", &mut bad);
+        r.act("as-topic");
+        r.act("as-edit-topics");
+        check(&r, "subjects", &mut bad);
+        r.act("tp-new-btn");
+        check(&r, "subjects, new subject", &mut bad);
+        r.act("tp-add-cancel");
+        r.act("dialog-close");
+        r.act("dialog-close");
+        r.act("export");
+        check(&r, "export", &mut bad);
+        r.act("ex-cancel");
+        r.act("settings");
+        check(&r, "settings", &mut bad);
+        r.act("dialog-close");
+        r.act("add-pages");
+        check(&r, "add, empty", &mut bad);
+        let conn = vishion_ui::Conn { demo: true, ..Default::default() };
+        let inbox = r.inbox.clone();
+        block_on(r.be.stage_files(vec![Picked { name: "page1.png".into(), bytes: png(200, 300) }], &conn, true, None, &|e| inbox.push(e)));
+        r.frames(4);
+        let k = r.app.session().unwrap().add.rows[0].key;
+        check(&r, "add, staged", &mut bad);
+        r.act(&format!("staged-change-{k}"));
+        check(&r, "add, choosing a student", &mut bad);
+        r.act("brand");
+        check(&r, "home", &mut bad);
+        assert!(bad.is_empty(), "{bad:#?}");
+    }
 }

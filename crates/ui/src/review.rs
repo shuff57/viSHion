@@ -1123,16 +1123,19 @@ fn header(ui: &mut Ui, cx: &mut Cx, s: &Session) {
     let save_col = if cx.save.failed.is_some() { t.bad } else { t.muted };
     let crumb_label = format!("Back to {name}");
 
-    // header.js `forInbox`: wordmark on the left, save state and Settings on the right
+    // header.js `forInbox`: wordmark on the left, save state and Settings on the right. Like the flex-wrap of
+    // `.topbar`, the right group drops to its own row when the wordmark and it do not fit (a phone).
     if s.view != View::Review {
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 12.0;
+        let sg = ui.painter().layout_no_wrap(save_text.clone(), theme::sans(13.0), save_col);
+        let right_w = sg.size().x + 24.0 + 12.0 + TARGET;
+        let fits = widgets::BRAND_W + 12.0 + right_w + 4.0 <= ui.available_width();
+        let mut brand = |ui: &mut Ui, cx: &mut Cx| {
             if widgets::brand(cx.ctl, ui, t, C::new("brand", "viSHion", HEADER)) {
                 cx.acts.push(Act::Home);
             }
-            let sg = ui.painter().layout_no_wrap(save_text.clone(), theme::sans(13.0), save_col);
-            let w = sg.size().x + 24.0 + 12.0 + TARGET;
-            ui.add_space((ui.available_width() - w - 4.0).max(0.0));
+        };
+        let mut right = |ui: &mut Ui, cx: &mut Cx, gap: f32| {
+            ui.add_space(gap);
             let (sr, _) = ui.allocate_exact_size(vec2(sg.size().x + 24.0, TARGET), Sense::hover());
             let icon = if cx.save.failed.is_some() { Icon::Warn } else { Icon::Check };
             let icon_col = if cx.save.failed.is_some() { t.bad } else { t.ok };
@@ -1144,12 +1147,28 @@ fn header(ui: &mut Ui, cx: &mut Cx, s: &Session) {
             } else {
                 widgets::paint_icon(ui, ir, icon, icon_col);
             }
-            ui.painter().galley(pos2(sr.left() + 24.0, (sr.center().y - sg.size().y / 2.0 - 1.0).round()), sg, save_col);
+            ui.painter().galley(pos2(sr.left() + 24.0, (sr.center().y - sg.size().y / 2.0 - 1.0).round()), sg.clone(), save_col);
             cx.ctl.status("save-state", &save_text, HEADER, sr);
             if widgets::icon_button(cx.ctl, ui, t, C::new("settings", "Settings", HEADER), Icon::Gear, false) {
                 cx.acts.push(Act::OpenSettings);
             }
-        });
+        };
+        if fits {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 12.0;
+                brand(ui, cx);
+                let gap = (ui.available_width() - right_w - 4.0).max(0.0);
+                right(ui, cx, gap);
+            });
+        } else {
+            brand(ui, cx);
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 12.0;
+                let gap = (ui.available_width() - right_w - 4.0).max(0.0);
+                right(ui, cx, gap);
+            });
+        }
         return;
     }
 
