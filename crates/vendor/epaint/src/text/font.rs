@@ -45,6 +45,10 @@ pub struct GlyphInfo {
 
     /// Texture coordinates.
     pub uv_rect: UvRect,
+
+    /// The same glyph drawn shifted right by 0, 1/4, 2/4 and 3/4 of a pixel (`uv_rect` is the first): text is
+    /// positioned to a quarter of a pixel, as a browser does, instead of to a whole one.
+    pub sub_uv: [UvRect; 4],
 }
 
 impl Default for GlyphInfo {
@@ -54,6 +58,7 @@ impl Default for GlyphInfo {
             id: ab_glyph::GlyphId(0),
             advance_width: 0.0,
             uv_rect: Default::default(),
+            sub_uv: Default::default(),
         }
     }
 }
@@ -276,46 +281,52 @@ impl FontImpl {
         assert!(glyph_id.0 != 0);
         use ab_glyph::{Font as _, ScaleFont};
 
-        let glyph = glyph_id.with_scale_and_position(
-            self.scale_in_pixels as f32,
-            ab_glyph::Point { x: 0.0, y: 0.0 },
-        );
+        let mut sub_uv = [UvRect::default(); 4];
+        for (bin, slot) in sub_uv.iter_mut().enumerate() {
+            let glyph = glyph_id.with_scale_and_position(
+                self.scale_in_pixels as f32,
+                ab_glyph::Point { x: bin as f32 / 4.0, y: 0.0 },
+            );
+            *slot = self
+                .ab_glyph_font
+                .outline_glyph(glyph)
+                .map(|glyph| {
+                    let bb = glyph.px_bounds();
+                    let glyph_width = bb.width() as usize;
+                    let glyph_height = bb.height() as usize;
+                    if glyph_width == 0 || glyph_height == 0 {
+                        UvRect::default()
+                    } else {
+                        let glyph_pos = {
+                            let atlas = &mut self.atlas.lock();
+                            let (glyph_pos, image) = atlas.allocate((glyph_width, glyph_height));
+                            glyph.draw(|x, y, v| {
+                                if 0.0 < v {
+                                    let px = glyph_pos.0 + x as usize;
+                                    let py = glyph_pos.1 + y as usize;
+                                    image[(px, py)] = v;
+                                }
+                            });
+                            glyph_pos
+                        };
 
-        let uv_rect = self.ab_glyph_font.outline_glyph(glyph).map(|glyph| {
-            let bb = glyph.px_bounds();
-            let glyph_width = bb.width() as usize;
-            let glyph_height = bb.height() as usize;
-            if glyph_width == 0 || glyph_height == 0 {
-                UvRect::default()
-            } else {
-                let glyph_pos = {
-                    let atlas = &mut self.atlas.lock();
-                    let (glyph_pos, image) = atlas.allocate((glyph_width, glyph_height));
-                    glyph.draw(|x, y, v| {
-                        if 0.0 < v {
-                            let px = glyph_pos.0 + x as usize;
-                            let py = glyph_pos.1 + y as usize;
-                            image[(px, py)] = v;
+                        let offset_in_pixels = vec2(bb.min.x, bb.min.y);
+                        let offset =
+                            offset_in_pixels / self.pixels_per_point + self.y_offset_in_points * Vec2::Y;
+                        UvRect {
+                            offset,
+                            size: vec2(glyph_width as f32, glyph_height as f32) / self.pixels_per_point,
+                            min: [glyph_pos.0 as u16, glyph_pos.1 as u16],
+                            max: [
+                                (glyph_pos.0 + glyph_width) as u16,
+                                (glyph_pos.1 + glyph_height) as u16,
+                            ],
                         }
-                    });
-                    glyph_pos
-                };
-
-                let offset_in_pixels = vec2(bb.min.x, bb.min.y);
-                let offset =
-                    offset_in_pixels / self.pixels_per_point + self.y_offset_in_points * Vec2::Y;
-                UvRect {
-                    offset,
-                    size: vec2(glyph_width as f32, glyph_height as f32) / self.pixels_per_point,
-                    min: [glyph_pos.0 as u16, glyph_pos.1 as u16],
-                    max: [
-                        (glyph_pos.0 + glyph_width) as u16,
-                        (glyph_pos.1 + glyph_height) as u16,
-                    ],
-                }
-            }
-        });
-        let uv_rect = uv_rect.unwrap_or_default();
+                    }
+                })
+                .unwrap_or_default();
+        }
+        let uv_rect = sub_uv[0];
 
         let advance_width_in_points = self
             .ab_glyph_font
@@ -327,6 +338,7 @@ impl FontImpl {
             id: glyph_id,
             advance_width: advance_width_in_points,
             uv_rect,
+            sub_uv,
         }
     }
 }

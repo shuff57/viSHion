@@ -51,6 +51,8 @@ Together the widths of Instrument Sans and Source Serif 4 strings are within 0.6
 (`app_tests::round4_text_is_as_wide_as_the_browser_sets_it`). Wired in with `[patch.crates-io]`. Drop it when
 egui exposes the setting.
 
+Sub-pixel text: every glyph is rasterised four times, shifted by 0, 1/4, 1/2 and 3/4 of a pixel (`GlyphInfo::sub_uv`, `Glyph::sub_uv`), and a row snaps each glyph to the nearest quarter pixel (`text_layout.rs`, `halign_and_justify_row`) instead of the nearest whole pixel, as a browser positions text. Whole-pixel snapping moved letters by up to half a pixel and closed or opened the gaps between words ("Transcribe this page again" read as "Transcribethis"). The atlas holds four times as many glyph bitmaps.
+
 ## accesskit_consumer 0.16.1
 
 Copy of the crates.io release (src, README, `Cargo.toml`) with one block of `tree.rs` (`State::update`) replaced.

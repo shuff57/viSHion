@@ -545,6 +545,8 @@ fn removing_the_only_page_of_a_student_goes_to_the_inbox() {
 fn change_student_moves_this_page_or_all_pages() {
     let mut h = H::new("m1");
     h.act("change-student");
+    assert!(h.ctl("cs-select").is_some() && h.ctl("cs-student-0").is_none(), "the list is shut until the select is opened");
+    h.act("cs-select");
     assert!(h.ctl("cs-student-0").is_some());
     h.act("cs-student-0"); // Ana L.
     h.act("dialog-ok");
@@ -555,6 +557,7 @@ fn change_student_moves_this_page_or_all_pages() {
     // a new student, all pages
     let mut h = H::new("m1");
     h.act("change-student");
+    h.act("cs-select");
     h.act("cs-new");
     h.app.queue.lock().unwrap().push("text:cs-name\u{1}Zed Q.".into());
     h.frames(2);
@@ -2090,8 +2093,9 @@ fn round5_change_student_says_why_and_leads_to_the_text_box() {
     h.act("dialog-ok");
     let said = h.app.announced()[n..].join(" ");
     assert!(said.contains("Choose a student"), "{said:?}");
-    assert_eq!(h.app.ctl.focus.as_deref(), Some("cs-student-0"), "focus goes to the list, as the select in js");
+    assert_eq!(h.app.ctl.focus.as_deref(), Some("cs-select"), "focus goes to the select, as in js");
     let n = h.app.announced().len();
+    h.act("cs-select");
     h.act("cs-new");
     h.frames(2);
     assert_eq!(h.app.ctl.focus.as_deref(), Some("cs-name"));
@@ -2267,7 +2271,7 @@ fn round6_focus_after_a_decision_is_on_the_next_word_not_on_its_choices() {
 /// Feeds every update of the same key sequence to a consumer, as the platform adapter does.
 #[test]
 fn native_dialog_opened_from_the_keyboard_keeps_focus_in_the_tree() {
-    for (opener, first) in [("settings", "theme-auto"), ("remove", "dialog-cancel"), ("change-student", "cs-new")] {
+    for (opener, first) in [("settings", "theme-auto"), ("remove", "dialog-cancel"), ("change-student", "cs-select")] {
         let mut h = H::new("m1");
         h.ctx.enable_accesskit();
         h.frames(2);
@@ -2348,6 +2352,7 @@ fn native_dialog_opened_with_the_mouse_returns_focus_to_its_opener() {
 fn native_enter_in_the_name_box_keeps_focus() {
     let mut h = H::new("m1");
     h.act("change-student");
+    h.act("cs-select");
     h.act("cs-new");
     h.frames(3);
     let name = *h.app.ctl.widgets.get("cs-name").expect("name box widget");
@@ -2386,6 +2391,7 @@ fn native_escape_on_a_plain_control_keeps_focus() {
     }
     // and Escape still closes a dialog, from a control and from the name box
     h.act("change-student");
+    h.act("cs-select");
     h.act("cs-new");
     h.frames(3);
     for pressed in [true, false] {
@@ -2837,4 +2843,42 @@ fn ctrl_z_takes_back_the_last_choice_and_says_so() {
     h.app.queue.lock().unwrap().push("key:undo".into());
     h.frames(3);
     assert!(h.app.announced().iter().any(|a| a.starts_with("Nothing to undo.")), "{:?}", h.app.announced());
+}
+
+/// Visual parity (h): with the transcript scrolled, accepting a suggestion (focus moves to the word) and
+/// toggling Original leave it where it is; only the reading line moves it.
+#[test]
+fn parity_accept_and_original_do_not_move_a_scrolled_transcript() {
+    let mut h = H::new("m1");
+    h.with_picture();
+    h.frames(10);
+    h.size = (1280.0, 520.0);
+    h.frames(5);
+    h.wheel(160.0);
+    h.frames(10);
+    let y0 = blind_node_y(&h, "student-name").expect("name");
+    h.act("alt-suggested");
+    h.frames(30);
+    assert_eq!(blind_node_y(&h, "student-name"), Some(y0), "accepting a suggestion moved the transcript");
+    h.act("ver-original");
+    h.frames(30);
+    assert_eq!(blind_node_y(&h, "student-name"), Some(y0), "Original moved the transcript");
+    h.act("ver-corrected");
+    h.frames(30);
+    assert_eq!(blind_node_y(&h, "student-name"), Some(y0), "Corrected moved the transcript");
+}
+
+/// Visual parity (i): `meta.ui.scroll` and `scrollId` are written by a scroll event of the pane only. Opening
+/// another page after a decision (focus falls back to the transcript) scrolls nothing and writes nothing.
+#[test]
+fn parity_scroll_keys_are_only_written_by_a_scroll_event() {
+    let mut h = H::new("m1");
+    h.with_picture();
+    h.frames(10);
+    h.act("alt-suggested");
+    h.frames(10);
+    h.act("page-m2");
+    h.frames(60);
+    let ui = h.s().a.meta.get("ui").cloned().unwrap_or_default();
+    assert!(ui.get("scrollId").is_none() && ui.get("scroll").is_none(), "written without a scroll event: {ui}");
 }

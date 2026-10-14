@@ -95,6 +95,9 @@ pub struct Ctl {
     /// A transcript line to bring into view (`reveal:<line id>` from the page: a formula that scrolls sideways
     /// took keyboard focus).
     pub(crate) reveal: Option<String>,
+    /// The control the app moved focus to after a decision (js re-renders and keeps the pane where it is): it
+    /// takes focus without scrolling anything into view.
+    pub(crate) quiet_focus: Option<String>,
     /// Points the page asks the transcript to scroll by (`scrollby:<dy>`: find-in-page or a drag-selection
     /// at the edge moved the DOM text, which the canvas's scroll area has to follow).
     pub(crate) scroll_by: f32,
@@ -233,7 +236,7 @@ impl Ctl {
             r.request_focus();
             self.focus = Some(id.to_string());
             self.dom_focus = Some(id.to_string());
-            self.focus_fresh = true;
+            self.focus_fresh = self.quiet_focus.take().as_deref() != Some(id);
         }
         let twin_focus = self.focus.as_deref() == Some(id);
         // Native: egui let go of the focus this control had (egui ids are positional: a control whose neighbours
@@ -649,10 +652,29 @@ impl Ctl {
     }
 }
 
+impl Img {
+    /// The texture to draw the page at `px_w` device pixels wide: the smallest pre-filtered level that is still
+    /// at least that wide, so the GPU only ever shrinks by under 2 x.
+    pub(crate) fn level_for(&self, px_w: f32) -> egui::TextureId {
+        let mut best = self.full.id();
+        for (w, t) in &self.mips {
+            if *w as f32 >= px_w {
+                best = t.id();
+            } else {
+                break;
+            }
+        }
+        best
+    }
+}
+
 /// A page image on the GPU: the full texture for the page pane and a small one for the strip.
 pub(crate) struct Img {
     pub full: egui::TextureHandle,
     pub thumb: egui::TextureHandle,
+    /// Pre-filtered copies at half, quarter, ... the width (2 x 2 box averages): egui has no mipmaps, so a page
+    /// drawn much smaller than its pixels would alias with plain bilinear sampling. `(width, texture)`.
+    pub mips: Vec<(u32, egui::TextureHandle)>,
     /// Pixel size of the full image.
     pub size: (u32, u32),
     /// Ink bands of the picture (`image.js lineBands`): where the writing is, for pages without stored boxes.
@@ -671,6 +693,9 @@ pub(crate) struct SaveState {
     pub pending: u32,
     pub failed: Option<String>,
     pub ever: bool,
+    /// The save indicator says "Saving..." until this time (egui clock): the JS app writes half a second after
+    /// the change (`fs.schedule`, 500 ms) and shows "Saving..." for that long, so a quick write is still seen.
+    pub until: f64,
 }
 
 pub(crate) enum Boot {
@@ -717,6 +742,9 @@ pub struct App {
     /// Escape was pressed this frame (native: taken out of egui's input, see `filter_tab`).
     esc_pressed: bool,
     last_save: Option<String>,
+    /// A write was in flight at the last announcement ("Saved." is said when it ends, not when the header's
+    /// half second of "Saving..." is over: that would be a second utterance after the decision's own).
+    last_busy: bool,
     /// Per page: its status and a hash of its transcript as last seen, so the start and the end of a
     /// transcription (and a transcript replaced in one step) are spoken (the JS app has a status pill).
     run_seen: HashMap<String, (String, u64)>,
@@ -818,6 +846,7 @@ impl App {
             tab_queue: vec![],
             esc_pressed: false,
             last_save: None,
+            last_busy: false,
             run_seen: HashMap::new(),
             said_log: vec![],
             #[cfg(not(target_arch = "wasm32"))]
@@ -1206,6 +1235,11 @@ impl App {
         if d.settings {
             cmds.push(Cmd::SaveSettings { settings: s.settings.clone() });
         }
+        if !cmds.is_empty() {
+            let now = self.ctx.input(|i| i.time);
+            self.save.until = now + 0.5;
+            self.ctx.request_repaint_after(Duration::from_millis(520));
+        }
         self.save.pending += cmds.len() as u32;
         for c in cmds {
             self.send(c);
@@ -1322,7 +1356,34 @@ fn decode_image(ctx: &egui::Context, id: &str, bytes: &[u8]) -> Option<Img> {
     }
     let ti = egui::ColorImage::from_rgba_unmultiplied([th.width() as usize, th.height() as usize], th.as_raw());
     let thumb = ctx.load_texture(format!("thumb-{id}"), ti, egui::TextureOptions::LINEAR);
-    Some(Img { full, thumb, size, bands })
+    // area-averaged mip chain, built from the raw pixels
+    let mut mips = Vec::new();
+    let (mut mw, mut mh) = (size.0 as usize, size.1 as usize);
+    let mut cur: Vec<u8> = rgba.as_raw().clone();
+    let mut level = 1;
+    while mw >= 400 && mh >= 2 {
+        let (nw, nh) = ((mw / 2).max(1), (mh / 2).max(1));
+        let mut next = vec![0u8; nw * nh * 4];
+        for y in 0..nh {
+            let (y0, y1) = (y * 2, (y * 2 + 1).min(mh - 1));
+            for x in 0..nw {
+                let (x0, x1) = (x * 2, (x * 2 + 1).min(mw - 1));
+                for c in 0..4 {
+                    let sum = cur[(y0 * mw + x0) * 4 + c] as u32
+                        + cur[(y0 * mw + x1) * 4 + c] as u32
+                        + cur[(y1 * mw + x0) * 4 + c] as u32
+                        + cur[(y1 * mw + x1) * 4 + c] as u32;
+                    next[(y * nw + x) * 4 + c] = ((sum + 2) / 4) as u8;
+                }
+            }
+        }
+        let ci = egui::ColorImage::from_rgba_unmultiplied([nw, nh], &next);
+        mips.push((nw as u32, ctx.load_texture(format!("page-{id}-m{level}"), ci, egui::TextureOptions::LINEAR)));
+        cur = next;
+        (mw, mh) = (nw, nh);
+        level += 1;
+    }
+    Some(Img { full, thumb, mips, size, bands })
 }
 
 impl eframe::App for App {
@@ -1515,11 +1576,15 @@ impl App {
         if save != self.last_save {
             match (&self.last_save, &save) {
                 (_, Some(now)) if now.starts_with("Couldn’t save") => self.ctl.said.push((now.clone(), true)),
-                (Some(was), Some(_)) if was.starts_with("Saving") => self.ctl.said.push(("Saved.".into(), false)),
                 _ => {}
             }
             self.last_save = save;
         }
+        let busy = self.save.pending > 0;
+        if self.last_busy && !busy && self.save.failed.is_none() {
+            self.ctl.said.push(("Saved.".into(), false));
+        }
+        self.last_busy = busy;
         let said = std::mem::take(&mut self.ctl.said);
         // one write per live region per frame: the sentences of a frame are one utterance
         for assertive in [false, true] {
@@ -1732,6 +1797,8 @@ impl App {
         }
         .unwrap_or_else(|| stops[0].clone());
         self.ctl.focus = None;
+        // (js: the focused word is gone and focus falls to the body; nothing scrolls to find it a home)
+        self.ctl.quiet_focus = Some(target.clone());
         self.ctl.want_focus = Some(target);
         self.ctx.request_repaint();
     }

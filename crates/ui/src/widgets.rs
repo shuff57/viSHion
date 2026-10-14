@@ -43,7 +43,9 @@ fn paint_look(ui: &Ui, r: &Response, t: &Tokens, look: Look, on: bool, disabled:
     let hover = r.hovered() && !disabled;
     match look {
         Look::Primary => {
-            let fill = if disabled { t.line2 } else if hover { t.ink.gamma_multiply(0.88) } else { t.ink };
+            // `.btn.primary:hover { background: var(--ink); filter: brightness(1.15) }`: still ink, a shade brighter
+            let b = |c: u8| (c as f32 * 1.15).round().min(255.0) as u8;
+            let fill = if disabled { t.line2 } else if hover { Color32::from_rgb(b(t.ink.r()), b(t.ink.g()), b(t.ink.b())) } else { t.ink };
             p.rect_filled(r.rect, 8.0, fill);
         }
         Look::Outline => {
@@ -197,6 +199,24 @@ pub fn paint_icon(ui: &Ui, rect: Rect, icon: Icon, color: Color32) {
     }
 }
 
+/// The `spin` icon (`M12 3a9 9 0 109 9`: three quarters of a circle) turning once in 0.9 s, as
+/// `.save-state[data-s="saving"] .ico` does. `time` is the egui clock in seconds.
+pub fn paint_spinner(ui: &Ui, rect: Rect, color: Color32, time: f64) {
+    let k = rect.width().min(rect.height()) / 24.0;
+    let c = rect.center();
+    let turn = (time / 0.9).fract() as f32 * std::f32::consts::TAU;
+    let (sin, cos) = turn.sin_cos();
+    let pts: Vec<egui::Pos2> = (0..=24)
+        .map(|i| {
+            // from the top, counter-clockwise through the left and the bottom to the right: 270 degrees
+            let a = -std::f32::consts::FRAC_PI_2 - i as f32 / 24.0 * 1.5 * std::f32::consts::PI;
+            let (x, y) = (9.0 * k * a.cos(), 9.0 * k * a.sin());
+            pos2(c.x + x * cos - y * sin, c.y + x * sin + y * cos)
+        })
+        .collect();
+    ui.painter().add(Shape::line(pts, Stroke::new((2.0 * k).max(1.5), color)));
+}
+
 /// A text button with a leading icon ("Add page").
 pub fn icon_text_button(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, c: C, icon: Icon, text: &str, look: Look) -> bool {
     let fg = if c.disabled { t.faint } else { t.ink };
@@ -309,9 +329,8 @@ pub fn seg(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, region: u8, group: &str, item
             let pill = slot.shrink2(vec2(0.0, 3.0));
             ui.painter().rect_filled(pill.translate(vec2(0.0, 1.0)), 8.0, Color32::from_black_alpha(if t.dark { 70 } else { 28 }));
             ui.painter().rect_filled(pill, 8.0, t.surface);
-        } else if r.hovered() && !dis {
-            ui.painter().rect_filled(slot.shrink2(vec2(0.0, 3.0)), 8.0, t.line);
         }
+        // (`.seg button` has no hover rule: an unpressed segment keeps the tray's colour under the pointer)
         ui.painter().galley(centered(slot, g.size()), g, t.ink);
         if ctl.reg(ui, &r, C::new(id, label, region).pressed(on).disabled(dis)) {
             clicked = Some(i);

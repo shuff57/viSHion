@@ -26,6 +26,7 @@ fn role(r: Role) -> AkRole {
         Role::Button => AkRole::Button,
         Role::ToggleButton => AkRole::ToggleButton,
         Role::CheckBox => AkRole::CheckBox,
+        Role::RadioButton => AkRole::RadioButton,
         Role::Switch => AkRole::Switch,
         Role::TextInput => AkRole::TextInput,
         Role::PasswordInput => AkRole::PasswordInput,

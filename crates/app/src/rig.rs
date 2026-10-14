@@ -141,6 +141,27 @@ mod tests {
         assert!(!s.starts_with("Saving"), "{s:?}");
     }
 
+    /// Visual parity (j): the JS app writes half a second after a change and shows "Saving..." until then
+    /// (`fs.schedule`, 500 ms), so a change is always seen being saved; the store here answers at once.
+    #[test]
+    fn parity_saving_is_shown_for_half_a_second_after_a_change() {
+        let mut r = Rig::demo();
+        r.frames(10);
+        let say = |r: &Rig| {
+            r.app.nodes().iter().find_map(|n| match n {
+                vishion_ui::twin::Node::Status { id, text, .. } if id == "save-state" => Some(text.clone()),
+                _ => None,
+            })
+        };
+        let before = say(&r).unwrap_or_default();
+        assert!(!before.starts_with("Saving"), "{before:?}");
+        r.app.twin_act("alt-suggested");
+        r.frames(2);
+        assert!(say(&r).unwrap_or_default().starts_with("Saving"), "{:?}", say(&r));
+        r.frames(12);
+        assert_eq!(say(&r).unwrap_or_default(), before, "settles after the half second");
+    }
+
     /// Blind critic round 3: "Retry this page" and "Transcribe this page" did nothing (the host answered
     /// "needs the OCR connection"). In demo mode the JS app reads sample text, runs the judge and ends with
     /// status done and corrections.

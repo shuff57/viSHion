@@ -182,6 +182,7 @@ try {
     await press('dialog-ok');
     const r = await page.evaluate(() => ({ id: document.activeElement?.dataset?.id, said: document.getElementById('announce').textContent + document.getElementById('announce-alert').textContent }));
     expect(r.id !== 'dialog-ok' || r.said.trim() !== '', 'Save with no student chosen says why or moves focus to the field (JS focuses the select): focus ' + r.id + ', said ' + JSON.stringify(r.said));
+    await press('cs-select');
     await press('cs-new');
     const f = await page.evaluate(() => document.activeElement?.dataset?.id);
     expect(f === 'cs-name', '"A new student…" moves focus to its text box (JS: input.focus()): focus is on ' + f);

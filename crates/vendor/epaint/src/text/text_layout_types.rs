@@ -591,6 +591,9 @@ pub struct Glyph {
     /// Position and size of the glyph in the font texture, in texels.
     pub uv_rect: UvRect,
 
+    /// `uv_rect` for a glyph shifted by 0, 1/4, 1/2 and 3/4 of a pixel (see `GlyphInfo::sub_uv`).
+    pub sub_uv: [UvRect; 4],
+
     /// Index into [`LayoutJob::sections`]. Decides color etc.
     pub section_index: u32,
 }

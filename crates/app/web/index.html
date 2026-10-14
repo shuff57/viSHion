@@ -42,7 +42,7 @@
      spaces lines without this room (`web::measure` takes it off), so the layout is the JS app's. */
   #controls p.tx:has(.w) { padding-bottom: 9px; padding-bottom: max(1px, calc(9px - (1lh - 1.35em) / 2)); }
   #controls p.tx.margin { font: 16px/1.5 "Instrument Sans", system-ui, sans-serif; color: var(--muted, #5A6478); }
-  #controls p.tx.plain { white-space: pre-wrap; padding: 0; font: 13px/1.65 "Hack", ui-monospace, Consolas, monospace; cursor: auto; }
+  #controls p.tx.plain { white-space: pre-wrap; overflow-wrap: anywhere; padding: 0; font: 13px/1.65 "Hack", ui-monospace, Consolas, monospace; cursor: auto; }
   #controls p.tx[data-reading] { text-decoration: underline 3px var(--accent, #2F5BEA); text-underline-offset: 7px; text-decoration-skip-ink: none; }
   #controls p.tx .b { font-weight: 600; }
   #controls p.tx .i { font-style: italic; }

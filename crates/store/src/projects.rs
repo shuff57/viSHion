@@ -263,6 +263,9 @@ impl<S: Store> Projects<S> {
         }
         let mut assignment = Assignment::new(meta);
         assignment.pages = pages;
+        // `fs.openProject` ends with `S.reindex()`: `page.order` follows `meta.order` in memory, so a page saved
+        // later (a decision, Done, a rotation) is written with its position, as the JS app writes it
+        assignment.reindex();
         Ok(Some(Opened { slug: slug.into(), assignment, unreadable, from_backup, restored }))
     }
 

@@ -167,7 +167,25 @@ fn js_seeded_snapshots_round_trip_natively() {
         for (k, text) in &docs {
             let got = String::from_utf8(block_on(pr.store.get(k)).unwrap().unwrap()).unwrap();
             // a page JS had left as `transcribing` is recovered in memory only
-            let same = got == *text || (got.replace("\"pending\"", "\"transcribing\"") == *text);
+            let mut same = got == *text || (got.replace("\"pending\"", "\"transcribing\"") == *text);
+            // a page saved after opening carries `order` = its position: `fs.openProject` ends with `S.reindex()`
+            // and JS writes whatever is in memory
+            if !same && k.contains("/pages/") {
+                let slug = k.split('/').next().unwrap();
+                let id = k.rsplit('/').next().unwrap().trim_end_matches(".json");
+                let pos = docs
+                    .iter()
+                    .find(|(dk, _)| *dk == format!("{slug}/project.json"))
+                    .and_then(|(_, pt)| serde_json::from_str::<Value>(pt).ok())
+                    .and_then(|v| v["order"].as_array().and_then(|a| a.iter().position(|x| x.as_str() == Some(id))));
+                if let (Some(i), Ok(mut want), Ok(have)) = (pos, serde_json::from_str::<Value>(text), serde_json::from_str::<Value>(&got)) {
+                    want["order"] = serde_json::json!(i);
+                    if want["status"] == "transcribing" {
+                        want["status"] = serde_json::json!("pending");
+                    }
+                    same = want == have;
+                }
+            }
             assert!(same, "{rel}: {k} changed:\n  was {text:?}\n  now {got:?}");
             checked += 1;
         }

@@ -24,6 +24,7 @@ pub enum Role {
     Button,
     ToggleButton,
     CheckBox,
+    RadioButton,
     Switch,
     TextInput,
     PasswordInput,
@@ -92,6 +93,7 @@ fn control_node(r: &Reg) -> Tree {
         ("textbox", _) => (Role::TextInput, None),
         ("checkbox", p) => (Role::CheckBox, p),
         ("switch", p) => (Role::Switch, p),
+        ("radio", p) => (Role::RadioButton, p),
         (_, Some(p)) => (Role::ToggleButton, Some(p)),
         _ => (Role::Button, None),
     };

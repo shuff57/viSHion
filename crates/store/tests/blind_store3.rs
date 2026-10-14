@@ -67,7 +67,29 @@ fn oracle_seed_documents_round_trip_natively() {
     for (k, t) in &texts {
         if k.ends_with(".bak") { continue; }
         let got = String::from_utf8(block_on(pr.store.get(k)).unwrap().unwrap()).unwrap();
-        if &got != t { bad.push(k.clone()); }
+        if &got == t {
+            continue;
+        }
+        // a page saved after opening carries `order` = its position (`fs.openProject` ends with `S.reindex()`),
+        // and nothing else of it changes
+        let reindexed = k.contains("/pages/") && {
+            let slug = k.split('/').next().unwrap();
+            let id = k.rsplit('/').next().unwrap().trim_end_matches(".json");
+            let order: Vec<String> = serde_json::from_str::<serde_json::Value>(&texts[&format!("{slug}/project.json")])
+                .ok()
+                .and_then(|v| v["order"].as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()))
+                .unwrap_or_default();
+            match (serde_json::from_str::<serde_json::Value>(t), serde_json::from_str::<serde_json::Value>(&got), order.iter().position(|x| x == id)) {
+                (Ok(mut want), Ok(have), Some(i)) => {
+                    want["order"] = serde_json::json!(i);
+                    want == have
+                }
+                _ => false,
+            }
+        };
+        if !reindexed {
+            bad.push(k.clone());
+        }
     }
     let _ = std::fs::remove_dir_all(&dir);
     assert!(n > 5);
@@ -175,6 +197,7 @@ fn marker_lookalike_documents_round_trip() {
     let p2 = String::from_utf8(block_on(pr.store.get("q/pages/a.json")).unwrap().unwrap()).unwrap();
     let j2 = String::from_utf8(block_on(pr.store.get("q/project.json")).unwrap().unwrap()).unwrap();
     let _ = std::fs::remove_dir_all(&dir);
-    assert_eq!(p2, page);
+    // `fs.openProject` reindexes in memory (`page.order = i`), so the saved page carries its position
+    assert_eq!(p2, format!("{}{}", &page[..page.len() - 1], ",\"order\":0}"));
     assert_eq!(j2, "{\n  \"schemaVersion\": 1,\n  \"name\": \"Q\u{10FFFE}d800\\udc00\",\n  \"topic\": \"General\",\n  \"prompt\": \"\",\n  \"order\": [\n    \"a\"\n  ],\n  \"created\": 1,\n  \"updated\": 1,\n  \"ui\": {},\n  \"stats\": null\n}");
 }

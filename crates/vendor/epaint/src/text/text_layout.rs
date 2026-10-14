@@ -171,6 +171,7 @@ fn layout_section(
                 size: vec2(glyph_info.advance_width, line_height),
                 ascent: font_impl.map_or(0.0, |font| font.ascent()), // Failure to find the font here would be weird
                 uv_rect: glyph_info.uv_rect,
+                sub_uv: glyph_info.sub_uv,
                 section_index,
             });
 
@@ -396,6 +397,7 @@ fn replace_last_glyph_with_overflow_character(
             size: vec2(replacement_glyph_info.advance_width, line_height),
             ascent: font_impl.map_or(0.0, |font| font.ascent()), // Failure to find the font here would be weird
             uv_rect: replacement_glyph_info.uv_rect,
+            sub_uv: replacement_glyph_info.sub_uv,
             section_index,
         });
     } else {
@@ -414,6 +416,7 @@ fn replace_last_glyph_with_overflow_character(
             size: vec2(replacement_glyph_info.advance_width, line_height),
             ascent: font_impl.map_or(0.0, |font| font.ascent()), // Failure to find the font here would be weird
             uv_rect: replacement_glyph_info.uv_rect,
+            sub_uv: replacement_glyph_info.sub_uv,
             section_index,
         });
     }
@@ -457,6 +460,7 @@ fn replace_last_glyph_with_overflow_character(
             let (font_impl, glyph_info) = font.font_impl_and_glyph_info(last_glyph.chr);
             last_glyph.size = vec2(glyph_info.advance_width, line_height);
             last_glyph.uv_rect = glyph_info.uv_rect;
+            last_glyph.sub_uv = glyph_info.sub_uv;
 
             // Reapply kerning:
             last_glyph.pos.x += extra_letter_spacing;
@@ -477,6 +481,7 @@ fn replace_last_glyph_with_overflow_character(
             let (_, glyph_info) = font.font_impl_and_glyph_info(last_glyph.chr);
             last_glyph.size = vec2(glyph_info.advance_width, line_height);
             last_glyph.uv_rect = glyph_info.uv_rect;
+            last_glyph.sub_uv = glyph_info.sub_uv;
             return;
         }
     }
@@ -563,7 +568,20 @@ fn halign_and_justify_row(
 
     for glyph in &mut row.glyphs {
         glyph.pos.x += translate_x;
-        glyph.pos.x = point_scale.round_to_pixel(glyph.pos.x);
+        // snapped to a quarter of a pixel (the glyph's bitmap is drawn shifted by the remainder), not to a whole
+        // one: whole-pixel snapping moves each letter by up to half a pixel and closes or opens the gaps
+        // between words, which a browser's subpixel positioning does not
+        let px = glyph.pos.x * point_scale.pixels_per_point;
+        let mut base = px.floor();
+        let mut bin = ((px - base) * 4.0).round() as usize;
+        if bin >= 4 {
+            base += 1.0;
+            bin = 0;
+        }
+        glyph.pos.x = base / point_scale.pixels_per_point;
+        if !glyph.sub_uv[bin].is_nothing() {
+            glyph.uv_rect = glyph.sub_uv[bin];
+        }
         translate_x += extra_x_per_glyph;
         if glyph.chr.is_whitespace() {
             translate_x += extra_x_per_space;

@@ -676,13 +676,13 @@ fn control(r: &Reg) -> Spec {
         s
     } else {
         let mut s = Spec::new(&r.id, "button").attr("type", "button").text(&r.label);
-        if matches!(r.role, "checkbox" | "switch") {
+        if matches!(r.role, "checkbox" | "switch" | "radio") {
             s = s.attr("role", r.role);
         }
         s
     };
     let state = r.pressed.map(|p| if p { "true".to_string() } else { "false".to_string() });
-    if matches!(r.role, "checkbox" | "switch") {
+    if matches!(r.role, "checkbox" | "switch" | "radio") {
         s.attrs.push(("aria-checked", state));
     } else {
         s.attrs.push(("aria-pressed", state));

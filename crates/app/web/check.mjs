@@ -295,7 +295,9 @@ try {
     expect(await tab4('change-student'), 'Tab reaches Change student');
     await p4.keyboard.press('Enter');
     expect(await wait4(async () => (await p4.textContent('#controls [data-id="dialog-title"]').catch(() => null)) === 'Change student'), 'Change student opens its dialog');
-    expect((await ids4()).includes('cs-student-0') && (await ids4()).includes('cs-new'), 'it lists the other students and "A new student"');
+    expect((await ids4()).includes('cs-select') && !(await ids4()).includes('cs-student-0'), 'it opens on the select, "Choose a student", with the list shut');
+    await p4.keyboard.press('Enter');
+    expect(await wait4(async () => (await ids4()).includes('cs-student-0') && (await ids4()).includes('cs-new')), 'the select lists the other students and "A new student"');
     await p4.keyboard.press('Escape');
     expect(await wait4(async () => await has4('done')), 'Escape cancels it');
     expect(await tab4('remove'), 'Tab reaches Remove this page');

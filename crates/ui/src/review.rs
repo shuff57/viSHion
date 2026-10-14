@@ -317,6 +317,7 @@ pub(crate) fn show(app: &mut App, ctx: &egui::Context, t: &Tokens) {
             if !matches!(a, Act::ReadLine(_) | Act::ReadMove(_) | Act::ReadEdge(_) | Act::ReadClear | Act::Zoom(_) | Act::ZoomSet(_) | Act::Pan(_) | Act::Dialog(_) | Act::CloseDialog | Act::Scrolled(_)) {
                 *status_msg = None;
             }
+            ctl.quiet_focus = None;
             apply(a, s, ctx, ctl, typed, status_msg, status_err, dialog, &send);
         }
         // the typed fix belongs to one word
@@ -546,6 +547,7 @@ fn apply(
                 // to the word the panel moved to, where Enter only opens it again.
                 if let Some((p, k)) = s.sel_word.clone() {
                     ctl.want_focus = Some(format!("word-{p}-{k}"));
+                    ctl.quiet_focus = ctl.want_focus.clone();
                 }
             }
         }
@@ -556,6 +558,7 @@ fn apply(
                 ctl.say(format!("Undid the last choice. {}", s.next_word_phrase()));
                 if let Some((p, k)) = s.sel_word.clone() {
                     ctl.want_focus = Some(format!("word-{p}-{k}"));
+                    ctl.quiet_focus = ctl.want_focus.clone();
                 }
             } else {
                 ctl.say("Nothing to undo. To change a word, open it and choose another option.".to_string());
@@ -566,6 +569,7 @@ fn apply(
             ctl.say(format!("Used all the suggestions. {}", s.next_word_phrase()));
             if let Some((p, k)) = s.sel_word.clone() {
                 ctl.want_focus = Some(format!("word-{p}-{k}"));
+                ctl.quiet_focus = ctl.want_focus.clone();
             }
         }
         Act::StepWord(d) => {
@@ -859,7 +863,7 @@ fn header(ui: &mut Ui, cx: &mut Cx, s: &Session) {
     let who = g.as_ref().map(|g| g.name.clone()).unwrap_or_else(|| "No student".into());
     let save_text = if let Some(m) = &cx.save.failed {
         format!("Couldn\u{2019}t save: {m}")
-    } else if cx.save.pending > 0 {
+    } else if cx.save.pending > 0 || ui.input(|i| i.time) < cx.save.until {
         "Saving\u{2026}".to_string()
     } else {
         cx.storage.to_string()
@@ -880,7 +884,14 @@ fn header(ui: &mut Ui, cx: &mut Cx, s: &Session) {
             let (sr, _) = ui.allocate_exact_size(vec2(sg.size().x + 24.0, TARGET), Sense::hover());
             let icon = if cx.save.failed.is_some() { Icon::Warn } else { Icon::Check };
             let icon_col = if cx.save.failed.is_some() { t.bad } else { t.ok };
-            widgets::paint_icon(ui, Rect::from_center_size(pos2(sr.left() + 9.0, sr.center().y), vec2(18.0, 18.0)), icon, icon_col);
+            let ir = Rect::from_center_size(pos2(sr.left() + 9.0, sr.center().y), vec2(18.0, 18.0));
+            if save_text.starts_with("Saving") {
+                // `.save-state[data-s="saving"]`: the spin icon, in the text colour
+                widgets::paint_spinner(ui, ir, t.muted, ui.input(|i| i.time));
+                ui.ctx().request_repaint();
+            } else {
+                widgets::paint_icon(ui, ir, icon, icon_col);
+            }
             ui.painter().galley(pos2(sr.left() + 24.0, sr.center().y - sg.size().y / 2.0), sg, save_col);
             cx.ctl.status("save-state", &save_text, HEADER, sr);
             if widgets::icon_button(cx.ctl, ui, t, C::new("settings", "Settings", HEADER), Icon::Gear, false) {
@@ -985,7 +996,14 @@ fn header(ui: &mut Ui, cx: &mut Cx, s: &Session) {
             let (sr, _) = ui.allocate_exact_size(vec2(save_w, 19.6), Sense::hover());
             let icon = if cx.save.failed.is_some() { Icon::Warn } else { Icon::Check };
             let icon_col = if cx.save.failed.is_some() { t.bad } else { t.ok };
-            widgets::paint_icon(ui, Rect::from_center_size(pos2(sr.left() + 9.0, sr.center().y), vec2(18.0, 18.0)), icon, icon_col);
+            let ir = Rect::from_center_size(pos2(sr.left() + 9.0, sr.center().y), vec2(18.0, 18.0));
+            if save_text.starts_with("Saving") {
+                // `.save-state[data-s="saving"]`: the spin icon, in the text colour
+                widgets::paint_spinner(ui, ir, t.muted, ui.input(|i| i.time));
+                ui.ctx().request_repaint();
+            } else {
+                widgets::paint_icon(ui, ir, icon, icon_col);
+            }
             ui.painter().galley(pos2(sr.left() + 24.0, sr.center().y - sg.size().y / 2.0), sg, save_col);
             cx.ctl.status("save-state", &save_text, HEADER, sr);
         }
@@ -1147,7 +1165,7 @@ fn inbox_body(ui: &mut Ui, cx: &mut Cx, s: &Session) {
     let topic = s.a.meta.topic();
     let sub = format!("{}{}", if topic.is_empty() { String::new() } else { format!("{topic}, ") }, state::plural(tally.total, "student", "students"));
     let size = if cx.narrow { 30.0 } else { 36.0 };
-    let r = css_text(ui, title, theme::serif_semi(size), t.ink, size * 1.15, w, true);
+    let r = css_text(ui, title, theme::serif_semi(size), t.ink, size * 1.15, w, false);
     cx.ctl.heading("inbox-title", 1, title, TEXT, r);
     ui.add_space(8.0);
     let r = css_text(ui, &sub, theme::sans(14.0), t.muted, 14.0 * 1.4, w, false);
@@ -1961,10 +1979,12 @@ fn page_image(ui: &mut Ui, cx: &mut Cx, s: &Session, p: &Page, im: &Img, pad: f3
     let (outer, _) = ui.allocate_exact_size(vec2(w.max(avail - 2.0 * pad) + 2.0 * pad, h), Sense::hover());
     let rect = Rect::from_min_size(pos2(outer.left() + pad + ((outer.width() - 2.0 * pad - w) / 2.0).max(0.0), outer.top()), vec2(w, h));
     let pt = ui.painter();
-    // soft shadow: two translucent layers instead of a blur
-    pt.rect_filled(rect.translate(vec2(0.0, 10.0)).expand(2.0), 6.0, Color32::from_black_alpha(26));
-    pt.rect_filled(rect.translate(vec2(0.0, 2.0)), 3.0, Color32::from_black_alpha(46));
-    pt.image(im.full.id(), rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+    // `.scan-sheet { box-shadow: 0 1px 2px rgba(20,27,45,.25), 0 24px 48px -12px rgba(20,27,45,.35) }`
+    let ink = |a: f32| Color32::from_rgba_unmultiplied(20, 27, 45, (a * 255.0) as u8);
+    pt.add(egui::epaint::Shadow { offset: vec2(0.0, 24.0), blur: 48.0, spread: -12.0, color: ink(0.35) }.as_shape(rect, 2.0));
+    pt.add(egui::epaint::Shadow { offset: vec2(0.0, 1.0), blur: 2.0, spread: 0.0, color: ink(0.25) }.as_shape(rect, 2.0));
+    let ppp = ui.ctx().pixels_per_point();
+    pt.image(im.level_for(w * ppp), rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
 
     if s.boxes == BoxMode::Off {
         return;
@@ -2070,10 +2090,10 @@ fn transcript_pane(ui: &mut Ui, cx: &mut Cx, s: &Session, g: Option<&vishion_cor
     let dom = cx.ctl.dom_text;
     let slack = if same_row { 2.0 } else { 0.0 };
     let name_r = if dom {
-        let h = css_size(ui, &g.name, theme::serif_semi(32.0), 32.0 * 1.15, wrap_w, true).y;
+        let h = css_size(ui, &g.name, theme::serif_semi(32.0), 32.0 * 1.15, wrap_w, false).y;
         dom_block(ui, cx, "student-name", "name", wrap_w + slack, h)
     } else {
-        css_text(ui, &g.name, theme::serif_semi(32.0), t.ink, 32.0 * 1.15, wrap_w, true)
+        css_text(ui, &g.name, theme::serif_semi(32.0), t.ink, 32.0 * 1.15, wrap_w, false)
     };
     cx.ctl.heading("student-name", 1, &g.name, TEXT, name_r);
     ui.add_space(6.0);
@@ -2340,7 +2360,8 @@ fn plain_text(ui: &mut Ui, cx: &mut Cx, s: &Session, p: &Page) {
         transcript_group(ui, cx, rect);
         return;
     }
-    let r = css_text(ui, &text, egui::FontId::new(13.0, egui::FontFamily::Monospace), t.ink, 13.0 * 1.65, w, true);
+    // (lines break at spaces; a word wider than the line is the only thing broken in the middle)
+    let r = css_text(ui, &text, egui::FontId::new(13.0, egui::FontFamily::Monospace), t.ink, 13.0 * 1.65, w, false);
     cx.ctl.text(&format!("plain-{}", p.id()), &text, TEXT, r);
     transcript_group(ui, cx, r);
 }
@@ -2672,7 +2693,7 @@ fn unit(ui: &mut Ui, cx: &mut Cx, s: &Session, p: &Page, line: &Line, items: &[w
                 let hit = Rect::from_center_size(chip.center(), vec2(chip.width().max(TARGET), TARGET));
                 let r = ui.interact(hit, ui.id().with(id.as_str()), Sense::click());
                 paint_chip(ui, t, chip, g, *kind, *checked, *selected, r.hovered());
-                if cx.ctl.want_focus.as_deref() == Some(id.as_str()) {
+                if cx.ctl.want_focus.as_deref() == Some(id.as_str()) && cx.ctl.quiet_focus.as_deref() != Some(id.as_str()) {
                     // `w.focus()` scrolls the word into view, only as far as the painted word needs (the 44pt
                     // hit target is not what the reader sees)
                     ui.scroll_to_rect(chip, None);
@@ -2802,7 +2823,7 @@ fn dom_unit(ui: &mut Ui, cx: &mut Cx, s: &Session, p: &Page, line: &Line, items:
             None => Rect::from_min_size(rect.min + vec2(0.0, 1.0), vec2(8.0, px * 1.35)),
         };
         let r = ui.interact(chip, ui.id().with(wid.as_str()), Sense::hover());
-        if cx.ctl.want_focus.as_deref() == Some(wid.as_str()) {
+        if cx.ctl.want_focus.as_deref() == Some(wid.as_str()) && cx.ctl.quiet_focus.as_deref() != Some(wid.as_str()) {
             // `w.focus()` scrolls the word into view, only as far as the painted word needs
             ui.scroll_to_rect(chip, None);
         }

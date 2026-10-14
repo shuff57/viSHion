@@ -21,6 +21,7 @@ try {
   for ($i = 0; $i -lt 100 -and -not $script:win; $i++) { Start-Sleep -Milliseconds 300; $script:p.Refresh(); if ($script:p.MainWindowHandle -ne 0) { try { $script:win = $UA::FromHandle($script:p.MainWindowHandle) } catch {} } }
   Start-Sleep 4; [N.W]::SetForegroundWindow($script:p.MainWindowHandle) | Out-Null; Start-Sleep -Milliseconds 800
   Go 'Change student'; Key '{ENTER}'
+  Go 'This page belongs to*'; Key '{ENTER}'
   Go 'A new student*'; Key '{ENTER}'
   Check ((Foc) -eq 'Edit:New student name') "the name box takes focus: $(Foc)"
   Key 'Zed'; Key '{ENTER}'
