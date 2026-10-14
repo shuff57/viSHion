@@ -30,6 +30,7 @@ pub(crate) enum HomeAct {
     Duplicate(String),
     Delete(String),
     ImportZip,
+    ImportFolder,
     DownloadZip(String),
 }
 
@@ -133,6 +134,9 @@ fn body(ui: &mut Ui, ctl: &mut Ctl, t: &Tokens, h: &mut Home, storage: &str, nar
         ctl.heading("home-assignments", 2, "Assignments", TEXT, r.rect);
         if widgets::button(ctl, ui, t, C::new("import-zip", "Import zip", TEXT), "Import zip", Look::Outline, 0.0) {
             acts.push(HomeAct::ImportZip);
+        }
+        if widgets::button(ctl, ui, t, C::new("import-folder", "Import folder", TEXT), "Import folder", Look::Outline, 0.0) {
+            acts.push(HomeAct::ImportFolder);
         }
         if h.creating.is_none() && widgets::button(ctl, ui, t, C::new("new-assignment", "New assignment", TEXT), "New assignment", Look::Primary, 0.0) {
             h.creating = Some(String::new());

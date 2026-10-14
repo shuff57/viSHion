@@ -54,6 +54,8 @@ pub enum Cmd {
     CommitStaged { slug: String, items: Vec<StagedItem> },
     /// Ask for a project zip and import it as a new assignment: `Event::Opened`.
     ImportZip,
+    /// Ask for a project folder and import it as a new assignment: `Event::Opened`.
+    ImportFolder,
     /// Write `exports/<slug>.zip` with every file of the assignment (the home card's Download zip).
     DownloadZip { slug: String },
     /// Open another assignment: `Event::Opened`.

@@ -52,6 +52,38 @@ pub async fn pick_pictures(multiple: bool) -> Vec<Picked> {
     pick_with("Pictures", &["jpg", "jpeg", "png", "gif", "bmp", "webp"], "image/*", multiple).await
 }
 
+/// A project folder (`Import folder`): every file under it, named by its path from the folder's parent, so the
+/// folder's own name is the first part (as `webkitRelativePath` is in a browser).
+#[cfg(not(target_arch = "wasm32"))]
+pub async fn pick_folder() -> Vec<Picked> {
+    match rfd::FileDialog::new().pick_folder() {
+        Some(dir) => read_folder(&dir),
+        None => vec![],
+    }
+}
+
+/// Every file under `dir`, named `<folder name>/<path>`.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn read_folder(dir: &std::path::Path) -> Vec<Picked> {
+    fn walk(dir: &std::path::Path, rel: &str, out: &mut Vec<Picked>) {
+        let Ok(rd) = std::fs::read_dir(dir) else { return };
+        for e in rd.flatten() {
+            let name = e.file_name().to_string_lossy().to_string();
+            let path = e.path();
+            let rel = format!("{rel}/{name}");
+            if path.is_dir() {
+                walk(&path, &rel, out);
+            } else if let Ok(bytes) = std::fs::read(&path) {
+                out.push(Picked { name: rel, bytes });
+            }
+        }
+    }
+    let root = dir.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "folder".into());
+    let mut out = vec![];
+    walk(dir, &root, &mut out);
+    out
+}
+
 /// A project zip (`Import zip`).
 pub async fn pick_zip() -> Vec<Picked> {
     pick_with("Zip", &["zip"], ".zip,application/zip", false).await
@@ -76,8 +108,19 @@ pub async fn pick_pictures(multiple: bool) -> Vec<Picked> {
     pick_with("Pictures", &[], "image/*", multiple).await
 }
 
+/// A project folder (`Import folder`): `<input type=file webkitdirectory>`; names are `webkitRelativePath`.
+#[cfg(target_arch = "wasm32")]
+pub async fn pick_folder() -> Vec<Picked> {
+    pick_inner("", true, true).await
+}
+
 #[cfg(target_arch = "wasm32")]
 async fn pick_with(_label: &str, _exts: &[&str], accept: &str, multiple: bool) -> Vec<Picked> {
+    pick_inner(accept, multiple, false).await
+}
+
+#[cfg(target_arch = "wasm32")]
+async fn pick_inner(accept: &str, multiple: bool, folder: bool) -> Vec<Picked> {
     use wasm_bindgen::closure::Closure;
     use wasm_bindgen::JsCast;
     let Some(doc) = web_sys::window().and_then(|w| w.document()) else { return vec![] };
@@ -85,6 +128,9 @@ async fn pick_with(_label: &str, _exts: &[&str], accept: &str, multiple: bool) -
     let Ok(input) = el.dyn_into::<web_sys::HtmlInputElement>() else { return vec![] };
     input.set_type("file");
     input.set_accept(accept);
+    if folder {
+        let _ = input.set_attribute("webkitdirectory", "");
+    }
     input.set_multiple(multiple);
     let inp = input.clone();
     let p = js_sys::Promise::new(&mut |res, _| {
@@ -105,7 +151,8 @@ async fn pick_with(_label: &str, _exts: &[&str], accept: &str, multiple: bool) -
     if let Some(list) = inp.files() {
         for i in 0..list.length() {
             let Some(f) = list.item(i) else { continue };
-            let name = f.name();
+            let rel = js_sys::Reflect::get(&f, &"webkitRelativePath".into()).ok().and_then(|v| v.as_string()).filter(|s| !s.is_empty());
+            let name = rel.unwrap_or_else(|| f.name());
             if let Ok(buf) = wasm_bindgen_futures::JsFuture::from(f.array_buffer()).await {
                 out.push(Picked { name, bytes: js_sys::Uint8Array::new(&buf).to_vec() });
             }
@@ -570,6 +617,17 @@ impl Backend {
                         Ok(slug) => Event::Many(vec![Event::Notice { text: "Assignment imported.".into(), error: false }, self.open(Some(&slug), now).await]),
                         Err(e) => Event::Notice { text: format!("Import failed: {e}"), error: true },
                     },
+                }
+            }
+            Cmd::ImportFolder => {
+                let files = pick_folder().await;
+                if files.is_empty() {
+                    return Event::Notice { text: "No folder chosen.".into(), error: false };
+                }
+                let entries: Vec<(String, Vec<u8>)> = files.into_iter().map(|f| (f.name, f.bytes)).collect();
+                match self.projects.import_files(&entries).await {
+                    Ok(slug) => Event::Many(vec![Event::Notice { text: "Assignment imported.".into(), error: false }, self.open(Some(&slug), now).await]),
+                    Err(e) => Event::Notice { text: format!("Import failed: {e}"), error: true },
                 }
             }
             Cmd::DownloadZip { slug } => match self.projects.project_files(&slug).await {

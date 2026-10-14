@@ -353,6 +353,7 @@ pub(crate) fn show(app: &mut App, ctx: &egui::Context, t: &Tokens) {
             HomeAct::Duplicate(slug) => Cmd::DuplicateProject { slug },
             HomeAct::Delete(slug) => Cmd::DeleteProject { slug },
             HomeAct::ImportZip => Cmd::ImportZip,
+            HomeAct::ImportFolder => Cmd::ImportFolder,
             HomeAct::DownloadZip(slug) => Cmd::DownloadZip { slug },
         });
         // the list is asked for again after a change

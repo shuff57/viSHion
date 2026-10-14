@@ -115,8 +115,9 @@ whenever the inline bootstrap script in `crates/app/web/index.html` changes, so 
 - home (`ui::home`, Phase 5): the wordmark on the inbox goes there, and an empty store starts there. Lists the
   assignments (`Cmd::ListProjects` -> `Event::Projects`), opens one, creates, renames, duplicates and deletes
   (inline fields and an inline confirm instead of dialogs, so it works with no session). Import zip (`core::export::read_zip`, stored and deflated
-  entries) and Download zip (writes `exports/<slug>.zip`, `Cmd::DownloadZip`) are in. Not yet: the folder card
-  states (choose / reconnect), folder import, old-session import.
+  entries) and Download zip (writes `exports/<slug>.zip`, `Cmd::DownloadZip`) are in. Import folder
+  (`Cmd::ImportFolder`: a native folder dialog, `webkitdirectory` on the web) is in too. Not yet: the folder card
+  states (choose / reconnect: the web build stores in IndexedDB only) and old-session import.
 
 Flows are `ui::state::Session` over `core::words` (`choose`, `use_all`, which call `core::judge::toggle`),
 `core::groups`, `core::export`. The screen never touches storage: it sends `host::Cmd`s (`LoadImage`,

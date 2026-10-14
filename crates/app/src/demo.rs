@@ -422,6 +422,25 @@ mod tests {
         assert!(evs.iter().any(|e| matches!(e, Event::Transcribed { outcome: vishion_ui::ReadOutcome::Done { guesses: None, .. }, .. })));
     }
 
+    /// Import folder: a stored assignment folder is read back with its folder name in front, and imported
+    /// as a new assignment under a fresh slug.
+    #[test]
+    fn a_project_folder_imports_as_a_new_assignment() {
+        let dir = std::env::temp_dir().join(format!("vishion-folder-import-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = AnyStore::Fs(vishion_store::fs::FsStore::new(&dir));
+        let (_store, slug) = block_on(seed_into(store, 1_700_000_000_000)).unwrap();
+        let files = crate::backend::read_folder(&dir.join(&slug));
+        assert!(files.iter().any(|f| f.name == format!("{slug}/project.json")), "{:?}", files.iter().map(|f| &f.name).collect::<Vec<_>>());
+        let (target, _) = block_on(seed(1)).unwrap();
+        let be = Backend::new(target, "Saved");
+        let entries: Vec<(String, Vec<u8>)> = files.into_iter().map(|f| (f.name, f.bytes)).collect();
+        let new_slug = block_on(be.projects.import_files(&entries)).unwrap();
+        let Event::Opened { assignment, .. } = block_on(be.open(Some(&new_slug), 5)) else { panic!("open") };
+        assert!(assignment.page("p-maya-1").is_some());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// The native path: a real folder, written and read back through `FsStore` and the project layer.
     #[test]
     fn folder_store_round_trip_keeps_edits() {
