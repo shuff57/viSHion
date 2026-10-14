@@ -1,8 +1,10 @@
 //! Browser transport: `fetch` + a byte stream into the same `SseParser`. Stop and the timeout are checked
 //! between chunks (an in-flight request that has sent no byte yet ends when the server answers or the
 //! browser gives up; ponytail: wire an AbortController if that wait is ever long in practice).
+use crate::slots;
 use crate::sse::SseParser;
 use crate::{body, http_error, tokens, unreachable_message, verdict_error, Cancel, Done, Error, Progress, Request};
+use futures_util::future::{select, Either};
 use futures_util::StreamExt;
 use js_sys::Uint8Array;
 use wasm_bindgen::JsCast;
@@ -11,6 +13,25 @@ use web_sys::{Headers, RequestInit, Response};
 
 fn now() -> f64 {
     js_sys::Date::now()
+}
+
+async fn sleep(ms: i32) {
+    let global = js_sys::global().unchecked_into::<web_sys::WorkerGlobalScope>();
+    let p = js_sys::Promise::new(&mut |resolve, _| {
+        let _ = global.set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, ms);
+    });
+    let _ = JsFuture::from(p).await;
+}
+
+/// One `GET /slots`; `None` for anything but a prompt being read (the endpoint is optional).
+async fn slots_percent(url: &str) -> Option<u32> {
+    let global = js_sys::global().unchecked_into::<web_sys::WorkerGlobalScope>();
+    let res: Response = JsFuture::from(global.fetch_with_str(url)).await.ok()?.unchecked_into();
+    if !res.ok() {
+        return None;
+    }
+    let text = JsFuture::from(res.text().ok()?).await.ok()?.as_string()?;
+    slots::reading_percent(&text)
 }
 
 pub async fn transcribe(req: Request<'_>, cancel: &Cancel, on: &mut dyn FnMut(Progress)) -> Result<Done, Error> {
@@ -28,7 +49,27 @@ pub async fn transcribe(req: Request<'_>, cancel: &Cancel, on: &mut dyn FnMut(Pr
     init.set_body(&wasm_bindgen::JsValue::from_str(&body(req.model, req.image, req.prompt)));
     let request = web_sys::Request::new_with_str_and_init(&req.endpoint.chat_completions_url(), &init).map_err(|_| network())?;
     let global = js_sys::global().unchecked_into::<web_sys::WorkerGlobalScope>();
-    let res: Response = JsFuture::from(global.fetch_with_request(&request)).await.map_err(|_| network())?.unchecked_into();
+    // While the answer has not started, ask /slots every 400 ms how far the model has read the picture.
+    let mut fetch = Box::pin(JsFuture::from(global.fetch_with_request(&request)));
+    let poll = req.poll_slots && req.endpoint.serves_slots();
+    let slots_url = req.endpoint.slots_url();
+    let res: Response = loop {
+        if !poll {
+            break fetch.await.map_err(|_| network())?.unchecked_into();
+        }
+        match select(fetch, Box::pin(sleep(slots::EVERY.as_millis() as i32))).await {
+            Either::Left((res, _)) => break res.map_err(|_| network())?.unchecked_into(),
+            Either::Right((_, pending)) => {
+                fetch = pending;
+                if cancel.is_set() {
+                    return Err(Error::Aborted);
+                }
+                if let Some(pct) = slots_percent(&slots_url).await {
+                    on(Progress::Status(&slots::status(pct)));
+                }
+            }
+        }
+    };
     if cancel.is_set() {
         return Err(Error::Aborted);
     }

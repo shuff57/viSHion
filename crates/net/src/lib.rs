@@ -2,6 +2,7 @@
 //! out); `native` (ureq, blocking) and `web` (fetch) only move bytes. Both expose the same
 //! `async fn transcribe`.
 
+pub mod slots;
 pub mod sse;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -27,6 +28,17 @@ impl Endpoint {
         Self { base_url: base_url.into() }
     }
 
+    /// llama.cpp's progress endpoint, polled while a page is read.
+    pub fn slots_url(&self) -> String {
+        format!("{}/slots", self.base_url.trim_end_matches('/'))
+    }
+
+    /// js/ocr.js asks `/slots` of llama.cpp only, never of hosted endpoints: those are https, a llama-server
+    /// on this machine or the local network is not.
+    pub fn serves_slots(&self) -> bool {
+        self.base_url.starts_with("http://")
+    }
+
     /// js/ocr.js posts to `origin + '/v1/chat/completions'`, origin without trailing slashes.
     pub fn chat_completions_url(&self) -> String {
         format!("{}/v1/chat/completions", self.base_url.trim_end_matches('/'))
@@ -42,6 +54,8 @@ pub struct Request<'a> {
     /// The stored page picture (JPEG).
     pub image: &'a [u8],
     pub timeout_secs: u64,
+    /// Ask `/slots` how far the model is while it reads (llama.cpp only).
+    pub poll_slots: bool,
 }
 
 /// What the page showed while it was read.

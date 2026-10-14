@@ -327,6 +327,7 @@ impl Backend {
             prompt: &conn.prompt,
             image: &image,
             timeout_secs: conn.timeout_secs,
+            poll_slots: true,
         };
         let mut on = |p: Progress| {
             if let Progress::Text { full, .. } = p {

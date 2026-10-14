@@ -315,13 +315,23 @@ mod tests {
         let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let url = format!("http://{}", l.local_addr().unwrap());
         std::thread::spawn(move || {
-            let (mut s, _) = l.accept().unwrap();
-            // the request is a JSON body with a JPEG in it: read until the client has stopped sending
-            s.set_read_timeout(Some(std::time::Duration::from_millis(300))).unwrap();
-            let mut b = [0u8; 65536];
-            while s.read(&mut b).map_or(false, |n| n > 0) {}
-            let r = "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\ndata: {\"choices\":[{\"delta\":{\"content\":\"```\\nHello\"}}]}\n\ndata: {\"choices\":[{\"delta\":{\"content\":\" world\\n```\"}}],\"usage\":{\"completion_tokens\":2}}\n\ndata: [DONE]\n\n";
-            s.write_all(r.as_bytes()).unwrap();
+            // /slots is polled while the page is read; only the POST gets the stream
+            for conn in l.incoming() {
+                let Ok(mut s) = conn else { return };
+                std::thread::spawn(move || {
+                    let mut b = [0u8; 65536];
+                    let n = s.read(&mut b).unwrap_or(0);
+                    if b[..n].starts_with(b"GET ") {
+                        let _ = s.write_all(b"HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
+                        return;
+                    }
+                    // the request is a JSON body with a JPEG in it: read until the client has stopped sending
+                    s.set_read_timeout(Some(std::time::Duration::from_millis(300))).unwrap();
+                    while s.read(&mut b).map_or(false, |n| n > 0) {}
+                    let r = "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\ndata: {\"choices\":[{\"delta\":{\"content\":\"```\\nHello\"}}]}\n\ndata: {\"choices\":[{\"delta\":{\"content\":\" world\\n```\"}}],\"usage\":{\"completion_tokens\":2}}\n\ndata: [DONE]\n\n";
+                    s.write_all(r.as_bytes()).unwrap();
+                });
+            }
         });
         let (store, slug) = block_on(seed(1)).unwrap();
         let be = Backend::new(store, "Saved");
