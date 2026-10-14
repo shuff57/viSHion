@@ -43,6 +43,9 @@ pub(crate) struct Stage {
     /// Painted height of the bottom tray panel last frame (wide layout). It overlays the transcript pane in
     /// the browser, so a line under it still counts as in view for `scrollIntoView({ block: 'nearest' })`.
     tray_px: f32,
+    /// The reading line moved because of a mouse click: the sticky tray overlays the pane then, as in the
+    /// browser (a line under it counts as in view). A line reached by keys or the screen reader is kept above it.
+    read_by_pointer: bool,
     /// Height of the phone's sticky tray box last frame (it is reserved at the end of the transcript).
     tray_box_h: f32,
     /// Content height of the page stage last frame (phone: the stage is as tall as the page).
@@ -787,6 +790,9 @@ fn apply(
                 dialog::Out::Setting(key, v, said) => {
                     s.settings.set(key, v);
                     s.dirty.settings = true;
+                    if matches!(key, "model" | "ocrUrl" | "apiKey") {
+                        dialog::remember(s);
+                    }
                     ctl.say(said);
                     return;
                 }
@@ -804,6 +810,28 @@ fn apply(
                         danger: true,
                         then: After::ClearFixes,
                     });
+                    return;
+                }
+                dialog::Out::Provider(id) => {
+                    if dialog::provider(&id).3 {
+                        if let Some(d) = dialog.as_ref() {
+                            dialog::commit(s, d);
+                        }
+                        // stacked on Settings: Cancel comes back to the select that asked
+                        let p = dialog::provider(&id);
+                        ctl.under = dialog.take().map(|d| (d, "st-provider"));
+                        ctl.want_focus = Some("dialog-cancel".into());
+                        *dialog = Some(Dialog::Confirm {
+                            title: "Send pages to the internet?".into(),
+                            text: format!("Pages and student names will be sent to {} to be read. Switch anyway?", p.4),
+                            ok: format!("Use {}", p.4),
+                            danger: false,
+                            then: After::UseProvider(id),
+                        });
+                        return;
+                    }
+                    dialog::switch_provider(s, &id);
+                    ctl.say(format!("Where the model runs: {}.", dialog::provider(&id).1));
                     return;
                 }
                 dialog::Out::Student { name, all } => {
@@ -824,6 +852,11 @@ fn apply(
                         say("Forgot the remembered fixes.".into(), false);
                         // js keeps Settings open; the button is unavailable now, so focus goes to Done
                         back_to = Some("dialog-close");
+                    }
+                    After::UseProvider(id) => {
+                        dialog::switch_provider(s, &id);
+                        say(format!("Where the model runs: {}.", dialog::provider(&id).1), false);
+                        back_to = Some("st-provider");
                     }
                     After::RemovePage(id) => s.remove_page(&id),
                     After::TranscribeAgain(id) => send(Cmd::Transcribe { slug, ids: vec![id] }),
@@ -1016,7 +1049,7 @@ fn header(ui: &mut Ui, cx: &mut Cx, s: &Session) {
         1 => {
             let split = s.split;
             let items = [("layout-split", "Side by side", split, false), ("layout-text", "Text only", !split, false)];
-            match widgets::seg(cx.ctl, ui, t, HEADER, "layout", items) {
+            match widgets::seg(cx.ctl, ui, t, HEADER, "layout", &items) {
                 Some(0) => cx.acts.push(Act::SetSplit(true)),
                 Some(_) => cx.acts.push(Act::SetSplit(false)),
                 None => {}
@@ -1488,6 +1521,7 @@ fn review(ctx: &egui::Context, cx: &mut Cx, s: &Session, narrow: bool) {
     } else if st.read_seen != read {
         st.read_seen = read;
         st.read_left = 6;
+        st.read_by_pointer = (crate::now_ms() as f64 - cx.ctl.pointer_at) < 800.0;
     }
     cx.scroll_read = cx.stage.read_left > 0;
     review_panes(ctx, cx, s, narrow);
@@ -2353,7 +2387,7 @@ fn legend_row(ui: &mut Ui, cx: &mut Cx, s: &Session) {
     let same = s.versions_same();
     let orig = s.original && !same;
     let items = [("ver-corrected", "Corrected", !orig, false), ("ver-original", "Original", orig, same)];
-    let picked = ui.allocate_ui_at_rect(seg_rect, |ui| widgets::seg(cx.ctl, ui, t, TEXT, "version", items)).inner;
+    let picked = ui.allocate_ui_at_rect(seg_rect, |ui| widgets::seg(cx.ctl, ui, t, TEXT, "version", &items)).inner;
     match picked {
         Some(0) => cx.acts.push(Act::Original(false)),
         Some(_) => cx.acts.push(Act::Original(true)),
@@ -2502,7 +2536,7 @@ fn unit(ui: &mut Ui, cx: &mut Cx, s: &Session, p: &Page, line: &Line, items: &[w
         if reading {
             ui.painter().rect_filled(Rect::from_min_size(pos2(rect.left(), rect.bottom() - 4.0), vec2(rect.width(), 3.0)), 1.0, t.accent);
             if cx.scroll_read {
-                scroll_line_into_view(ui, cx.stage.tray_px, rect);
+                scroll_line_into_view(ui, if cx.stage.read_by_pointer { cx.stage.tray_px } else { 0.0 }, rect);
             }
         }
         cx.ctl.end_para(&id, TEXT, rect, true, reading);
@@ -2725,7 +2759,7 @@ fn unit(ui: &mut Ui, cx: &mut Cx, s: &Session, p: &Page, line: &Line, items: &[w
         }
     }
     if reading && cx.scroll_read {
-        scroll_line_into_view(ui, cx.stage.tray_px, rect);
+        scroll_line_into_view(ui, if cx.stage.read_by_pointer { cx.stage.tray_px } else { 0.0 }, rect);
     }
     if reading {
         // `text-decoration: underline 3px accent; text-underline-offset: 7px` on the line: the browser draws it
@@ -2851,7 +2885,7 @@ fn dom_unit(ui: &mut Ui, cx: &mut Cx, s: &Session, p: &Page, line: &Line, items:
         }
     }
     if reading && cx.scroll_read {
-        scroll_line_into_view(ui, cx.stage.tray_px, rect);
+        scroll_line_into_view(ui, if cx.stage.read_by_pointer { cx.stage.tray_px } else { 0.0 }, rect);
     }
     cx.ctl.end_para(&id, TEXT, rect, true, reading);
     rect

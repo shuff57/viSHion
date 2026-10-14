@@ -147,6 +147,11 @@ pub struct Ctl {
     /// The last input was the keyboard, so a focused non-text region shows its ring (`:focus-visible`: a mouse
     /// click on the transcript focuses it without a ring; the first arrow key brings the ring up).
     pub(crate) kbd: bool,
+    /// A mouse press arrived with this frame's messages: the focus it gave is not scrolled to (Chrome only
+    /// scrolls a focus made by key or script).
+    pub(crate) pointer_down: bool,
+    /// `now_ms()` of the last mouse press on the twin.
+    pub(crate) pointer_at: f64,
     /// Twin focus arrived since the control last drew: bring it into view (browsers scroll focus into view;
     /// the twin is `overflow: clip`, so the canvas has to do it).
     focus_fresh: bool,
@@ -247,7 +252,8 @@ impl Ctl {
         if self.restore_kb.as_deref() == Some(id) && !r.has_focus() && ui.ctx().memory(|m| m.focused().is_none()) {
             r.request_focus();
         }
-        if twin_focus && self.focus_fresh && !self.kbd {
+        // (a mouse press within the last moments, and no key since)
+        if twin_focus && self.focus_fresh && (self.pointer_down || (now_ms() as f64 - self.pointer_at) < 800.0) {
             // a mouse click focuses without scrolling (Chrome only scrolls a focus made by key or script)
             self.focus_fresh = false;
         }
@@ -615,6 +621,7 @@ impl Ctl {
 
     fn drain(&mut self, q: &Queue) {
         let msgs: Vec<String> = std::mem::take(&mut *q.lock().unwrap());
+        self.pointer_down = false;
         for m in msgs {
             if let Some(id) = m.strip_prefix("act:") {
                 // "act:<id>" or "act:<id>\u{1}<c|s|cs>" with the modifiers that were held
@@ -640,8 +647,11 @@ impl Ctl {
                 }
             } else if m == "kbd:1" {
                 self.kbd = true;
+                self.pointer_at = 0.0;
             } else if m == "kbd:0" {
                 self.kbd = false;
+                self.pointer_down = true;
+                self.pointer_at = now_ms() as f64;
             } else if let Some(rest) = m.strip_prefix("key:") {
                 let (key, alt) = match rest.split_once('\u{1}') {
                     Some((k, m)) => (k, m.contains("alt")),
@@ -649,6 +659,7 @@ impl Ctl {
                 };
                 self.keys.push(KeyEv { key: key.into(), alt });
                 self.kbd = true;
+                self.pointer_at = 0.0;
             } else if let Some(rest) = m.strip_prefix("text:") {
                 if let Some((id, v)) = rest.split_once('\u{1}') {
                     self.typed.insert(id.into(), v.into());
@@ -1027,6 +1038,18 @@ impl App {
                         msg = Some(msg.map_or(n.clone(), |m| format!("{m} {n}")));
                     }
                     self.notice = msg;
+                    // js/fs.js `notice()`: once, when the work lives in this browser
+                    if self.storage == "Saved in this browser" && self.status_msg.is_none() {
+                        #[cfg(target_arch = "wasm32")]
+                        let seen = web::take_storage_notice();
+                        #[cfg(not(target_arch = "wasm32"))]
+                        let seen = true;
+                        if !seen {
+                            self.status_msg = Some("Saves live in this browser only. Use Export to keep a copy.".into());
+                            self.status_err = false;
+                            self.ctl.toast_serial += 1;
+                        }
+                    }
                     self.images.clear();
                     let mut sess = state::Session::new(slug, *assignment, *settings, now_ms());
                     if let Some(id) = &self.start_page {
@@ -1411,6 +1434,7 @@ impl App {
         web::fit_scale(ctx);
         if ctx.input(|i| i.pointer.any_pressed()) {
             self.ctl.kbd = false;
+            self.ctl.pointer_at = now_ms() as f64;
             // (native: focus the mouse gave is egui's; the twin's own record of it is only for Tab)
             #[cfg(not(target_arch = "wasm32"))]
             {

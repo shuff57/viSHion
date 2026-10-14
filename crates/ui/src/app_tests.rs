@@ -2131,9 +2131,12 @@ fn round5_next_word_says_which_word_and_the_page_when_it_changes() {
 fn round5_settings_reach_model_course_words_and_export() {
     let mut h = H::new("m1");
     h.act("settings");
-    for id in ["st-ocr", "st-key", "st-model", "st-words", "st-fmt-docx", "st-sep-break", "st-txt-both", "st-jmode-heuristic", "st-orig", "st-clear-fixes"] {
+    for id in ["st-provider", "st-ocr", "st-key", "st-model", "st-words", "st-fmt", "st-sep", "st-txt", "st-jmode", "st-orig", "st-clear-fixes", "dialog-x"] {
         assert!(h.ctl(id).is_some(), "{id} is in the Settings dialog");
     }
+    // a select: the list opens under it, then an option is picked
+    h.act("st-fmt");
+    h.frames(2);
     h.act("st-fmt-docx");
     assert_eq!(h.s().settings.get("exportFormat").and_then(|v| v.as_str()), Some("docx"));
     assert!(h.app.announced().last().is_some_and(|s| s.contains("Combined file")));
@@ -2519,7 +2522,7 @@ fn native_settings_tab_order_is_drawing_order_and_clipped_controls_have_no_rect(
     assert_eq!(stops.iter().filter(|s| *s == "dialog-close").count(), 1);
     assert_eq!(stops.last().map(String::as_str), Some("dialog-close"), "{stops:?}");
     let at = |id: &str| stops.iter().position(|s| s == id).unwrap_or_else(|| panic!("{id} is a stop"));
-    let order = ["theme-auto", "st-ocr", "st-demo", "st-jmode-auto", "st-words", "st-guess", "st-fmt-md", "st-orig"];
+    let order = ["theme-auto", "st-ocr", "st-demo", "st-jmode", "st-words", "st-guess", "st-fmt", "st-orig"];
     for w in order.windows(2) {
         assert!(at(w[0]) < at(w[1]), "{} before {}", w[0], w[1]);
     }

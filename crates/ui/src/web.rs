@@ -1863,3 +1863,15 @@ pub fn set_tokens(t: &crate::theme::Tokens) {
     }
     LAST.with(|l| *l.borrow_mut() = v);
 }
+
+/// `settings.noticeSeen` of js/fs.js, kept in this browser (localStorage) so the "Saves live in this browser
+/// only" toast shows once per browser, as `notice()` does. Returns whether it had been seen, and marks it seen.
+pub fn take_storage_notice() -> bool {
+    const KEY: &str = "vishion.noticeSeen";
+    let Some(st) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) else { return false };
+    if st.get_item(KEY).ok().flatten().is_some() {
+        return true;
+    }
+    let _ = st.set_item(KEY, "1");
+    false
+}

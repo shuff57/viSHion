@@ -305,7 +305,7 @@ pub fn icon_button(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, c: C, icon: Icon, on:
 }
 
 /// Two-option segmented control in a rounded tray. Returns the index clicked.
-pub fn seg(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, region: u8, group: &str, items: [(&str, &str, bool, bool); 2]) -> Option<usize> {
+pub fn seg(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, region: u8, group: &str, items: &[(&str, &str, bool, bool)]) -> Option<usize> {
     // items: (id, label, on, disabled)
     let fonts: Vec<_> = items
         .iter()
@@ -320,7 +320,7 @@ pub fn seg(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, region: u8, group: &str, item
     ui.painter().rect_filled(outer, 10.0, t.hover);
     let mut x = outer.min.x + 3.0;
     let mut clicked = None;
-    for (i, ((id, label, on, dis), g)) in items.into_iter().zip(fonts).enumerate() {
+    for (i, ((id, label, on, dis), g)) in items.iter().copied().zip(fonts).enumerate() {
         let w = widths[i];
         let slot = Rect::from_min_size(pos2(x, outer.min.y), vec2(w, TARGET));
         let sense = if dis { Sense::hover() } else { Sense::click() };
