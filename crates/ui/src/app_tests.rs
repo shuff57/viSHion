@@ -2885,3 +2885,90 @@ fn parity_scroll_keys_are_only_written_by_a_scroll_event() {
     let ui = h.s().a.meta.get("ui").cloned().unwrap_or_default();
     assert!(ui.get("scrollId").is_none() && ui.get("scroll").is_none(), "written without a scroll event: {ui}");
 }
+
+// ---- visual parity, round 3: the Settings dialog is js/ui/settings.js, wheel and focus behave like Chrome ----
+
+/// The head has a close X, the theme is System / Light / Dark, "Where the model runs" is a select and each field
+/// has its help text; the old extra "Match my device" wording is gone.
+#[test]
+fn parity_settings_has_head_close_system_light_dark_provider_select_and_help() {
+    let mut h = H::new("m1");
+    h.act("settings");
+    h.frames(3);
+    assert_eq!(h.ctl("dialog-x").map(|c| c.label.clone()).as_deref(), Some("Close"));
+    assert_eq!(h.ctl("theme-auto").map(|c| c.label.clone()).as_deref(), Some("System"));
+    assert_eq!(h.ctl("theme-light").map(|c| c.label.clone()).as_deref(), Some("Light"));
+    assert_eq!(h.ctl("theme-dark").map(|c| c.label.clone()).as_deref(), Some("Dark"));
+    let sel = h.ctl("st-provider").expect("provider select");
+    assert!(sel.label.starts_with("Where the model runs, Local server"), "{}", sel.label);
+    assert_eq!(h.node_text("st-ocr-hint").as_deref(), Some("A local llama.cpp or Ollama server, or the endpoint\u{2019}s base address."));
+    assert!(h.node_text("st-key-hint").is_some_and(|t| t.starts_with("Not needed for a server on this computer.")));
+    assert!(h.node_text("st-timeout-hint").is_some_and(|t| t.contains("batch moves on")));
+    // the demo and straighten switches are check rows with a line of help, not buttons
+    assert_eq!(h.ctl("st-straighten").map(|c| c.role), Some("checkbox"));
+    h.act("dialog-x");
+    h.frames(2);
+    assert!(h.app.dialog.is_none(), "the X closes Settings");
+}
+
+/// Choosing a hosted endpoint asks first (the page images and names leave the computer); Cancel changes nothing,
+/// confirming switches the provider, remembers the old values and points Ollama Cloud at the relay.
+#[test]
+fn parity_settings_provider_select_confirms_a_cloud_endpoint() {
+    let mut h = H::new("m1");
+    h.sess().settings.set("ocrUrl", serde_json::json!("http://localhost:9000"));
+    h.sess().settings.set("model", serde_json::json!("qwen"));
+    h.act("settings");
+    h.frames(2);
+    h.act("st-provider");
+    h.frames(2);
+    h.act("st-provider-ollama-cloud");
+    h.frames(3);
+    assert!(matches!(h.app.dialog, Some(dialog::Dialog::Confirm { .. })), "asks before sending pages to the internet");
+    h.act("dialog-cancel");
+    h.frames(3);
+    assert!(matches!(h.app.dialog, Some(dialog::Dialog::Settings { .. })));
+    assert_eq!(h.s().settings.get("provider").and_then(|v| v.as_str()).unwrap_or("local"), "local");
+    h.act("st-provider");
+    h.frames(2);
+    h.act("st-provider-ollama-cloud");
+    h.frames(3);
+    h.act("dialog-ok");
+    h.frames(3);
+    assert_eq!(h.s().settings.get("provider").and_then(|v| v.as_str()), Some("ollama-cloud"));
+    assert_eq!(h.s().settings.get("ocrUrl").and_then(|v| v.as_str()), Some("http://localhost:8189/u/ollama.com"));
+    let prof = h.s().settings.get("profiles").and_then(|p| p.get("local")).cloned().unwrap();
+    assert_eq!(prof.get("url").and_then(|v| v.as_str()), Some("http://localhost:9000"));
+    assert_eq!(prof.get("model").and_then(|v| v.as_str()), Some("qwen"));
+    // and back: the local values return
+    h.act("st-provider");
+    h.frames(2);
+    h.act("st-provider-local");
+    h.frames(3);
+    assert_eq!(h.s().settings.get("ocrUrl").and_then(|v| v.as_str()), Some("http://localhost:9000"));
+    assert_eq!(h.s().settings.get("model").and_then(|v| v.as_str()), Some("qwen"));
+}
+
+/// A mouse press hands focus over without scrolling (Chrome scrolls a focus made by key or script only).
+#[test]
+fn parity_focus_given_by_a_mouse_press_does_not_scroll() {
+    let mut moved = vec![];
+    for pointer in [false, true] {
+        let mut h = H::new("m1");
+        h.size = (390.0, 500.0);
+        h.with_picture();
+        h.frames(10);
+        // a control of the page that starts below the fold of this short window
+        let target = h.app.controls().iter().filter(|c| !c.disabled && c.size.0 > 0 && c.at.1 > 500).map(|c| c.id.clone()).next();
+        let target = target.expect("a control below the fold");
+        let before = h.ctl(&target).map(|c| c.at.1).unwrap();
+        if pointer {
+            h.app.queue.lock().unwrap().push("kbd:0".into());
+        }
+        h.focus(&target);
+        h.frames(4);
+        let after = h.ctl(&target).map(|c| c.at.1).unwrap();
+        moved.push(after != before);
+    }
+    assert_eq!(moved, vec![true, false], "focus by key or script scrolls to the control, by a mouse press it does not");
+}

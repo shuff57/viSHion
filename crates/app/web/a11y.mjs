@@ -220,8 +220,8 @@ try {
     expect(await page.evaluate(() => document.querySelector('#controls [role=dialog]')?.getAttribute('aria-modal')) === 'true', 'aria-modal=true');
     expect(!/button "Done, next student"/.test(dlg), 'the screen behind the dialog is not in the tree');
     await a.axe('settings dialog', { modal: true });
-    expect(/textbox "Server address"/.test(dlg) && /textbox "Model name"/.test(dlg) && /textbox "Course words/.test(dlg), 'Settings reaches the model and the course words');
-    expect(/group "Combined file":[\s\S]*button "Word \(\.docx\)"/.test(dlg) && /group "Between pages"/.test(dlg) && /group "Text to export"/.test(dlg), 'Settings reaches the export options as pressed-state groups');
+    expect(/textbox "Server address"/.test(dlg) && /button "Model, /.test(dlg) && /button "Where the model runs, /.test(dlg) && /textbox "Course words/.test(dlg), 'Settings reaches the model and the course words');
+    expect(/button "Combined file, Markdown/.test(dlg) && /button "Between pages, /.test(dlg) && /button "Text to export, Corrected"/.test(dlg) && /group "Theme":[\s\S]*button "System"/.test(dlg), 'Settings reaches the export options as selects and the theme as a pressed-state group');
     expect(/heading "Model" \[level=3\]/.test(dlg), 'Settings sections are h3 under the dialog h2');
     const behind = await page.evaluate(() => [...document.querySelectorAll('#controls > [data-region], #controls > [role=main]')]
       .filter(e => e.getAttribute('role') !== 'dialog').map(e => e.hasAttribute('inert') && e.getAttribute('aria-hidden') === 'true'));

@@ -42,11 +42,11 @@
      spaces lines without this room (`web::measure` takes it off), so the layout is the JS app's. */
   #controls p.tx:has(.w) { padding-bottom: 9px; padding-bottom: max(1px, calc(9px - (1lh - 1.35em) / 2)); }
   #controls p.tx.margin { font: 16px/1.5 "Instrument Sans", system-ui, sans-serif; color: var(--muted, #5A6478); }
-  #controls p.tx.plain { white-space: pre-wrap; overflow-wrap: anywhere; padding: 0; font: 13px/1.65 "Hack", ui-monospace, Consolas, monospace; cursor: auto; }
+  #controls p.tx.plain { white-space: pre-wrap; overflow-wrap: anywhere; padding: 0; font: 13px/1.65 ui-monospace, "SF Mono", Menlo, Consolas, monospace; cursor: auto; }
   #controls p.tx[data-reading] { text-decoration: underline 3px var(--accent, #2F5BEA); text-underline-offset: 7px; text-decoration-skip-ink: none; }
   #controls p.tx .b { font-weight: 600; }
   #controls p.tx .i { font-style: italic; }
-  #controls p.tx .c { font: 0.85em "Hack", ui-monospace, Consolas, monospace; background: var(--sunken, #F3F5F8); border-radius: 3px; padding: 0 2px; }
+  #controls p.tx .c { font: 0.85em ui-monospace, "SF Mono", Menlo, Consolas, monospace; background: var(--sunken, #F3F5F8); border-radius: 3px; padding: 0 2px; }
   #controls p.tx .lead { color: var(--ink, #1B2230); font-weight: 600; }
   #controls p.tx del { color: var(--muted, #5A6478); }
   #controls p.tx.display { text-align: center; }
@@ -60,14 +60,14 @@
      MathML is for the eye: a selection reads its symbols one per line) */
   #controls p.tx .tx-math math { user-select: none; }
   #controls p.tx .tx-hit { position: absolute; left: 0; top: 0; bottom: 0; right: 0; overflow: hidden; white-space: nowrap; color: transparent; forced-color-adjust: none;
-    font: 10px/1.2 "Hack", ui-monospace, Consolas, monospace; user-select: text; pointer-events: none; }
+    font: 10px/1.2 ui-monospace, "SF Mono", Menlo, Consolas, monospace; user-select: text; pointer-events: none; }
   /* the end of a line: a break in the text a selection gives, no height */
   #controls p.tx .tx-nl, #controls .tx-clip > .tx-nl { display: block; height: 0; overflow: hidden; white-space: pre; }
   #controls p.tx math { font-family: "STIX Two Math", "Cambria Math", math; }
   /* the TeX source stands in for a formula until the typesetter arrives (about a quarter of a second): quiet, not
      the red of a formula that failed */
-  #controls p.tx .tx-math.src { font: 0.85em "Hack", ui-monospace, Consolas, monospace; color: var(--muted, #5A6478); }
-  #controls p.tx .katex-error { font: 0.85em "Hack", ui-monospace, Consolas, monospace; color: var(--bad, #B3261E); }
+  #controls p.tx .tx-math.src { font: 0.85em ui-monospace, "SF Mono", Menlo, Consolas, monospace; color: var(--muted, #5A6478); }
+  #controls p.tx .katex-error { font: 0.85em ui-monospace, "SF Mono", Menlo, Consolas, monospace; color: var(--bad, #B3261E); }
   /* the rest of the transcript pane is text too (css/components.css `.who-head`, `.legend`, `.tx-foot`, base `.pill`,
      `.stream`): placed by the screen, laid out and measured by the page */
   #controls .txc { position: absolute; margin: 0; padding: 0; pointer-events: auto; cursor: text; user-select: text; touch-action: pinch-zoom;

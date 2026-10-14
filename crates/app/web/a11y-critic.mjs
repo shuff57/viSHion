@@ -268,7 +268,7 @@ try {
     await page.keyboard.press('Enter'); await pump(8);
     const seen = [];
     for (let i = 0; i < 40; i++) { await page.keyboard.press('Tab'); await page.waitForTimeout(120); await pump(2); seen.push(await page.evaluate(() => document.activeElement?.dataset?.id || document.activeElement?.tagName)); }
-    const want = ['st-jmode-auto', 'st-words', 'st-guess', 'st-remember', 'st-fmt-docx', 'st-sep-label', 'st-txt-corrected', 'st-orig'];
+    const want = ['st-jmode', 'st-words', 'st-guess', 'st-remember', 'st-fmt', 'st-sep', 'st-txt', 'st-orig'];
     const miss = want.filter((w) => !seen.includes(w));
     expect(miss.length === 0, 'Settings: Tab reaches every control, below the fold included' + (miss.length ? '; never focused: ' + miss + '; sequence: ' + seen.slice(0, 20) : ''));
     expect(seen.filter((x) => x === 'BODY').length === 0, 'Settings: focus never falls to <body> while Tab walks the dialog (' + seen.filter((x) => x === 'BODY').length + ' times)');
@@ -353,7 +353,11 @@ try {
     const { ctx, page, pump } = await open({ width: 1280, height: 800 });
     await page.evaluate(() => document.querySelector('#controls [data-id="settings"]').focus()); await page.keyboard.press('Enter'); await pump(8);
     const bad = [];
-    for (const [id, names] of [['st-txt-raw', /original/i], ['st-sep-label', /page/i], ['st-fmt-md', /markdown/i], ['theme-auto', /device|match/i]]) {
+    for (const [sel, id, names] of [['st-txt', 'st-txt-raw', /original/i], ['st-sep', 'st-sep-label', /page/i], ['st-fmt', 'st-fmt-md', /markdown/i], [null, 'theme-auto', /system/i]]) {
+      if (sel) { // a select: open its list, then pick
+        await page.evaluate((i) => document.querySelector(`#controls [data-id="${i}"]`).focus(), sel);
+        await page.keyboard.press('Space'); await pump(5);
+      }
       await page.evaluate((i) => document.querySelector(`#controls [data-id="${i}"]`).focus(), id);
       await page.evaluate(() => { document.getElementById('announce').textContent = ''; });
       await page.keyboard.press('Space'); await pump(5);
