@@ -12,8 +12,9 @@ The current JS app (`index.html`, `js/`) stays the oracle until the rewrite pass
 | Inline markdown | `pulldown-cmark` (inline only) feeding egui | The JS renderer only uses `renderInline`; no HTML needed (S5, S7). |
 | Accessibility on web | Hidden DOM twin of every control and the transcript | egui web has no accessibility tree in 0.28; the twin costs one call per widget (S7 mirror, S8 `ctl()`). |
 | Storage | Rust data layer behind a trait: IndexedDB / File System Access on web, `std::fs` on desktop | Must stay byte-compatible with existing projects (S3 rules below). |
-| Streaming | Rust SSE client (`reqwest`) | Matches `ocr.js` in 32 of 33 scenarios, one fix known (S4). |
+| Streaming | Rust SSE parser (pure) over `ureq` natively and `fetch` on the web | Matches `ocr.js` in 32 of 33 scenarios, one fix known (S4); the fix (flush the tail, ignore empty `data:`) is in. Built in phase 3. |
 | Imaging | Pure Rust `imaging-core`, no wasm-specific code | Bit-exact vs JS on every fixture (S1). Resampling stays platform canvas on web, `image` crate on desktop. |
+| Renderer | **glow** (OpenGL natively, WebGL2 on the web) by default; **wgpu** is an opt-in cargo feature | wgpu renders the same natively (screenshots match; `egui-wgpu` is vendored with the font-gamma knob). On the web eframe 0.28 uses wgpu only with glow off, and that build is WebGPU-only with no WebGL fallback, so web stays on glow. Build: `--no-default-features --features wgpu`, web `node build.mjs --wgpu`. |
 | Hosting | Static assets on Cloudflare Workers, as today | S2: needs `'wasm-unsafe-eval'` + one bootstrap hash in `script-src`. |
 
 **Hard consequence:** the web build cannot run from `file://` (wasm fetch needs http). The desktop build
@@ -70,7 +71,7 @@ Each phase ends with a runnable build on both targets and a parity check against
 | 0 | Workspace + CI | Cargo workspace, native + wasm builds, `wrangler dev` serving the web build with prod CSP | Both targets boot an empty app; CI runs `cargo test` and the CSP check. |
 | 1 | `core` data + words | model, words, judge, groups, render pipeline, export | Ported JS tests pass; S5 corpus gives identical units/pieces; export bytes match JS on fixtures. |
 | 2 | `store` | idb + fsa + native fs, legacy import | S3 `run.mjs` oracle test passes on all modes; old projects open unchanged in both directions. |
-| 3 | `net` + queue | streaming client, run/stop/retry/resume | S4 scenario table passes; demo mode works end to end. |
+| 3 | `net` + queue | streaming client, run/stop/retry/resume | S4 scenario table passes; demo mode works end to end. **Done** for the client: mock-server tests cover streaming, partial on a dropped stream, 503, dead port and Stop; demo mode unchanged. Not done: `/slots` progress polling, the judge-model Guess outside demo mode, and a run of the web transport against a real server. |
 | 4 | Review screen | Main screen with math, tray, strip, hidden twin | S8 test suite passes; NVDA smoke test; 44px targets. |
 | 5 | Home, inbox, add | remaining screens, drag-reorder, rotate/replace page | Feature list in `README.md` screens table complete. |
 | 6 | Dialogs | settings, assignment settings, export, topics | Same fields as today; export parity. |

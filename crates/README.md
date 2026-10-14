@@ -6,11 +6,17 @@ Rust rewrite workspace (plan: `docs/RUST-REWRITE-PLAN.md`). The legacy JS app at
 |---|---|---|
 | `core/` | `vishion-core` | Pure model and logic. No UI, no I/O. Must never depend on egui, web-sys or tokio (CI checks). |
 | `store/` | `vishion-store` | `Store` trait (async get/put/list/delete). Native `FsStore` now; `idb` and `fsa` for web later. |
-| `net/` | `vishion-net` | OCR client edge. Phase 0: endpoint type only; reqwest streaming client lands in Phase 1. |
+| `net/` | `vishion-net` | OCR client (`O.transcribe`): pure `sse` parser, `ureq` transport natively, `fetch` on the web, one `async fn transcribe`, `Cancel` for Stop. |
 | `ui/` | `vishion-ui` | The review screen (Phase 4): `state` flows over core, `transcript`, `flow` (inline line layout), `dialog`, `math` (latex-rust isolation), `theme` (tokens + bundled fonts), `ctl()` control layer, `twin` + web a11y twin (`web.rs`), `host` command/event seam. |
 | `app/` | `vishion-app` | Thin entry points and the storage wiring: native `vishion` bin (folder via `FsStore` on a worker thread), wasm `start()` (`IdbStore`), the `Backend` that answers the UI's commands, a `demo` assignment, and `web/` (index.html, build, serve, CSP check, native/web parity check). |
 
 egui/eframe are pinned to 0.28 (plan rule 6).
+
+## Renderer
+
+glow (OpenGL, WebGL2 on the web) is the default. `cargo run -p vishion-app --no-default-features --features wgpu`
+renders natively with wgpu (Vulkan, DX12, Metal). On the web wgpu is WebGPU only, no WebGL fallback, so use
+`node build.mjs --wgpu` only where WebGPU is available.
 
 ## Commands
 
@@ -41,7 +47,7 @@ cargo run -p vishion-app --bin vishion --release
 # ?view=inbox (assignment overview), ?page=<page id>, ?tray=0 (word panel closed)
 cd crates/app/web
 npm ci
-node build.mjs            # add --debug for a debug wasm, --no-opt to skip wasm-opt
+node build.mjs            # add --debug for a debug wasm, --no-opt to skip wasm-opt, --wgpu for WebGPU instead of WebGL2
 #   wasm-opt -Oz runs from the `wasm-opt` npm package; the STIX math font, the CJK fallback face and the
 #   Twemoji colour emoji face are copied next to the wasm and fetched the first time a page needs them
 #   (the wasm is about 4.1 MB, 1.8 MB gzipped, without them)
