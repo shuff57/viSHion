@@ -111,12 +111,10 @@ If staffing is one person, do 0, 1, 4, then 2, 3, 5, 6, 7.
    legacy session file).
 3. **Desktop distribution**: plain eframe binary per platform; no installer or signing for v1.
 4. **`file://`**: dropped. The wasm build needs a server; the README says so.
-
-## Open decisions
-
-1. Keep `llama.cpp` as the only backend, or abstract the OCR provider in `net` now?
-2. Phone layout (`Phone.dc.html`): egui responsive layout, or leave for the web DOM later?
+5. **OCR provider**: abstract it in `net` now (a trait over "read a page" and "complete a prompt"), with the
+   OpenAI-compatible client as the first implementation.
+6. **Phone layout**: build it in egui now, following `design/Phone.dc.html`, for Home, inbox, review and Add.
 
 ## Not in scope for v1
 
-Phone layout, new model features, server-side storage, multi-user sync.
+New model features, server-side storage, multi-user sync.
