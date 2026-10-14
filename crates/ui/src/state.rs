@@ -1029,6 +1029,12 @@ impl Session {
         self.sync_tray();
     }
 
+    /// `S.updateMeta({ key })`: one field of the assignment's `project.json`.
+    pub fn set_meta(&mut self, key: &str, v: Value) {
+        self.a.meta.set(key, v);
+        self.dirty.meta = true;
+    }
+
     /// Pages the host created for a student (picture already stored). They are saved like any edit.
     pub fn pages_added(&mut self, list: Vec<Page>) {
         let ids: Vec<String> = list.iter().map(|p| p.id().to_string()).collect();

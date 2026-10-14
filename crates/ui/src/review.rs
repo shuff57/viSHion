@@ -98,6 +98,7 @@ pub(crate) enum Act {
     Transcribe(String, bool),
     Guess(String),
     OpenSettings,
+    OpenAssignment,
     CloseDialog,
     Inbox,
     Home,
@@ -744,6 +745,7 @@ fn apply(
             }
         }
         Act::OpenSettings => *dialog = Some(Dialog::settings()),
+        Act::OpenAssignment => *dialog = Some(Dialog::assignment()),
         Act::CloseDialog => {
             if let Some(d) = dialog.as_ref() {
                 dialog::commit(s, d);
@@ -830,6 +832,11 @@ fn apply(
                     if matches!(key, "model" | "ocrUrl" | "apiKey") {
                         dialog::remember(s);
                     }
+                    ctl.say(said);
+                    return;
+                }
+                dialog::Out::Meta(key, v, said) => {
+                    s.set_meta(key, v);
                     ctl.say(said);
                     return;
                 }
@@ -1246,6 +1253,10 @@ fn inbox_body(ui: &mut Ui, cx: &mut Cx, s: &Session) {
     ui.add_space(8.0);
     let r = css_text(ui, &sub, theme::sans(14.0), t.muted, 14.0 * 1.4, w, false);
     cx.ctl.text("inbox-sub", &sub, TEXT, r);
+    ui.add_space(12.0);
+    if widgets::button(cx.ctl, ui, t, C::new("assignment-settings", "Assignment settings", TEXT), "Assignment settings", Look::Outline, 0.0) {
+        cx.acts.push(Act::OpenAssignment);
+    }
 
     if groups.is_empty() {
         ui.add_space(28.0);
@@ -1409,7 +1420,7 @@ fn inbox_body(ui: &mut Ui, cx: &mut Cx, s: &Session) {
     ui.add_space(12.0);
     css_text(
         ui,
-        "Adding pages in bulk, assignment settings and exporting arrive with phase 5 and 6.",
+        "Adding pages in bulk and exporting arrive with phase 5 and 6.",
         theme::sans(13.0),
         t.muted,
         13.0 * 1.4,

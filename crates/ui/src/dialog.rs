@@ -39,6 +39,11 @@ pub enum Dialog {
         /// The list of students under the select is shown (the `<select>` popup).
         open: bool,
     },
+    /// `U.openAssignmentSettings`: the name, subject and instructions of the open assignment.
+    Assignment {
+        drafts: std::collections::BTreeMap<&'static str, String>,
+        open: Option<&'static str>,
+    },
     Confirm {
         title: String,
         text: String,
@@ -51,6 +56,10 @@ pub enum Dialog {
 impl Dialog {
     pub fn settings() -> Dialog {
         Dialog::Settings { drafts: Default::default(), open: None, custom: false }
+    }
+
+    pub fn assignment() -> Dialog {
+        Dialog::Assignment { drafts: Default::default(), open: None }
     }
 
     pub fn change_student() -> Dialog {
@@ -70,6 +79,7 @@ impl Dialog {
                 Some("dark") => "theme-dark".into(),
                 _ => "theme-auto".into(),
             },
+            Dialog::Assignment { .. } => "as-name".into(),
             Dialog::Confirm { .. } => "dialog-cancel".into(),
             Dialog::ChangeStudent { .. } => {
                 // js: the first thing in the body, the select
@@ -92,10 +102,22 @@ pub enum Out {
     AskClearFixes,
     /// The provider select changed (a cloud one is confirmed first).
     Provider(String),
+    /// An assignment field changed in the open dialog (it stays open): key, value, what is said.
+    Meta(&'static str, serde_json::Value, String),
 }
 
 /// Save what was typed in the settings boxes (the JS inputs save on `change`).
 pub fn commit(s: &mut Session, d: &Dialog) {
+    if let Dialog::Assignment { drafts, .. } = d {
+        // the name keeps its old value when emptied (`S.updateMeta` is skipped), the prompt is stored as typed
+        if let Some(n) = drafts.get("as-name").map(|v| v.trim().to_string()).filter(|v| !v.is_empty() && v != s.a.meta.name()) {
+            s.set_meta("name", serde_json::json!(n));
+        }
+        if let Some(p) = drafts.get("as-prompt").filter(|p| p.as_str() != s.a.meta.prompt()) {
+            s.set_meta("prompt", serde_json::json!(p));
+        }
+        return;
+    }
     let Dialog::Settings { drafts, .. } = d else { return };
     let mut changed = false;
     for (id, v) in drafts {
@@ -152,8 +174,8 @@ pub fn show(ctx: &egui::Context, ctl: &mut Ctl, t: &Tokens, s: &Session, d: &mut
         ui.painter().rect_filled(r, 0.0, if t.dark { egui::Color32::from_black_alpha(158) } else { egui::Color32::from_rgba_unmultiplied(20, 27, 45, 128) });
     });
     // `.modal.narrow { width: 440px }` for Change student; the others keep their width
-    let narrow = matches!(d, Dialog::ChangeStudent { .. } | Dialog::Settings { .. });
-    let width = (screen.width() - 32.0).clamp(280.0, if matches!(d, Dialog::Settings { .. }) { 600.0 } else if narrow { 440.0 } else { 480.0 });
+    let narrow = matches!(d, Dialog::ChangeStudent { .. } | Dialog::Settings { .. } | Dialog::Assignment { .. });
+    let width = (screen.width() - 32.0).clamp(280.0, if matches!(d, Dialog::Settings { .. } | Dialog::Assignment { .. }) { 600.0 } else if narrow { 440.0 } else { 480.0 });
     let margin = if narrow { 0.0 } else { 20.0 };
     // `.backdrop { align-items: flex-start; padding: 48px 16px }`
     let anchor = if narrow { (Align2::CENTER_TOP, vec2(0.0, 48.0)) } else { (Align2::CENTER_CENTER, vec2(0.0, 0.0)) };
@@ -171,6 +193,7 @@ pub fn show(ctx: &egui::Context, ctl: &mut Ctl, t: &Tokens, s: &Session, d: &mut
                 ui.spacing_mut().item_spacing = vec2(8.0, 10.0);
                 match d {
                     Dialog::Settings { drafts, open, custom } => out = settings(ctl, ui, t, s, drafts, open, custom),
+                    Dialog::Assignment { drafts, open } => out = assignment(ctl, ui, t, s, drafts, open),
                     Dialog::ChangeStudent { pick, new_student, name, all, error, open } => {
                         out = change_student(ctl, ui, t, s, pick, new_student, name, all, error, open)
                     }
@@ -465,6 +488,90 @@ fn section_end(ui: &mut Ui, t: &Tokens, w: f32) {
     let x0 = ui.min_rect().left();
     ui.painter().hline(x0..=x0 + w, y + 0.5, Stroke::new(1.0, t.soft));
     ui.add_space(21.0);
+}
+
+/// A `<textarea rows=N>`.
+fn text_area(ctl: &mut Ctl, ui: &mut Ui, id: &'static str, name: &str, hint: &str, cur: String, drafts: &mut Drafts, rows: usize, w: f32) {
+    let buf = drafts.entry(id).or_insert(cur);
+    let h = rows as f32 * 22.0 + 26.0;
+    let (slot, _) = ui.allocate_exact_size(vec2(w, h), Sense::hover());
+    let edit = egui::TextEdit::multiline(buf).hint_text(hint).font(theme::sans(14.0)).margin(vec2(12.0, 13.0)).desired_width(slot.width() - 24.0).desired_rows(rows);
+    let mut r = ui.put(slot, edit);
+    r.rect = slot;
+    if let Some(v) = ctl.reg_text(ui, &r, C::new(id, name, DIALOG), buf) {
+        *buf = v;
+    }
+}
+
+/// `U.openAssignmentSettings`.
+fn assignment(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, s: &Session, drafts: &mut Drafts, open: &mut Option<&'static str>) -> Option<Out> {
+    use serde_json::json;
+    let mut out: Option<Out> = None;
+    ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
+    let w = ui.available_width();
+    if modal_head(ctl, ui, t, w, "Assignment settings") {
+        out = Some(Out::Close);
+    }
+    let max_body = (ui.ctx().screen_rect().height() - 96.0 - 69.0 - 73.0).max(120.0);
+    let from = ctl.node_count();
+    let mut clip = ui.clip_rect();
+    egui::ScrollArea::vertical().max_height(max_body).max_width(w).auto_shrink([false, true]).show(ui, |ui| {
+        clip = ui.clip_rect();
+        ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
+        egui::Frame::none().inner_margin(Margin::symmetric(28.0, 24.0)).show(ui, |ui| {
+            ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
+            let iw = w - 56.0;
+            ui.set_width(iw);
+            field_label(ctl, ui, t, iw, "as-name-label", "Assignment name");
+            text_box(ctl, ui, "as-name", "Assignment name", "", s.a.meta.name().to_string(), drafts, false, iw);
+            ui.add_space(14.0);
+
+            let topics: Vec<(String, String)> = s
+                .settings
+                .get("topics")
+                .and_then(|v| v.as_object())
+                .map(|o| o.keys().map(|k| (k.clone(), k.clone())).collect())
+                .unwrap_or_default();
+            let cur = s.a.meta.topic().to_string();
+            if let Some(v) = select_field(ctl, ui, t, iw, open, "as-topic", "as-topic-label", "Subject", &topics, &cur, "as-topic-") {
+                out = Some(Out::Meta("topic", json!(v), format!("Subject: {v}.")));
+            }
+            ui.add_space(6.0);
+            hint_p(ctl, ui, t, iw, "as-topic-hint", "The subject\u{2019}s words are added to the instructions, and used to suggest corrections after a page is read.");
+            ui.add_space(14.0);
+
+            field_label(ctl, ui, t, iw, "as-prompt-label", "Instructions for the model");
+            text_area(ctl, ui, "as-prompt", "Instructions for the model", "Leave this empty to use the standard instructions.", s.a.meta.prompt().to_string(), drafts, 9, iw);
+            ui.add_space(6.0);
+            let typed = drafts.get("as-prompt").cloned().unwrap_or_else(|| s.a.meta.prompt().to_string());
+            let state = if typed.trim().is_empty() { "Using the standard instructions." } else { "Using your instructions." };
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing = vec2(12.0, 8.0);
+                let g = ui.painter().layout_no_wrap(state.to_string(), theme::sans(13.0), t.muted);
+                let (r, _) = ui.allocate_exact_size(vec2(g.size().x, TARGET), Sense::hover());
+                ui.painter().galley(widgets::centered(r, g.size()), g, t.muted);
+                ctl.status("as-prompt-state", state, DIALOG, r);
+                if widgets::button(ctl, ui, t, C::new("as-reset", "Reset to standard", DIALOG), "Reset to standard", Look::Ghost, 0.0) {
+                    drafts.insert("as-prompt", String::new());
+                    out = Some(Out::Meta("prompt", json!(""), "Using the standard instructions.".into()));
+                }
+            });
+            ctl.flush_scroll(ui, &[DIALOG]);
+        });
+    });
+    ctl.clip_since(from, clip);
+    let y = ui.cursor().top();
+    ui.painter().hline(ui.max_rect().x_range(), y + 0.5, Stroke::new(1.0, t.line));
+    ui.add_space(15.0);
+    let dw = ui.painter().layout_no_wrap("Done".to_string(), theme::sans_semi(14.0), t.ink).size().x + widgets::BTN_PAD;
+    ui.horizontal(|ui| {
+        ui.add_space((w - 28.0 - dw - 28.0).max(0.0) + 28.0);
+        if widgets::button(ctl, ui, t, C::new("dialog-close", "Done", DIALOG), "Done", Look::Primary, 0.0) {
+            out = Some(Out::Close);
+        }
+    });
+    ui.add_space(14.0);
+    out
 }
 
 fn settings(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, s: &Session, drafts: &mut Drafts, open: &mut Option<&'static str>, custom: &mut bool) -> Option<Out> {

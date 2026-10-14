@@ -340,4 +340,32 @@ mod tests {
         assert!(files.iter().any(|(k, _)| k.ends_with("/project.json")), "{:?}", files.iter().map(|f| &f.0).collect::<Vec<_>>());
         assert!(files.iter().all(|(k, _)| !k.contains("/exports/")));
     }
+
+    /// Assignment settings from the inbox: name and instructions save when the dialog closes, the subject
+    /// at once, and Reset to standard empties the instructions.
+    #[test]
+    fn assignment_settings_edit_name_subject_and_instructions() {
+        let mut r = Rig::demo();
+        r.act("crumb");
+        r.act("assignment-settings");
+        r.app.twin_text("as-name", "  Unit 9 quiz ");
+        r.app.twin_text("as-prompt", "Read carefully.");
+        r.frames(2);
+        // the subject list: pick the first option that is not the current subject
+        r.act("as-topic");
+        let ids: Vec<String> = r.app.controls().iter().filter(|c| c.id.starts_with("as-topic-")).map(|c| c.id.clone()).collect();
+        assert!(ids.len() > 1, "{ids:?}");
+        let cur = r.app.session().unwrap().a.meta.topic().to_string();
+        let other = ids.iter().find(|i| **i != format!("as-topic-{cur}")).unwrap().clone();
+        r.act(&other);
+        assert_eq!(format!("as-topic-{}", r.app.session().unwrap().a.meta.topic()), other);
+        r.act("dialog-close");
+        let m = &r.app.session().unwrap().a.meta;
+        assert_eq!((m.name(), m.prompt()), ("Unit 9 quiz", "Read carefully."));
+        // reset
+        r.act("assignment-settings");
+        r.act("as-reset");
+        r.act("dialog-close");
+        assert_eq!(r.app.session().unwrap().a.meta.prompt(), "");
+    }
 }

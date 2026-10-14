@@ -97,6 +97,9 @@ whenever the inline bootstrap script in `crates/app/web/index.html` changes, so 
 - tray: choices, typed fix, step, close (Escape inside it closes it and returns focus to a word).
 - dialogs: Change student, confirmations, Settings (theme). Modal: only its controls are in the twin.
 - inbox: the assignment overview the crumb and the last student's Done return to (tabs, run bar, rows).
+- assignment settings (Phase 6): the inbox's "Assignment settings" opens a dialog for the name, subject (select over
+  `settings.topics`) and instructions (multi-line, "Reset to standard"); name and instructions are saved when it
+  closes, the subject at once (`dialog::Dialog::Assignment`, `Out::Meta`).
 - home (`ui::home`, Phase 5): the wordmark on the inbox goes there, and an empty store starts there. Lists the
   assignments (`Cmd::ListProjects` -> `Event::Projects`), opens one, creates, renames, duplicates and deletes
   (inline fields and an inline confirm instead of dialogs, so it works with no session). Import zip (`core::export::read_zip`, stored and deflated
