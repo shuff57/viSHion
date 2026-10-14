@@ -38,6 +38,8 @@ mod native;
 mod web;
 #[cfg(test)]
 mod app_tests;
+#[cfg(test)]
+mod a11y_critic_tests;
 
 pub use host::{Cmd, Dispatch, Event, Inbox, ReadOutcome};
 pub use twin::{Node, Part, Reg};
