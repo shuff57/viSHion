@@ -335,7 +335,17 @@ impl Backend {
             }
         };
         match vishion_net::transcribe(req, &self.cancel, &mut on).await {
-            Ok(d) => ReadOutcome::Done { raw: vishion_core::clean::clean(&d.text), tokens: d.tokens, ms: d.ms, guesses: None },
+            Ok(d) => {
+                let raw = vishion_core::clean::clean(&d.text);
+                // `autoGuess`: when a page finishes with unreadable words, look again (a failure leaves none)
+                let (numbered, n) = vishion_core::guess::numbered(&raw);
+                let guesses = if conn.guess && n > 0 {
+                    self.guess_live(slug, id, &numbered, n, conn, &conn.examples).await.ok()
+                } else {
+                    None
+                };
+                ReadOutcome::Done { raw, tokens: d.tokens, ms: d.ms, guesses }
+            }
             Err(Error::Aborted) => ReadOutcome::Stopped,
             Err(Error::TimedOut) => ReadOutcome::Failed(format!(
                 "Timed out after {} seconds. Retry, or raise the timeout in Settings.",

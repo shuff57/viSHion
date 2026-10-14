@@ -374,6 +374,54 @@ mod tests {
         assert_eq!(g["i:0"][1]["percent"], 25);
     }
 
+    /// `autoGuess`: a page read from the server that has an unreadable word is asked again for likely words.
+    #[test]
+    fn a_page_with_unreadable_words_gets_guesses_after_reading() {
+        use std::io::{Read, Write};
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", l.local_addr().unwrap());
+        std::thread::spawn(move || {
+            for conn in l.incoming() {
+                let Ok(mut s) = conn else { return };
+                std::thread::spawn(move || {
+                    s.set_read_timeout(Some(std::time::Duration::from_millis(300))).unwrap();
+                    let mut b = [0u8; 65536];
+                    let mut req = Vec::new();
+                    while let Ok(n) = s.read(&mut b) {
+                        if n == 0 {
+                            break;
+                        }
+                        req.extend_from_slice(&b[..n]);
+                    }
+                    let req = String::from_utf8_lossy(&req).to_string();
+                    let reply = if req.starts_with("GET ") {
+                        "HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Length: 0\r\n\r\n".to_string()
+                    } else if req.contains("\"stream\":true") {
+                        "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\ndata: {\"choices\":[{\"delta\":{\"content\":\"The [illegible] root\"}}],\"usage\":{\"completion_tokens\":3}}\n\ndata: [DONE]\n\n".to_string()
+                    } else {
+                        let c = r#"[{"n":1,"options":[{"text":"discriminant","percent":70}]}]"#;
+                        let j = serde_json::json!({"choices": [{"message": {"content": c}}]}).to_string();
+                        format!("HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{j}", j.len())
+                    };
+                    let _ = s.write_all(reply.as_bytes());
+                });
+            }
+        });
+        let (store, slug) = block_on(seed(1)).unwrap();
+        let be = Backend::new(store, "Saved");
+        let conn = vishion_ui::Conn { url: url.clone(), timeout_secs: 5, guess: true, ..Default::default() };
+        let Event::Many(evs) = block_on(be.handle(Cmd::Transcribe { slug: slug.clone(), ids: vec!["p-maya-1".into()], conn }, 0)) else { panic!() };
+        let g = evs.iter().find_map(|e| match e {
+            Event::Transcribed { outcome: vishion_ui::ReadOutcome::Done { guesses, .. }, .. } => Some(guesses.clone()),
+            _ => None,
+        });
+        assert_eq!(g.flatten().unwrap()["i:0"][0]["text"], "discriminant");
+        // switched off: the page is read and left alone
+        let conn = vishion_ui::Conn { url, timeout_secs: 5, guess: false, ..Default::default() };
+        let Event::Many(evs) = block_on(be.handle(Cmd::Transcribe { slug, ids: vec!["p-maya-1".into()], conn }, 0)) else { panic!() };
+        assert!(evs.iter().any(|e| matches!(e, Event::Transcribed { outcome: vishion_ui::ReadOutcome::Done { guesses: None, .. }, .. })));
+    }
+
     /// The native path: a real folder, written and read back through `FsStore` and the project layer.
     #[test]
     fn folder_store_round_trip_keeps_edits() {

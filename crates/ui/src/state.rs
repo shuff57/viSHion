@@ -1111,6 +1111,8 @@ impl Session {
             timeout_secs: st.get("timeoutSec").and_then(Value::as_u64).filter(|n| *n > 0).unwrap_or(180),
             prompt: vishion_core::words::build_prompt(st, &self.a.meta),
             demo: st.get("demo").and_then(Value::as_bool) == Some(true),
+            guess: st.get("guessIllegible").and_then(Value::as_bool) != Some(false),
+            examples: self.reference_examples(),
         }
     }
 

@@ -14,6 +14,10 @@ pub struct Conn {
     pub timeout_secs: u64,
     pub prompt: String,
     pub demo: bool,
+    /// `settings.guessIllegible` (default on): ask the model for likely words after a page is read.
+    pub guess: bool,
+    /// The teacher's earlier resolutions for the guess prompt (`W.referenceExamples`).
+    pub examples: Vec<String>,
 }
 
 /// UI to host.

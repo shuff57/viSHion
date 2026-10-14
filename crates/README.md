@@ -113,8 +113,8 @@ Flows are `ui::state::Session` over `core::words` (`choose`, `use_all`, which ca
   TrueType in `ui/assets/fonts`; egui's own faces are not linked (`latex-rust` is vendored to keep them out).
 - Math: `ui::math` is the only user of latex-rust; a layout error shows the TeX in red monospace. On the web the
   font is fetched on first use and the TeX shows muted until it arrives.
-- Honest gaps: Straighten (needs the imaging port, phase 5) and Transcribe / Retry (need `net`, phase 3) reach the
-  host and answer with a notice saying so; "Suggest likely words" is still absent.
+- Honest gaps: Straighten (needs the imaging port, phase 5). Transcribe / Retry now go through `net` and
+  "Suggest likely words" asks the model (also automatically after a read, when `guessIllegible` is not off).
 - wasm: about 4.0 MB (1.7 MB gzip) from 7.3 MB (3.2 MB gzip): no egui default fonts (-1.4 MB), math font
   out of the wasm (-0.84 MB), `opt-level=z`, `strip`, `panic=abort`, wasm-opt -Oz.
 
