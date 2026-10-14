@@ -892,6 +892,30 @@ fn apply(
                     run_export(s, ctx, kind, sc, &send, &mut say);
                     return;
                 }
+                dialog::Out::OpenTopics => {
+                    if let Some(d) = dialog.as_ref() {
+                        dialog::commit(s, d);
+                    }
+                    ctl.under = dialog.take().map(|d| (d, "as-edit-topics"));
+                    ctl.want_focus = Some("tp-topic".into());
+                    *dialog = Some(Dialog::topics(s.a.meta.topic()));
+                    return;
+                }
+                dialog::Out::Topic(act) => {
+                    let Some(d) = dialog.as_mut() else { return };
+                    match dialog::topic_act(s, d, act) {
+                        dialog::TopicResult::Said(m) => ctl.say(m),
+                        dialog::TopicResult::Warn(m) => say(m, true),
+                        dialog::TopicResult::Ask(then, opener, ok, text) => {
+                            // stacked on the editor: Cancel comes back to it
+                            ctl.under = dialog.take().map(|d| (d, opener));
+                            ctl.want_focus = Some("dialog-cancel".into());
+                            *dialog = Some(Dialog::Confirm { title: ok.clone(), text, ok, danger: true, then });
+                        }
+                        dialog::TopicResult::Nothing => {}
+                    }
+                    return;
+                }
                 dialog::Out::Meta(key, v, said) => {
                     s.set_meta(key, v);
                     ctl.say(said);
@@ -958,6 +982,31 @@ fn apply(
                         dialog::switch_provider(s, &id);
                         say(format!("Where the model runs: {}.", dialog::provider(&id).1), false);
                         back_to = Some("st-provider");
+                    }
+                    After::RestoreTopics => {
+                        if let Some((Dialog::Topics { cur, drafts, .. }, _)) = ctl.under.as_mut() {
+                            drafts.clear();
+                            *cur = "General".into();
+                        }
+                        let d = vishion_core::model::Settings::defaults();
+                        if let Some(t) = d.get("topics") {
+                            s.settings.set("topics", t.clone());
+                            s.dirty.settings = true;
+                        }
+                        say("Restored the built-in subjects.".into(), false);
+                    }
+                    After::DeleteTopic(name) => {
+                        if let Some((Dialog::Topics { cur, drafts, .. }, _)) = ctl.under.as_mut() {
+                            drafts.clear();
+                            *cur = "General".into();
+                        }
+                        let mut topics = s.settings.get("topics").cloned().unwrap_or_else(|| serde_json::json!({}));
+                        if let Some(o) = topics.as_object_mut() {
+                            o.remove(&name);
+                        }
+                        s.settings.set("topics", topics);
+                        s.dirty.settings = true;
+                        say(format!("Deleted the subject {name}."), false);
                     }
                     After::ExportRun(kind, sc) => run_export(s, ctx, &kind, sc, &send, &mut say),
                     After::RemovePage(id) => s.remove_page(&id),

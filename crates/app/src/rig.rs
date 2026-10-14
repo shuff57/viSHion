@@ -395,4 +395,40 @@ mod tests {
         r.act("ex-cancel");
         assert!(!r.has("ex-all"));
     }
+
+    /// The subjects editor: add a subject with words, delete it (confirmed), restore the built-in set.
+    #[test]
+    fn subjects_editor_adds_edits_deletes_and_restores() {
+        let mut r = Rig::demo();
+        r.act("crumb");
+        r.act("assignment-settings");
+        r.act("as-edit-topics");
+        assert!(r.has("tp-topic") && r.has("tp-terms"));
+        r.act("tp-new-btn");
+        r.app.twin_text("tp-new", "Physics");
+        r.frames(2);
+        r.act("tp-add");
+        r.app.twin_text("tp-terms", "force, mass\nenergy");
+        r.frames(2);
+        r.act("dialog-close");
+        let st = &r.app.session().unwrap().settings;
+        assert_eq!(st.terms("Physics"), vec!["force", "mass", "energy"]);
+        // back on the assignment settings; open it again and delete Physics (it was the one shown)
+        assert!(r.has("as-name"));
+        r.act("as-edit-topics");
+        r.act("tp-topic");
+        r.act("tp-topic-Physics");
+        r.act("tp-delete");
+        assert_eq!(label_of(&r, "dialog-ok"), "Delete subject");
+        r.act("dialog-ok");
+        assert!(r.app.session().unwrap().settings.get("topics").unwrap().get("Physics").is_none());
+        // General stays
+        r.act("tp-delete");
+        assert!(!r.has("dialog-ok"));
+        // restore defaults is confirmed, then the built-in subjects are back
+        r.act("tp-restore");
+        r.act("dialog-ok");
+        let topics = r.app.session().unwrap().settings.get("topics").unwrap().clone();
+        assert!(topics.get("Medical").is_some() && topics.get("General").is_some());
+    }
 }
