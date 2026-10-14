@@ -14,6 +14,7 @@ pub struct Rig {
     pub size: (f32, f32),
     pub be: Rc<Backend>,
     pub slug: String,
+    pub inbox: Inbox,
 }
 
 impl Rig {
@@ -30,14 +31,14 @@ impl Rig {
         let (b2, i2) = (be.clone(), inbox.clone());
         let dispatch: vishion_ui::Dispatch = Box::new(move |c: Cmd| {
             // picture dialogs and font fetches are not part of the rig
-            if matches!(c, Cmd::LoadMathFont | Cmd::LoadFallbackFont | Cmd::LoadEmojiFont | Cmd::ReplaceImage { .. } | Cmd::AddPages { .. } | Cmd::ImportZip) {
+            if matches!(c, Cmd::LoadMathFont | Cmd::LoadFallbackFont | Cmd::LoadEmojiFont | Cmd::ReplaceImage { .. } | Cmd::AddPages { .. } | Cmd::ImportZip | Cmd::StagePictures { .. }) {
                 return;
             }
             i2.push(block_on(b2.handle(c, 1_700_000_000_000)));
         });
         let app = App::new(ctx.clone()).with_host(dispatch, inbox.clone()).theme("light");
         inbox.push(block_on(be.open(None, 1_700_000_000_000)));
-        let mut r = Rig { app, ctx, out: Default::default(), t: 0.0, size: (w, h), be, slug };
+        let mut r = Rig { app, ctx, out: Default::default(), t: 0.0, size: (w, h), be, slug, inbox: inbox.clone() };
         r.frames(8);
         r
     }
@@ -430,5 +431,51 @@ mod tests {
         r.act("dialog-ok");
         let topics = r.app.session().unwrap().settings.get("topics").unwrap().clone();
         assert!(topics.get("Medical").is_some() && topics.get("General").is_some());
+    }
+
+    fn png(w: u32, h: u32) -> Vec<u8> {
+        let mut out = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(w, h, image::Rgb([240, 240, 240])))
+            .write_to(&mut out, image::ImageFormat::Png)
+            .unwrap();
+        out.into_inner()
+    }
+
+    /// The Add screen: staged pictures with names, a skipped file, a chosen name, then Transcribe adds the
+    /// pages and starts the run.
+    #[test]
+    fn add_screen_stages_names_skips_and_commits() {
+        use crate::backend::Picked;
+        let mut r = Rig::demo();
+        r.act("crumb");
+        let before = r.app.session().unwrap().a.pages.len();
+        r.act("add-pages");
+        assert!(r.has("add-choose") && !r.has("add-commit") || r.has("add-commit"));
+        let conn = vishion_ui::Conn { demo: true, ..Default::default() };
+        let files = vec![
+            Picked { name: "page10.png".into(), bytes: png(300, 400) },
+            Picked { name: "page2.png".into(), bytes: png(300, 400) },
+            Picked { name: "notes.pdf".into(), bytes: vec![1, 2, 3] },
+        ];
+        let inbox = r.inbox.clone();
+        block_on(r.be.stage_files(files, &conn, true, None, &|e| inbox.push(e)));
+        r.frames(4);
+        let a = &r.app.session().unwrap().add;
+        assert_eq!(a.rows.len(), 2);
+        assert_eq!(a.rows[0].item.file_name, "page2.png", "natural order");
+        assert_eq!(a.skipped.len(), 1);
+        assert!(!a.working);
+        // choose a name for the first one by typing it
+        let k = a.rows[0].key;
+        r.act(&format!("staged-change-{k}"));
+        r.app.twin_text(&format!("staged-name-{k}"), "Nia W.");
+        r.frames(2);
+        r.act(&format!("staged-use-{k}"));
+        assert_eq!(r.app.session().unwrap().add.rows[0].item.name.as_deref(), Some("Nia W."));
+        r.act("add-commit");
+        let s = r.app.session().unwrap();
+        assert_eq!(s.a.pages.len(), before + 2);
+        assert_eq!(s.view, vishion_ui::state::View::Inbox);
+        assert!(s.a.pages.values().any(|p| p.student_name() == Some("Nia W.")));
     }
 }

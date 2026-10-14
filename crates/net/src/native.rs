@@ -2,7 +2,7 @@
 //! so Stop and the timeout are noticed within 100 ms even while the model is still reading the page.
 use crate::sse::SseParser;
 use crate::slots;
-use crate::{complete_body, content_of, body, http_error, tokens, unreachable_message, verdict_error, Cancel, Done, Error, Progress, Request};
+use crate::{complete_body_with, content_of, body, http_error, tokens, unreachable_message, verdict_error, Cancel, Done, Error, Progress, Request};
 use std::io::Read;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
@@ -89,6 +89,11 @@ fn poll(url: String, stop: Arc<AtomicBool>, tx: mpsc::Sender<Msg>) {
 /// One non-streamed answer (`W.guess`): the model's text. Blocks the calling thread (the host's worker),
 /// for at most `timeout_secs`.
 pub async fn complete(req: Request<'_>) -> Result<String, Error> {
+    complete_opts(req, 0.2, 500).await
+}
+
+/// [`complete`] with the temperature and answer length of the caller.
+pub async fn complete_opts(req: Request<'_>, temperature: f64, max_tokens: u32) -> Result<String, Error> {
     let agent = ureq::AgentBuilder::new()
         .timeout_connect(Duration::from_secs(10))
         .timeout(Duration::from_secs(req.timeout_secs.max(1)))
@@ -97,7 +102,7 @@ pub async fn complete(req: Request<'_>) -> Result<String, Error> {
     if !req.api_key.is_empty() {
         r = r.set("Authorization", &format!("Bearer {}", req.api_key));
     }
-    match r.send_string(&complete_body(req.model, req.image, req.prompt)) {
+    match r.send_string(&complete_body_with(req.model, req.image, req.prompt, temperature, max_tokens)) {
         Ok(res) => res.into_string().map(|t| content_of(&t)).map_err(|_| Error::Network(unreachable_message(&req.endpoint.base_url))),
         Err(ureq::Error::Status(code, res)) => {
             let mut s = String::new();

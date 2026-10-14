@@ -290,6 +290,104 @@ impl Backend {
         Event::PagesAdded { pages }
     }
 
+    /// The name at the top of a prepared page (js/student.js `read`): a separate short request to the same
+    /// server. `Ok(None)` is "no name found"; `Err` is a server that did not answer.
+    async fn read_name(&self, jpg: &[u8], conn: &Conn) -> std::result::Result<Option<String>, ()> {
+        let strip = pictures::crop_top(jpg, vishion_core::student::STRIP).map_err(|_| ())?;
+        let req = vishion_net::Request {
+            endpoint: vishion_net::Endpoint::new(conn.url.clone()),
+            api_key: &conn.api_key,
+            model: &conn.model,
+            prompt: vishion_core::student::ASK,
+            image: &strip,
+            timeout_secs: 45,
+            poll_slots: false,
+        };
+        match vishion_net::complete_opts(req, 0.1, 60).await {
+            Ok(t) => Ok(vishion_core::student::parse_reply(&t)),
+            Err(vishion_net::Error::Http(_)) => Err(()),
+            Err(_) => Err(()),
+        }
+    }
+
+    /// The staging step of js/ui/add.js `addFiles` + `process`: each file is checked, shrunk (and levelled when
+    /// the setting asks), and given a student name. Results go to `emit` one by one so the screen fills up.
+    pub async fn stage_files(&self, mut files: Vec<Picked>, conn: &Conn, read_names: bool, preset: Option<&str>, emit: &dyn Fn(Event)) {
+        let demo = self.demo || conn.demo || self.demo_mode().await;
+        let mut skipped: Vec<(String, String)> = vec![];
+        // `page2` before `page10`
+        files.sort_by(|a, b| vishion_core::jsx::nat_compare(&a.name, &b.name));
+        let mut down = false;
+        for f in files {
+            if let Some(why) = vishion_core::student::check_file(&f.name, f.bytes.len()) {
+                skipped.push((f.name, why.to_string()));
+                continue;
+            }
+            let jpg = match self.prepare_picture(&f.bytes).await {
+                Ok(j) => j,
+                Err(_) => {
+                    skipped.push((f.name, "Could not read this image.".into()));
+                    continue;
+                }
+            };
+            let (name, source) = if let Some(p) = preset {
+                (Some(p.to_string()), "chosen")
+            } else if !read_names {
+                (None, "file")
+            } else if demo {
+                (vishion_core::student::demo_name(&f.name).map(String::from), "read")
+            } else if down {
+                (None, "file")
+            } else {
+                match self.read_name(&jpg, conn).await {
+                    Ok(n) => (n, "read"),
+                    Err(()) => {
+                        down = true;
+                        (None, "file")
+                    }
+                }
+            };
+            emit(Event::Staged { item: vishion_ui::StagedItem { file_name: f.name, bytes: jpg, name, source: source.into() }, names_down: down });
+        }
+        // always sent: it ends the staging (the screen stops saying it is working)
+        emit(Event::Skipped(skipped));
+    }
+
+    /// Ask for pictures, then stage them one by one (`emit` per picture).
+    pub async fn stage_pictures(&self, conn: &Conn, read_names: bool, preset: Option<&str>, emit: &dyn Fn(Event)) {
+        let files = pick_pictures(true).await;
+        self.stage_files(files, conn, read_names, preset, emit).await;
+    }
+
+    /// Save staged pictures as pages (js/ui/add.js `commit`): the student comes from the staging step, or is the
+    /// file name when none was found.
+    pub async fn commit_staged(&self, slug: &str, items: Vec<vishion_ui::StagedItem>, now: i64) -> Event {
+        let mut pages: Vec<(Page, Vec<u8>)> = vec![];
+        for (n, it) in items.into_iter().enumerate() {
+            let id = uid(now, n as u64);
+            if self.projects.save_image(slug, &id, &it.bytes).await.is_err() {
+                return Event::Notice { text: format!("Could not save {}.", it.file_name), error: true };
+            }
+            let mut p = Assignment::new_page(&id, &it.file_name);
+            let student = match &it.name {
+                Some(n) => serde_json::json!({"name": n, "source": it.source, "confirmed": it.source != "read"}),
+                None => {
+                    let stem = match it.file_name.rfind('.') {
+                        Some(d) if d > 0 => &it.file_name[..d],
+                        _ => &it.file_name,
+                    };
+                    serde_json::json!({"name": stem, "source": "file", "confirmed": false})
+                }
+            };
+            p.set("student", student);
+            pages.push((p, it.bytes));
+        }
+        if pages.is_empty() {
+            return Event::Notice { text: "No picture was added.".into(), error: false };
+        }
+        Event::PagesAdded { pages }
+    }
+
     /// Demo mode of js/ocr.js: the sample assignment, or the `demo` setting.
     async fn demo_mode(&self) -> bool {
         if self.demo {
@@ -456,6 +554,12 @@ impl Backend {
                 self.read_pages(&slug, ids, conn, &|e| out.borrow_mut().push(e)).await;
                 Event::Many(out.into_inner())
             }
+            Cmd::StagePictures { conn, read_names, preset } => {
+                let out = std::cell::RefCell::new(vec![]);
+                self.stage_pictures(&conn, read_names, preset.as_deref(), &|e| out.borrow_mut().push(e)).await;
+                Event::Many(out.into_inner())
+            }
+            Cmd::CommitStaged { slug, items } => self.commit_staged(&slug, items, now).await,
             Cmd::ImportZip => {
                 let Some(f) = pick_zip().await.pop() else {
                     return Event::Notice { text: "No file chosen.".into(), error: false };

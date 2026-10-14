@@ -3,7 +3,7 @@
 //! browser gives up; ponytail: wire an AbortController if that wait is ever long in practice).
 use crate::slots;
 use crate::sse::SseParser;
-use crate::{complete_body, content_of, body, http_error, tokens, unreachable_message, verdict_error, Cancel, Done, Error, Progress, Request};
+use crate::{complete_body_with, content_of, body, http_error, tokens, unreachable_message, verdict_error, Cancel, Done, Error, Progress, Request};
 use futures_util::future::{select, Either};
 use futures_util::StreamExt;
 use js_sys::Uint8Array;
@@ -36,6 +36,11 @@ async fn slots_percent(url: &str) -> Option<u32> {
 
 /// One non-streamed answer (`W.guess`).
 pub async fn complete(req: Request<'_>) -> Result<String, Error> {
+    complete_opts(req, 0.2, 500).await
+}
+
+/// [`complete`] with the temperature and answer length of the caller.
+pub async fn complete_opts(req: Request<'_>, temperature: f64, max_tokens: u32) -> Result<String, Error> {
     let network = || Error::Network(unreachable_message(&req.endpoint.base_url));
     let headers = Headers::new().map_err(|_| network())?;
     let _ = headers.set("Content-Type", "application/json");
@@ -45,7 +50,7 @@ pub async fn complete(req: Request<'_>) -> Result<String, Error> {
     let init = RequestInit::new();
     init.set_method("POST");
     init.set_headers(&headers);
-    init.set_body(&wasm_bindgen::JsValue::from_str(&complete_body(req.model, req.image, req.prompt)));
+    init.set_body(&wasm_bindgen::JsValue::from_str(&complete_body_with(req.model, req.image, req.prompt, temperature, max_tokens)));
     let request = web_sys::Request::new_with_str_and_init(&req.endpoint.chat_completions_url(), &init).map_err(|_| network())?;
     let global = js_sys::global().unchecked_into::<web_sys::WorkerGlobalScope>();
     let res: Response = JsFuture::from(global.fetch_with_request(&request)).await.map_err(|_| network())?.unchecked_into();

@@ -121,6 +121,9 @@ fn main() -> eframe::Result<()> {
                         Cmd::Transcribe { slug, ids, conn } => {
                             block_on(backend.read_pages(&slug, ids, conn, &|e| worker_inbox.push(e)));
                         }
+                        Cmd::StagePictures { conn, read_names, preset } => {
+                            block_on(backend.stage_pictures(&conn, read_names, preset.as_deref(), &|e| worker_inbox.push(e)));
+                        }
                         cmd => worker_inbox.push(block_on(backend.handle(cmd, now()))),
                     }
                 }

@@ -137,6 +137,10 @@ mod web {
                                     b.read_pages(&slug, ids, conn, &|e| inbox.push(e)).await;
                                     return;
                                 }
+                                if let Cmd::StagePictures { conn, read_names, preset } = cmd {
+                                    b.stage_pictures(&conn, read_names, preset.as_deref(), &|e| inbox.push(e)).await;
+                                    return;
+                                }
                                 let e: Event = b.handle(cmd, js_sys::Date::now() as i64).await;
                                 inbox.push(e);
                             });

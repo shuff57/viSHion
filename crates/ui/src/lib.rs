@@ -42,7 +42,7 @@ mod app_tests;
 #[cfg(test)]
 mod a11y_critic_tests;
 
-pub use host::{Card, Cmd, Conn, Dispatch, Event, Inbox, ReadOutcome};
+pub use host::{Card, StagedItem, Cmd, Conn, Dispatch, Event, Inbox, ReadOutcome};
 pub use twin::{Node, Part, Reg};
 
 /// Web only: call once after eframe started; makes the canvas a non-tabbable, AT-hidden surface and names
@@ -1157,16 +1157,42 @@ impl App {
                         first.get_or_insert(id);
                         list.push(p);
                     }
+                    let mut start = None;
                     if let Some(s) = &mut self.session {
+                        let ids: Vec<String> = list.iter().map(|p| p.id().to_string()).collect();
                         s.pages_added(list);
-                        if let Some(f) = first {
+                        if s.add.starting {
+                            // the Add screen's "Transcribe N pages": back to the inbox, and the run begins
+                            s.add.starting = false;
+                            s.view = state::View::Inbox;
+                            start = Some((s.slug.clone(), ids, s.read_conn()));
+                        } else if let Some(f) = first {
                             s.select(&f);
                         }
+                    }
+                    if let Some((slug, ids, conn)) = start {
+                        self.send(Cmd::Transcribe { slug, ids, conn });
                     }
                     if n > 0 {
                         self.status_msg = Some(format!("Added {}.", state::plural(n, "page", "pages")));
                         self.ctl.toast_serial += 1;
                         self.status_err = false;
+                    }
+                }
+                Event::Staged { item, names_down } => {
+                    if let Some(s) = &mut self.session {
+                        s.add.seq += 1;
+                        let key = s.add.seq;
+                        let slot = decode_image(&self.ctx, &format!("staged-{key}"), &item.bytes).map_or(Slot::Missing, Slot::Ready);
+                        self.images.insert(format!("staged-{key}"), slot);
+                        s.add.names_down |= names_down;
+                        s.add.rows.push(state::StagedRow { key, item, picking: false, draft: String::new() });
+                    }
+                }
+                Event::Skipped(list) => {
+                    if let Some(s) = &mut self.session {
+                        s.add.skipped.extend(list);
+                        s.add.working = false;
                     }
                 }
                 Event::Many(_) => {}

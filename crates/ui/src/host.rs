@@ -20,6 +20,16 @@ pub struct Conn {
     pub examples: Vec<String>,
 }
 
+/// A picture that is ready to be added: prepared (JPEG, at most 1600 px) and, perhaps, a name for its page.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StagedItem {
+    pub file_name: String,
+    pub bytes: Vec<u8>,
+    /// The student's name (read from the page, or chosen) and where it came from: `read` | `chosen` | `file`.
+    pub name: Option<String>,
+    pub source: String,
+}
+
 /// One assignment on the home screen (`fs.listProjects`).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Card {
@@ -36,6 +46,12 @@ pub struct Card {
 pub enum Cmd {
     /// The home screen's list: `Event::Projects`.
     ListProjects,
+    /// Ask for pictures and get each one ready for staging (`Event::Staged` one by one, `Event::Skipped` for
+    /// files that cannot be added). `preset` is a student chosen beforehand; otherwise, with `read_names`,
+    /// the model reads the name at the top of each page.
+    StagePictures { conn: Conn, read_names: bool, preset: Option<String> },
+    /// Save the staged pictures as new pages: `Event::PagesAdded`.
+    CommitStaged { slug: String, items: Vec<StagedItem> },
     /// Ask for a project zip and import it as a new assignment: `Event::Opened`.
     ImportZip,
     /// Write `exports/<slug>.zip` with every file of the assignment (the home card's Download zip).
@@ -102,6 +118,10 @@ pub enum Event {
         /// The assignment came from the backup copy of a damaged `project.json`.
         notice: Option<String>,
     },
+    /// One picture is ready to stage. `names_down`: the name reader could not reach the server.
+    Staged { item: StagedItem, names_down: bool },
+    /// Files that cannot be added, with the reason each.
+    Skipped(Vec<(String, String)>),
     /// The assignments the home screen lists.
     Projects(Vec<Card>),
     /// The store holds no assignment.

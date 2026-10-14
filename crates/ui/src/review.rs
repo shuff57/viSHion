@@ -100,6 +100,15 @@ pub(crate) enum Act {
     OpenSettings,
     OpenAssignment,
     OpenExport,
+    OpenAdd(Option<String>),
+    AddChoose,
+    AddRemove(u64),
+    AddPick(u64),
+    AddName(u64, String),
+    AddDraft(u64, String),
+    AddCommit,
+    AddSubject(String),
+    AddReadNames(bool),
     CloseDialog,
     Inbox,
     Home,
@@ -294,6 +303,7 @@ pub(crate) fn show(app: &mut App, ctx: &egui::Context, t: &Tokens) {
             }
             match s.view {
                 View::Inbox => inbox(ctx, &mut cx, s),
+                View::Add => add_view(ctx, &mut cx, s),
                 View::Review => review(ctx, &mut cx, s, narrow),
             }
             if let Some(m) = status_msg.as_ref() {
@@ -765,6 +775,49 @@ fn apply(
             }
         }
         Act::OpenSettings => *dialog = Some(Dialog::settings()),
+        Act::OpenAdd(preset) => {
+            s.add = state::AddState { preset, ..Default::default() };
+            s.view = View::Add;
+            ctl.focus_title = Some("add-title");
+        }
+        Act::AddChoose => {
+            s.add.working = true;
+            let read_names = s.settings.get("readNames").and_then(|v| v.as_bool()) != Some(false);
+            send(Cmd::StagePictures { conn: s.read_conn(), read_names, preset: s.add.preset.clone() });
+        }
+        Act::AddRemove(k) => s.add.rows.retain(|r| r.key != k),
+        Act::AddPick(k) => {
+            if let Some(r) = s.add.rows.iter_mut().find(|r| r.key == k) {
+                r.picking = !r.picking;
+            }
+        }
+        Act::AddName(k, name) => {
+            if let Some(r) = s.add.rows.iter_mut().find(|r| r.key == k) {
+                let name = name.trim().to_string();
+                r.item.name = (!name.is_empty()).then_some(name);
+                r.item.source = "chosen".into();
+                r.picking = false;
+            }
+        }
+        Act::AddDraft(k, text) => {
+            if let Some(r) = s.add.rows.iter_mut().find(|r| r.key == k) {
+                r.draft = text;
+            }
+        }
+        Act::AddSubject(v) => s.set_meta("topic", serde_json::json!(v)),
+        Act::AddReadNames(on) => {
+            s.settings.set("readNames", serde_json::json!(on));
+            s.dirty.settings = true;
+        }
+        Act::AddCommit => {
+            let items: Vec<_> = s.add.rows.iter().map(|r| r.item.clone()).collect();
+            if !items.is_empty() {
+                s.add.rows.clear();
+                s.add.skipped.clear();
+                s.add.starting = true;
+                send(Cmd::CommitStaged { slug, items });
+            }
+        }
         Act::OpenAssignment => *dialog = Some(Dialog::assignment()),
         Act::OpenExport => {
             if s.pages().is_empty() {
@@ -1062,7 +1115,7 @@ fn header(ui: &mut Ui, cx: &mut Cx, s: &Session) {
     let crumb_label = format!("Back to {name}");
 
     // header.js `forInbox`: wordmark on the left, save state and Settings on the right
-    if s.view == View::Inbox {
+    if s.view != View::Review {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 12.0;
             if widgets::brand(cx.ctl, ui, t, C::new("brand", "viSHion", HEADER)) {
@@ -1294,6 +1347,246 @@ fn inbox(ctx: &egui::Context, cx: &mut Cx, s: &Session) {
     });
 }
 
+/// js/ui/add.js `render`: choose files, the staged pages with the student each belongs to, the subject, and the
+/// button that saves and starts the run.
+fn add_view(ctx: &egui::Context, cx: &mut Cx, s: &Session) {
+    let t = cx.t;
+    egui::CentralPanel::default().frame(egui::Frame::none().fill(t.bg)).show(ctx, |ui| {
+        cx.ctl.scrolls[TEXT as usize] = true;
+        egui::ScrollArea::vertical().auto_shrink([false, false]).animated(false).id_source("add-scroll").show(ui, |ui| {
+            if cx.inline_header {
+                header_inline(ui, cx, s);
+            }
+            let avail = ui.available_width();
+            let pad = if cx.narrow { 16.0 } else { 24.0 };
+            let side = (avail - avail.min(1120.0)) / 2.0 + pad;
+            let margin = Margin { left: side, right: side, top: if cx.narrow { 28.0 } else { 40.0 }, bottom: if cx.narrow { 48.0 } else { 56.0 } };
+            egui::Frame::none().inner_margin(margin).show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
+                add_body(ui, cx, s);
+            });
+            cx.ctl.flush_scroll(ui, &[HEADER, TEXT]);
+        });
+    });
+}
+
+fn add_body(ui: &mut Ui, cx: &mut Cx, s: &Session) {
+    let t = cx.t;
+    let w = ui.available_width();
+    let a = &s.add;
+    let title = match &a.preset {
+        Some(p) => format!("Add pages for {p}"),
+        None => "Add pages".to_string(),
+    };
+    let size = if cx.narrow { 30.0 } else { 36.0 };
+    let r = css_text(ui, &title, theme::serif_semi(size), t.ink, size * 1.15, w, false);
+    cx.ctl.heading("add-title", 1, &title, TEXT, r);
+    ui.add_space(8.0);
+    let sub = format!("Adding to {}", s.a.meta.name());
+    let r = css_text(ui, &sub, theme::sans(14.0), t.muted, 14.0 * 1.4, w, false);
+    cx.ctl.text("add-sub", &sub, TEXT, r);
+    ui.add_space(20.0);
+
+    // drop zone (a button here: files come from the picker)
+    egui::Frame::none().fill(t.surface).stroke(Stroke::new(1.0, t.line2)).rounding(10.0).inner_margin(Margin::symmetric(24.0, 28.0)).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        let big = "Choose photos or scans";
+        let r = css_text(ui, big, theme::sans_semi(18.0), t.ink, 18.0 * 1.4, ui.available_width(), false);
+        cx.ctl.heading("add-drop", 2, big, TEXT, r);
+        ui.add_space(6.0);
+        let note = "PNG, JPG, or WebP, up to 40 MB each.";
+        let r = css_text(ui, note, theme::sans(14.0), t.muted, 14.0 * 1.4, ui.available_width(), false);
+        cx.ctl.text("add-types", note, TEXT, r);
+        ui.add_space(14.0);
+        let busy = a.working;
+        let label = if busy { "Getting pages ready\u{2026}" } else { "Choose files" };
+        if widgets::button(cx.ctl, ui, t, C::new("add-choose", label, TEXT).disabled(busy), label, Look::Primary, 0.0) {
+            cx.acts.push(Act::AddChoose);
+        }
+        ui.add_space(12.0);
+        let tip = "iPhone photos: in Settings, Camera, Formats, choose Most Compatible so pages save as JPG.";
+        let r = css_text(ui, tip, theme::sans(13.0), t.muted, 13.0 * 1.4, ui.available_width(), false);
+        cx.ctl.text("add-tip", tip, TEXT, r);
+    });
+
+    if !a.skipped.is_empty() {
+        ui.add_space(14.0);
+        let names: Vec<&str> = a.skipped.iter().take(3).map(|(n, _)| n.as_str()).collect();
+        let more = if a.skipped.len() > 3 { format!(" and {} more", a.skipped.len() - 3) } else { String::new() };
+        let mut why: Vec<&str> = vec![];
+        for (_, r) in &a.skipped {
+            if !why.contains(&r.as_str()) {
+                why.push(r);
+            }
+        }
+        let msg = format!(
+            "{} skipped: {}{} can\u{2019}t be added. {}",
+            state::plural(a.skipped.len(), "file was", "files were"),
+            names.join(", "),
+            more,
+            why.join(" ")
+        );
+        egui::Frame::none().fill(t.warn_bg).stroke(Stroke::new(1.0, t.warn_line)).rounding(10.0).inner_margin(Margin::symmetric(16.0, 12.0)).show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            let r = css_text(ui, &msg, theme::sans(14.0), t.ink, 14.0 * 1.4, ui.available_width(), false);
+            cx.ctl.status("add-skipped", &msg, TEXT, r);
+        });
+    }
+    if a.names_down {
+        ui.add_space(14.0);
+        let msg = "Names could not be read: the transcription server did not answer, so choose a student for each page, or start the server and add the pages again.";
+        egui::Frame::none().fill(t.warn_bg).stroke(Stroke::new(1.0, t.warn_line)).rounding(10.0).inner_margin(Margin::symmetric(16.0, 12.0)).show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            let r = css_text(ui, msg, theme::sans(14.0), t.ink, 14.0 * 1.4, ui.available_width(), false);
+            cx.ctl.status("add-names-down", msg, TEXT, r);
+        });
+    }
+
+    if !a.rows.is_empty() {
+        ui.add_space(28.0);
+        let head = format!("Ready to transcribe: {}", state::plural(a.rows.len(), "page", "pages"));
+        let r = css_text(ui, &head, theme::serif_semi(24.0), t.ink, 24.0 * 1.2, w, false);
+        cx.ctl.heading("add-ready", 2, &head, TEXT, r);
+        ui.add_space(12.0);
+        let known: Vec<String> = {
+            let mut v: Vec<String> = s.groups().into_iter().map(|g| g.name).collect();
+            v.extend(a.rows.iter().filter_map(|r| r.item.name.clone()));
+            v.sort_by(|x, y| vishion_core::jsx::nat_compare(x, y));
+            v.dedup();
+            v
+        };
+        for r in &a.rows {
+            add_row(ui, cx, r, &known);
+            ui.add_space(8.0);
+        }
+    }
+
+    // subject, read names, and the button
+    ui.add_space(24.0);
+    let topics: Vec<String> = s.settings.get("topics").and_then(|v| v.as_object()).map(|o| o.keys().cloned().collect()).unwrap_or_default();
+    if !topics.is_empty() {
+        let r = css_text(ui, "Subject", theme::sans_semi(14.0), t.ink, 19.6, w, false);
+        cx.ctl.text("add-topic-label", "Subject", TEXT, r);
+        ui.add_space(6.0);
+        let cur = s.a.meta.topic().to_string();
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = vec2(8.0, 8.0);
+            for (i, k) in topics.iter().enumerate() {
+                let id = format!("add-topic-{i}");
+                let look = if *k == cur { Look::Primary } else { Look::Outline };
+                if widgets::button(cx.ctl, ui, t, C::new(&id, k, TEXT).pressed(*k == cur), k, look, 0.0) {
+                    cx.acts.push(Act::AddSubject(k.clone()));
+                }
+            }
+        });
+        ui.add_space(14.0);
+    }
+    let read_on = s.settings.get("readNames").and_then(|v| v.as_bool()) != Some(false);
+    let lbl = if read_on { "Read the name at the top of each page: on" } else { "Read the name at the top of each page: off" };
+    if widgets::button(cx.ctl, ui, t, C::new("add-read-names", lbl, TEXT).pressed(read_on), lbl, Look::Outline, 0.0) {
+        cx.acts.push(Act::AddReadNames(!read_on));
+    }
+    ui.add_space(20.0);
+    let missing = a.rows.iter().filter(|r| r.item.name.is_none()).count();
+    let n = a.rows.len();
+    let cta = if a.working { "Getting pages ready\u{2026}".to_string() } else { format!("Transcribe {}", state::plural(n, "page", "pages")) };
+    if widgets::button(cx.ctl, ui, t, C::new("add-commit", &cta, TEXT).disabled(n == 0 || a.working), &cta, Look::Primary, 0.0) {
+        cx.acts.push(Act::AddCommit);
+    }
+    ui.add_space(8.0);
+    let hint = if n == 0 {
+        "Add pages to get started.".to_string()
+    } else if missing == 0 {
+        "Every page has a student.".to_string()
+    } else {
+        format!("{} a student. You can choose one after transcribing.", state::plural(missing, "page needs", "pages need"))
+    };
+    let r = css_text(ui, &hint, theme::sans(13.0), t.muted, 13.0 * 1.4, w, false);
+    cx.ctl.status("add-hint", &hint, TEXT, r);
+}
+
+/// `.staged-row`: thumbnail, file name, the student (read or chosen, or a chooser), remove.
+fn add_row(ui: &mut Ui, cx: &mut Cx, r: &state::StagedRow, known: &[String]) {
+    let t = cx.t;
+    egui::Frame::none().fill(t.surface).stroke(Stroke::new(1.0, t.line)).rounding(10.0).inner_margin(Margin::symmetric(16.0, 12.0)).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 14.0;
+            let (th, _) = ui.allocate_exact_size(vec2(40.0, 52.0), Sense::hover());
+            ui.painter().rect_filled(th, 2.0, t.paper);
+            if let Some(Slot::Ready(im)) = cx.images.get(&format!("staged-{}", r.key)) {
+                ui.painter().image(im.thumb.id(), th, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+            }
+            ui.vertical(|ui| {
+                ui.spacing_mut().item_spacing.y = 2.0;
+                let name = ui.label(RichText::new(&r.item.file_name).font(theme::sans_semi(14.0)).color(t.ink));
+                cx.ctl.text(&format!("staged-file-{}", r.key), &r.item.file_name, TEXT, name.rect);
+                let (who, how) = match &r.item.name {
+                    Some(n) if r.item.source == "read" => (n.clone(), "Read from the top of the page"),
+                    Some(n) => (n.clone(), "Chosen by you"),
+                    None => ("Name not found".to_string(), "Choose a student"),
+                };
+                let line = format!("{who}. {how}");
+                let l = ui.label(RichText::new(&line).font(theme::sans(13.0)).color(if r.item.name.is_some() { t.muted } else { t.bad }));
+                cx.ctl.text(&format!("staged-who-{}", r.key), &line, TEXT, l.rect);
+            });
+        });
+        ui.add_space(8.0);
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing.x = 8.0;
+            let change = format!("Change the student for {}", r.item.file_name);
+            if widgets::button(cx.ctl, ui, t, C::new(&format!("staged-change-{}", r.key), &change, TEXT), "Change", Look::Outline, 0.0) {
+                cx.acts.push(Act::AddPick(r.key));
+            }
+            let remove = format!("Remove {}", r.item.file_name);
+            if widgets::button(cx.ctl, ui, t, C::new(&format!("staged-remove-{}", r.key), &remove, TEXT), "Remove", Look::Ghost, 0.0) {
+                cx.acts.push(Act::AddRemove(r.key));
+            }
+        });
+        if r.picking {
+            ui.add_space(8.0);
+            // a name that is not in the list yet
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 8.0;
+                let mut buf = r.draft.clone();
+                let btn_w = tw(ui, "Use this name", theme::sans_semi(14.0)) + widgets::BTN_PAD;
+                let fw = (ui.available_width() - btn_w - 8.0).clamp(120.0, 360.0);
+                let (slot, _) = ui.allocate_exact_size(vec2(fw, TARGET), Sense::hover());
+                let edit = egui::TextEdit::singleline(&mut buf)
+                    .hint_text(RichText::new("Student name").font(theme::sans(14.0)).color(Color32::from_rgb(117, 117, 117)))
+                    .font(theme::sans(14.0))
+                    .margin(vec2(12.0, 13.0))
+                    .desired_width(fw - 24.0);
+                let mut er = ui.put(slot, edit);
+                er.rect = slot;
+                let id = format!("staged-name-{}", r.key);
+                if let Some(v) = cx.ctl.reg_text(ui, &er, C::new(&id, "Student name", TEXT), &r.draft) {
+                    buf = v;
+                }
+                let entered = er.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                if buf != r.draft {
+                    cx.acts.push(Act::AddDraft(r.key, buf.clone()));
+                }
+                let use_it = widgets::button(cx.ctl, ui, t, C::new(&format!("staged-use-{}", r.key), "Use this name", TEXT), "Use this name", Look::Primary, btn_w);
+                if (use_it || entered) && !buf.trim().is_empty() {
+                    cx.acts.push(Act::AddName(r.key, buf.clone()));
+                }
+            });
+            ui.add_space(8.0);
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing = vec2(8.0, 8.0);
+                for (i, k) in known.iter().enumerate() {
+                    let label = format!("{k} for {}", r.item.file_name);
+                    if widgets::button(cx.ctl, ui, t, C::new(&format!("staged-{}-pick-{i}", r.key), &label, TEXT), k, Look::Outline, 0.0) {
+                        cx.acts.push(Act::AddName(r.key, k.clone()));
+                    }
+                }
+            });
+        }
+    });
+}
+
 /// A button of a run bar: id, label, primary, what it does.
 type BarBtn = (&'static str, String, bool, Act);
 
@@ -1365,6 +1658,9 @@ fn inbox_body(ui: &mut Ui, cx: &mut Cx, s: &Session) {
         ui.spacing_mut().item_spacing.x = 8.0;
         if widgets::button(cx.ctl, ui, t, C::new("assignment-settings", "Assignment settings", TEXT), "Assignment settings", Look::Outline, 0.0) {
             cx.acts.push(Act::OpenAssignment);
+        }
+        if widgets::button(cx.ctl, ui, t, C::new("add-pages", "Add pages", TEXT), "Add pages", Look::Primary, 0.0) {
+            cx.acts.push(Act::OpenAdd(None));
         }
         if widgets::button(cx.ctl, ui, t, C::new("export", "Export", TEXT), "Export", Look::Outline, 0.0) {
             cx.acts.push(Act::OpenExport);

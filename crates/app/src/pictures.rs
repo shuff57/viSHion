@@ -28,6 +28,13 @@ pub fn prepare(bytes: &[u8]) -> Result<Vec<u8>, String> {
     encode(&im)
 }
 
+/// The top `frac` of a picture as a JPEG (js/student.js `strip`): where a name is written.
+pub fn crop_top(bytes: &[u8], frac: f64) -> Result<Vec<u8>, String> {
+    let im = image::load_from_memory(bytes).map_err(|e| e.to_string())?;
+    let h = ((im.height() as f64 * frac).round() as u32).clamp(1, im.height().max(1));
+    encode(&im.crop_imm(0, 0, im.width(), h))
+}
+
 /// A quarter turn clockwise (js `OCR.image.rotate(blob, 90)`).
 pub fn rotate90(bytes: &[u8]) -> Result<Vec<u8>, String> {
     let im = image::load_from_memory(bytes).map_err(|e| e.to_string())?;

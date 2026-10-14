@@ -5,6 +5,28 @@ use serde_json::Value;
 
 /// Top fraction of the page sent to the name reader.
 pub const STRIP: f64 = 0.14;
+/// The question put to the top strip of a page (js/student.js `ASK`).
+pub const ASK: &str = "This is the top strip of a handwritten student page. If a student name is written there, read it. Answer with JSON only, like {\"name\": \"Maya R.\"}. If no name is written, answer {\"name\": null}. Do not guess and do not add anything else.";
+
+/// `I.check` of js/image.js by file name and size: why a file cannot be added, or `None`.
+pub fn check_file(name: &str, size: usize) -> Option<&'static str> {
+    let n = name.to_lowercase();
+    let ext = n.rsplit('.').next().filter(|_| n.contains('.')).unwrap_or("");
+    if matches!(ext, "heic" | "heif") {
+        return Some("HEIC images are not supported here. Convert the file to JPG or PNG first.");
+    }
+    if ext == "pdf" {
+        return Some("PDFs are not supported here. Convert each page to JPG or PNG first.");
+    }
+    if !matches!(ext, "png" | "jpg" | "jpeg" | "webp") {
+        return Some("Unsupported file type. Use PNG, JPG or WebP.");
+    }
+    if size > 40 * 1024 * 1024 {
+        return Some("The file is larger than 40 MB.");
+    }
+    None
+}
+
 pub const DEMO_NAMES: [Option<&str>; 6] =
     [Some("Maya R."), Some("Devon T."), Some("Sofia V."), Some("Aaliyah M."), None, Some("Caleb P.")];
 
@@ -79,3 +101,20 @@ pub fn parse_reply(text: &str) -> Option<String> {
     let v: Value = serde_json::from_str(src).ok()?;
     clean(v.get("name").unwrap_or(&Value::Null))
 }
+
+#[cfg(test)]
+mod check_tests {
+    use super::*;
+
+    #[test]
+    fn files_are_checked_like_image_check() {
+        assert_eq!(check_file("a.JPG", 10), None);
+        assert_eq!(check_file("scan.webp", 10), None);
+        assert!(check_file("a.heic", 10).unwrap().starts_with("HEIC"));
+        assert!(check_file("a.pdf", 10).unwrap().starts_with("PDFs"));
+        assert!(check_file("a.gif", 10).unwrap().starts_with("Unsupported"));
+        assert!(check_file("noext", 10).unwrap().starts_with("Unsupported"));
+        assert!(check_file("a.png", 41 * 1024 * 1024).unwrap().contains("40 MB"));
+    }
+}
+

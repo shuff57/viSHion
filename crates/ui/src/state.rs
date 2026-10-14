@@ -152,6 +152,34 @@ pub const ZOOMS: [f32; 5] = [1.0, 1.5, 2.0, 3.0, 4.0];
 pub enum View {
     Review,
     Inbox,
+    /// js/ui/add.js: the staging step in front of adding pages.
+    Add,
+}
+
+/// One picture waiting in the Add screen.
+#[derive(Clone, Debug, PartialEq)]
+pub struct StagedRow {
+    pub key: u64,
+    pub item: crate::host::StagedItem,
+    /// The "who is this" chooser is open for this row.
+    pub picking: bool,
+    /// What is typed in its name box.
+    pub draft: String,
+}
+
+/// The Add screen's state (`staged`, `skipped`, `nameDown`, `preset` of js/ui/add.js).
+#[derive(Default, Debug)]
+pub struct AddState {
+    pub rows: Vec<StagedRow>,
+    pub skipped: Vec<(String, String)>,
+    pub names_down: bool,
+    /// Pictures are being prepared and read for names.
+    pub working: bool,
+    /// A student chosen beforehand ("Add pages for Maya").
+    pub preset: Option<String>,
+    pub seq: u64,
+    /// The pages just committed are to be read when the host answers.
+    pub starting: bool,
 }
 
 pub struct Session {
@@ -171,6 +199,7 @@ pub struct Session {
     pub dirty: Dirty,
     pub now: i64,
     pub view: View,
+    pub add: AddState,
     /// `S.d.textView === 'raw'`: the transcript as plain monospace text.
     pub text_raw: bool,
     /// Zoom of the page pane, one of `ZOOMS`.
@@ -238,6 +267,7 @@ impl Session {
             dirty: Dirty::default(),
             now,
             view: View::Review,
+            add: AddState::default(),
             text_raw: false,
             zoom: 1.0,
             multi: BTreeSet::new(),

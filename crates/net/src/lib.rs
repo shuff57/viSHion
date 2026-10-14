@@ -8,11 +8,11 @@ pub mod sse;
 #[cfg(not(target_arch = "wasm32"))]
 mod native;
 #[cfg(not(target_arch = "wasm32"))]
-pub use native::{complete, transcribe};
+pub use native::{complete, complete_opts, transcribe};
 #[cfg(target_arch = "wasm32")]
 mod web;
 #[cfg(target_arch = "wasm32")]
-pub use web::{complete, transcribe};
+pub use web::{complete, complete_opts, transcribe};
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -117,12 +117,17 @@ pub fn body(model: &str, image_jpeg: &[u8], prompt: &str) -> String {
 
 /// The body of js/guess.js `ask`: one answer, not streamed, a little warmer than reading, 500 tokens at most.
 pub fn complete_body(model: &str, image_jpeg: &[u8], prompt: &str) -> String {
+    complete_body_with(model, image_jpeg, prompt, 0.2, 500)
+}
+
+/// [`complete_body`] with the temperature and the answer length of the caller (the name reader: 0.1, 60).
+pub fn complete_body_with(model: &str, image_jpeg: &[u8], prompt: &str, temperature: f64, max_tokens: u32) -> String {
     let mut v: serde_json::Value = serde_json::from_str(&body(model, image_jpeg, prompt)).expect("body is json");
     let o = v.as_object_mut().expect("object");
     o.insert("stream".into(), false.into());
     o.remove("stream_options");
-    o.insert("temperature".into(), 0.2.into());
-    o.insert("max_tokens".into(), 500.into());
+    o.insert("temperature".into(), temperature.into());
+    o.insert("max_tokens".into(), max_tokens.into());
     v.to_string()
 }
 
