@@ -77,9 +77,9 @@ fn civil(z: i64) -> (i64, i64, i64) {
     (if m <= 2 { y + 1 } else { y }, m, d)
 }
 
-fn text_box(ctl: &mut Ctl, ui: &mut Ui, id: &str, name: &str, hint: &str, buf: &mut String, w: f32) -> bool {
+fn text_box(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, id: &str, name: &str, hint: &str, buf: &mut String, w: f32) -> bool {
     let (slot, _) = ui.allocate_exact_size(vec2(w, TARGET), Sense::hover());
-    let edit = egui::TextEdit::singleline(buf).hint_text(hint).font(theme::sans(14.0)).margin(vec2(12.0, 13.0)).desired_width(slot.width() - 24.0);
+    let edit = egui::TextEdit::singleline(buf).hint_text(RichText::new(hint).font(theme::sans(14.0)).color(t.placeholder())).font(theme::sans(14.0)).margin(vec2(12.0, 13.0)).desired_width(slot.width() - 24.0);
     let mut r = ui.put(slot, edit);
     r.rect = slot;
     if let Some(v) = ctl.reg_text(ui, &r, C::new(id, name, TEXT), buf) {
@@ -151,7 +151,7 @@ fn body(ui: &mut Ui, ctl: &mut Ctl, t: &Tokens, h: &mut Home, storage: &str, nar
             ui.spacing_mut().item_spacing.x = 8.0;
             let bw = 160.0;
             let fw = (ui.available_width() - bw - 8.0 - 100.0 - 8.0).clamp(160.0, 420.0);
-            let entered = text_box(ctl, ui, "new-name", "Assignment name", "Assignment name", name, fw);
+            let entered = text_box(ctl, ui, t, "new-name", "Assignment name", "Assignment name", name, fw);
             let ok = widgets::button(ctl, ui, t, C::new("create-assignment", "Create assignment", TEXT), "Create assignment", Look::Primary, bw);
             cancel = widgets::button(ctl, ui, t, C::new("cancel-new", "Cancel", TEXT), "Cancel", Look::Outline, 0.0);
             go = ok || entered;
@@ -206,7 +206,7 @@ fn card(ui: &mut Ui, ctl: &mut Ctl, t: &Tokens, h: &mut Home, c: &Card, i: usize
             let (slug, name) = h.renaming.as_mut().map(|(s, n)| (s.clone(), n)).unwrap();
             ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing.x = 8.0;
-                let entered = text_box(ctl, ui, &id("rename-name"), "Assignment name", "Assignment name", name, 320.0);
+                let entered = text_box(ctl, ui, t, &id("rename-name"), "Assignment name", "Assignment name", name, 320.0);
                 let ok = widgets::button(ctl, ui, t, C::new(&id("rename-ok"), "Rename", TEXT), "Rename", Look::Primary, 0.0);
                 cancel = widgets::button(ctl, ui, t, C::new(&id("rename-cancel"), "Cancel", TEXT), "Cancel", Look::Outline, 0.0);
                 go = ok || entered;

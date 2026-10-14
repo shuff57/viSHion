@@ -49,6 +49,18 @@ pub struct Tokens {
     pub warn_line: Color32,
 }
 
+impl Tokens {
+    /// The colour of a text box's hint. Chrome's `::placeholder` grey (117) is 4.6:1 on white; on the dark
+    /// surfaces it would be 3.7:1, so the dark theme uses `muted` (WCAG 1.4.3).
+    pub fn placeholder(&self) -> Color32 {
+        if self.dark {
+            self.muted
+        } else {
+            Color32::from_rgb(117, 117, 117)
+        }
+    }
+}
+
 pub const LIGHT: Tokens = Tokens {
     dark: false,
     bg: rgb(0xEEF1F5),
@@ -347,4 +359,61 @@ pub fn install(ctx: &egui::Context) {
     style.text_styles.insert(egui::TextStyle::Small, sans(13.0));
     style.text_styles.insert(egui::TextStyle::Heading, sans_semi(16.0));
     ctx.set_style(style);
+}
+
+#[cfg(test)]
+mod contrast_tests {
+    use super::*;
+    use egui::Color32;
+
+    /// WCAG relative luminance and contrast ratio of two opaque colours.
+    fn lum(c: Color32) -> f64 {
+        let f = |v: u8| {
+            let s = v as f64 / 255.0;
+            if s <= 0.03928 {
+                s / 12.92
+            } else {
+                ((s + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * f(c.r()) + 0.7152 * f(c.g()) + 0.0722 * f(c.b())
+    }
+
+    fn ratio(a: Color32, b: Color32) -> f64 {
+        let (x, y) = (lum(a), lum(b));
+        (x.max(y) + 0.05) / (x.min(y) + 0.05)
+    }
+
+    /// The text colours against the surfaces they sit on, in both themes and both high-contrast variants: 4.5:1
+    /// for text (WCAG 1.4.3), the bar the handoff sets for every screen.
+    #[test]
+    fn text_colours_keep_4_5_to_1_on_their_surfaces() {
+        let mut fails = vec![];
+        for (name, t) in [("light", &LIGHT), ("dark", &DARK), ("light-hc", &LIGHT_HC), ("dark-hc", &DARK_HC)] {
+            let pairs: [(&str, Color32, &str, Color32); 15] = [
+                ("placeholder", t.placeholder(), "surface", t.surface),
+                ("ink", t.ink, "bg", t.bg),
+                ("ink", t.ink, "surface", t.surface),
+                ("ink", t.ink, "sunken", t.sunken),
+                ("muted", t.muted, "bg", t.bg),
+                ("muted", t.muted, "surface", t.surface),
+                ("muted", t.muted, "sunken", t.sunken),
+                ("bad", t.bad, "surface", t.bad_bg),
+                ("bad", t.bad, "bg", t.bg),
+                ("ok", t.ok, "ok_bg", t.ok_bg),
+                ("ink", t.ink, "warn_bg", t.warn_bg),
+                ("accent", t.accent, "surface", t.surface),
+                ("on_ink", t.on_ink, "ink", t.ink),
+                ("ink", t.ink, "hover", t.hover),
+                ("muted", t.muted, "hover", t.hover),
+            ];
+            for (fname, fg, bname, bg) in pairs {
+                let r = ratio(fg, bg);
+                if r < 4.5 {
+                    fails.push(format!("{name}: {fname} on {bname} = {r:.2}"));
+                }
+            }
+        }
+        assert!(fails.is_empty(), "{fails:#?}");
+    }
 }

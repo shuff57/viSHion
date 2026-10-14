@@ -1555,7 +1555,7 @@ fn add_row(ui: &mut Ui, cx: &mut Cx, r: &state::StagedRow, known: &[String]) {
                 let fw = (ui.available_width() - btn_w - 8.0).clamp(120.0, 360.0);
                 let (slot, _) = ui.allocate_exact_size(vec2(fw, TARGET), Sense::hover());
                 let edit = egui::TextEdit::singleline(&mut buf)
-                    .hint_text(RichText::new("Student name").font(theme::sans(14.0)).color(Color32::from_rgb(117, 117, 117)))
+                    .hint_text(RichText::new("Student name").font(theme::sans(14.0)).color(t.placeholder()))
                     .font(theme::sans(14.0))
                     .margin(vec2(12.0, 13.0))
                     .desired_width(fw - 24.0);
@@ -3810,7 +3810,7 @@ fn alternatives(ui: &mut Ui, cx: &mut Cx, s: &Session, cur: &Entry) {
         let (slot, _) = ui.allocate_exact_size(vec2(tw_, TARGET), Sense::hover());
         let edit = egui::TextEdit::singleline(&mut *cx.typed)
             // Chrome's default placeholder colour (`::placeholder`), in both themes
-            .hint_text(RichText::new("Type what it says").font(theme::sans(14.0)).color(Color32::from_rgb(117, 117, 117)))
+            .hint_text(RichText::new("Type what it says").font(theme::sans(14.0)).color(t.placeholder()))
             .font(theme::sans(14.0))
             .margin(vec2(12.0, 13.0))
             .min_size(slot.size())

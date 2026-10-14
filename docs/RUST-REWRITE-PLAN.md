@@ -75,7 +75,7 @@ Each phase ends with a runnable build on both targets and a parity check against
 | 4 | Review screen | Main screen with math, tray, strip, hidden twin | S8 test suite passes; NVDA smoke test; 44px targets. |
 | 5 | Home, inbox, add | remaining screens, drag-reorder, rotate/replace page | Feature list in `README.md` screens table complete. **In progress**: inbox and Home (list, open, create, rename, duplicate, delete) are in. Zip and folder import and Download zip are in. Not done: Home's folder card states (needs a decision, see below), old-session import; drag-reorder of pages at the assignment level; the Add screen's drop, paste and photo preview. The Add staging screen (choose, name reading, chooser, commit) and Assignment settings entry are in. |
 | 6 | Dialogs | settings, assignment settings, export, topics | Same fields as today; export parity. **Done** (Settings, Assignment settings, Export, Subjects and words). |
-| 7 | Polish + parity | fonts bundled, dark theme, reduced motion, contrast audit | Side-by-side walkthrough vs JS app with no feature gaps. |
+| 7 | Polish + parity | fonts bundled, dark theme, reduced motion, contrast audit | Side-by-side walkthrough vs JS app with no feature gaps. **In progress**: a token-level contrast test (4.5:1 for text pairs, both themes and both high-contrast variants) is in; placeholder text in the dark theme was 3.7:1 and now uses `muted`. Not done: reduced motion, the side-by-side walkthrough. |
 | 8 | Cutover | deploy web build to the existing route, ship desktop installers | JS app kept on a `/legacy` path for one release. |
 
 Rough order of risk: phase 4 first (earliest real validation of the UI), then 2 (data loss is the worst failure).

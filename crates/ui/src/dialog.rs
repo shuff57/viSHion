@@ -299,10 +299,10 @@ pub fn show(ctx: &egui::Context, ctl: &mut Ctl, t: &Tokens, s: &Session, d: &mut
 
 type Drafts = std::collections::BTreeMap<&'static str, String>;
 
-fn text_box(ctl: &mut Ctl, ui: &mut Ui, id: &'static str, name: &str, hint: &str, cur: String, drafts: &mut Drafts, secret: bool, w: f32) {
+fn text_box(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, id: &'static str, name: &str, hint: &str, cur: String, drafts: &mut Drafts, secret: bool, w: f32) {
     let buf = drafts.entry(id).or_insert(cur);
     let (slot, _) = ui.allocate_exact_size(vec2(w, TARGET), Sense::hover());
-    let edit = egui::TextEdit::singleline(buf).hint_text(hint).password(secret).font(theme::sans(14.0)).margin(vec2(12.0, 13.0)).desired_width(slot.width() - 24.0);
+    let edit = egui::TextEdit::singleline(buf).hint_text(egui::RichText::new(hint).font(theme::sans(14.0)).color(t.placeholder())).password(secret).font(theme::sans(14.0)).margin(vec2(12.0, 13.0)).desired_width(slot.width() - 24.0);
     let mut r = ui.put(slot, edit);
     r.rect = slot;
     if let Some(v) = ctl.reg_text(ui, &r, C::new(id, name, DIALOG), buf) {
@@ -598,10 +598,10 @@ fn topics(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, s: &Session, cur: &str, drafts
             }
             ui.add_space(14.0);
             field_label(ctl, ui, t, iw, "tp-desc-label", "Description");
-            text_box(ctl, ui, "tp-desc", "Description", "", desc, drafts, false, iw);
+            text_box(ctl, ui, t, "tp-desc", "Description", "", desc, drafts, false, iw);
             ui.add_space(14.0);
             field_label(ctl, ui, t, iw, "tp-terms-label", "Words students use in this subject");
-            text_area(ctl, ui, "tp-terms", "Words students use in this subject", "", terms, drafts, 9, iw);
+            text_area(ctl, ui, t, "tp-terms", "Words students use in this subject", "", terms, drafts, 9, iw);
             ui.add_space(6.0);
             hint_p(ctl, ui, t, iw, "tp-terms-hint", "One word or phrase per line, or separated by commas. These are added to the model\u{2019}s instructions, and used to suggest corrections after a page is read.");
             if let Some(name) = new_name.as_mut() {
@@ -814,11 +814,11 @@ fn export(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, s: &Session, scope: &'static s
 }
 
 /// A `<textarea rows=N>`.
-fn text_area(ctl: &mut Ctl, ui: &mut Ui, id: &'static str, name: &str, hint: &str, cur: String, drafts: &mut Drafts, rows: usize, w: f32) {
+fn text_area(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, id: &'static str, name: &str, hint: &str, cur: String, drafts: &mut Drafts, rows: usize, w: f32) {
     let buf = drafts.entry(id).or_insert(cur);
     let h = rows as f32 * 22.0 + 26.0;
     let (slot, _) = ui.allocate_exact_size(vec2(w, h), Sense::hover());
-    let edit = egui::TextEdit::multiline(buf).hint_text(hint).font(theme::sans(14.0)).margin(vec2(12.0, 13.0)).desired_width(slot.width() - 24.0).desired_rows(rows);
+    let edit = egui::TextEdit::multiline(buf).hint_text(egui::RichText::new(hint).font(theme::sans(14.0)).color(t.placeholder())).font(theme::sans(14.0)).margin(vec2(12.0, 13.0)).desired_width(slot.width() - 24.0).desired_rows(rows);
     let mut r = ui.put(slot, edit);
     r.rect = slot;
     if let Some(v) = ctl.reg_text(ui, &r, C::new(id, name, DIALOG), buf) {
@@ -846,7 +846,7 @@ fn assignment(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, s: &Session, drafts: &mut 
             let iw = w - 56.0;
             ui.set_width(iw);
             field_label(ctl, ui, t, iw, "as-name-label", "Assignment name");
-            text_box(ctl, ui, "as-name", "Assignment name", "", s.a.meta.name().to_string(), drafts, false, iw);
+            text_box(ctl, ui, t, "as-name", "Assignment name", "", s.a.meta.name().to_string(), drafts, false, iw);
             ui.add_space(14.0);
 
             let topics: Vec<(String, String)> = s
@@ -868,7 +868,7 @@ fn assignment(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, s: &Session, drafts: &mut 
             ui.add_space(14.0);
 
             field_label(ctl, ui, t, iw, "as-prompt-label", "Instructions for the model");
-            text_area(ctl, ui, "as-prompt", "Instructions for the model", "Leave this empty to use the standard instructions.", s.a.meta.prompt().to_string(), drafts, 9, iw);
+            text_area(ctl, ui, t, "as-prompt", "Instructions for the model", "Leave this empty to use the standard instructions.", s.a.meta.prompt().to_string(), drafts, 9, iw);
             ui.add_space(6.0);
             let typed = drafts.get("as-prompt").cloned().unwrap_or_else(|| s.a.meta.prompt().to_string());
             let state = if typed.trim().is_empty() { "Using the standard instructions." } else { "Using your instructions." };
@@ -958,12 +958,12 @@ fn settings(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, s: &Session, drafts: &mut Dr
             ui.add_space(14.0);
             field_label(ctl, ui, t, iw, "st-ocr-label", "Server address");
             let shown = shown_url(pid.0, &setting_str(s, "ocrUrl", ""));
-            text_box(ctl, ui, "st-ocr", "Server address", if pid.0 == "custom" { "https://example.com" } else { "" }, shown, drafts, false, iw);
+            text_box(ctl, ui, t, "st-ocr", "Server address", if pid.0 == "custom" { "https://example.com" } else { "" }, shown, drafts, false, iw);
             ui.add_space(6.0);
             hint_p(ctl, ui, t, iw, "st-ocr-hint", "A local llama.cpp or Ollama server, or the endpoint\u{2019}s base address.");
             ui.add_space(14.0);
             field_label(ctl, ui, t, iw, "st-key-label", "API key");
-            text_box(ctl, ui, "st-key", "API key", "", setting_str(s, "apiKey", ""), drafts, true, iw);
+            text_box(ctl, ui, t, "st-key", "API key", "", setting_str(s, "apiKey", ""), drafts, true, iw);
             ui.add_space(14.0);
             let key_hint = match pid.0 {
                 "ollama-cloud" => "Create one at ollama.com/settings/keys. Requests go through tools/relay.js on this computer (run it once: node tools/relay.js). Kept in this browser only.",
@@ -994,20 +994,20 @@ fn settings(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, s: &Session, drafts: &mut Dr
             hint_p(ctl, ui, t, iw, "st-model-hint", "Choose which model reads the pages. A local server swaps it in when you pick another.");
             if *custom {
                 ui.add_space(14.0);
-                text_box(ctl, ui, "st-model-custom", "Model name", "Model name", cur_model.clone(), drafts, false, iw);
+                text_box(ctl, ui, t, "st-model-custom", "Model name", "Model name", cur_model.clone(), drafts, false, iw);
             }
             if !cloud {
                 ui.add_space(14.0);
                 field_label(ctl, ui, t, iw, "st-idle-label", "Unload the model after it has been idle for (minutes)");
                 let idle = s.settings.get("idleUnloadMin").and_then(|v| v.as_f64()).unwrap_or(10.0);
-                text_box(ctl, ui, "st-idle", "Unload the model after it has been idle for (minutes)", "", format!("{idle}"), drafts, false, 140.0);
+                text_box(ctl, ui, t, "st-idle", "Unload the model after it has been idle for (minutes)", "", format!("{idle}"), drafts, false, 140.0);
                 ui.add_space(6.0);
                 hint_p(ctl, ui, t, iw, "st-idle-hint", "Frees your graphics memory when you stop. 0 keeps it loaded. This only runs while this page is open.");
             }
             ui.add_space(14.0);
             field_label(ctl, ui, t, iw, "st-timeout-label", "Give up on a page after (seconds)");
             let secs = s.settings.get("timeoutSec").and_then(|v| v.as_f64()).unwrap_or(180.0);
-            text_box(ctl, ui, "st-timeout", "Give up on a page after (seconds)", "180", format!("{secs}"), drafts, false, iw);
+            text_box(ctl, ui, t, "st-timeout", "Give up on a page after (seconds)", "180", format!("{secs}"), drafts, false, iw);
             ui.add_space(6.0);
             hint_p(ctl, ui, t, iw, "st-timeout-hint", "A page that takes longer is marked as failed and the batch moves on.");
             ui.add_space(14.0);
@@ -1035,7 +1035,7 @@ fn settings(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, s: &Session, drafts: &mut Dr
             let topic = s.a.meta.topic().to_string();
             let name = if topic.is_empty() { "Course words".to_string() } else { format!("Course words for {topic}") };
             field_label(ctl, ui, t, iw, "st-words-label", &name);
-            text_box(ctl, ui, "st-words", &name, "derivative, integral", s.settings.terms(&topic).join(", "), drafts, false, iw);
+            text_box(ctl, ui, t, "st-words", &name, "derivative, integral", s.settings.terms(&topic).join(", "), drafts, false, iw);
             ui.add_space(6.0);
             hint_p(ctl, ui, t, iw, "st-words-hint", "Separate words with commas. Used to catch course words that get misread.");
             section_end(ui, t, iw);
@@ -1249,7 +1249,7 @@ fn change_student(
             ctl.text("cs-name-label", "New student name", DIALOG, r);
             ui.add_space(6.0);
             let (slot, _) = ui.allocate_exact_size(vec2(iw, TARGET), Sense::hover());
-            let edit = egui::TextEdit::singleline(name).hint_text("Student name").font(theme::sans(14.0)).margin(vec2(12.0, 13.0)).desired_width(slot.width() - 24.0);
+            let edit = egui::TextEdit::singleline(name).hint_text(egui::RichText::new("Student name").font(theme::sans(14.0)).color(t.placeholder())).font(theme::sans(14.0)).margin(vec2(12.0, 13.0)).desired_width(slot.width() - 24.0);
             let mut r = ui.put(slot, edit);
             r.rect = slot;
             // egui's single-line box gives focus up on Enter; a js input keeps it, so the person (and a screen
