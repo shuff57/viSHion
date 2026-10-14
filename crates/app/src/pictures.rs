@@ -18,6 +18,12 @@ fn encode(im: &DynamicImage) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
+/// A camera frame (RGBA, `w` x `h`) as a full-size JPEG: what the shutter keeps.
+pub fn from_rgba(w: u32, h: u32, rgba: &[u8]) -> Result<Vec<u8>, String> {
+    let im = image::RgbaImage::from_raw(w, h, rgba.to_vec()).ok_or_else(|| "The camera frame is the wrong size.".to_string())?;
+    encode(&DynamicImage::ImageRgba8(im))
+}
+
 /// Decode a picked file and re-encode it as the JPEG the assignment stores.
 pub fn prepare(bytes: &[u8]) -> Result<Vec<u8>, String> {
     if bytes.len() > MAX_BYTES {

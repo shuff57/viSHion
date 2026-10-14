@@ -66,6 +66,12 @@ pub enum Cmd {
     StagePictures { conn: Conn, read_names: bool, preset: Option<String> },
     /// Stage pictures that were dropped on the window (name, bytes), as `StagePictures` stages the picked ones.
     StageFiles { files: Vec<(String, Vec<u8>)>, conn: Conn, read_names: bool, preset: Option<String> },
+    /// Web: open the camera and send `Event::CameraFrame`s until `CameraStop`.
+    CameraStart,
+    CameraStop,
+    /// The shutter: keep this frame (RGBA, `w` x `h`) as a staged picture named `name`; answered by
+    /// `Event::Staged` like a picked file.
+    CaptureShot { name: String, w: u32, h: u32, rgba: Vec<u8>, conn: Conn, read_names: bool, preset: Option<String> },
     /// Save the staged pictures as new pages: `Event::PagesAdded`.
     CommitStaged { slug: String, items: Vec<StagedItem> },
     /// Ask for a project zip and import it as a new assignment: `Event::Opened`.
@@ -142,6 +148,10 @@ pub enum Event {
     LegacyAvailable(bool),
     /// Where assignments are saved (web): `mode` is `none` | `folder` | `idb`, `permission` `granted` | `prompt`.
     Folder(FolderInfo),
+    /// A frame of the camera (RGBA).
+    CameraFrame { w: u32, h: u32, rgba: Vec<u8> },
+    /// The camera could not be opened (the person said no, or there is none).
+    CameraError(String),
     /// One picture is ready to stage. `names_down`: the name reader could not reach the server.
     Staged { item: StagedItem, names_down: bool },
     /// Files that cannot be added, with the reason each.

@@ -102,6 +102,10 @@ pub(crate) enum Act {
     OpenExport,
     OpenAdd(Option<String>),
     AddChoose,
+    OpenCapture,
+    CaptureShot,
+    CaptureAuto(bool),
+    CaptureClose,
     AddDropped(Vec<(String, Vec<u8>)>),
     AddRemove(u64),
     AddPick(u64),
@@ -140,6 +144,7 @@ struct Cx<'a> {
     screen_h: f32,
     stage: &'a mut Stage,
     emoji: &'a mut emoji::EmojiCache,
+    camera: Option<&'a egui::TextureHandle>,
     /// Page pictures a row asks for (visible thumbnails): loaded by the host, answered as `Event::Image`.
     want: &'a mut Vec<String>,
     /// Keep the reading line in view this frame.
@@ -218,7 +223,7 @@ fn tw(ui: &Ui, text: &str, font: egui::FontId) -> f32 {
 }
 
 pub(crate) fn show(app: &mut App, ctx: &egui::Context, t: &Tokens) {
-    let App { home, ctl, session, math, images, typed, typed_for, status_msg, status_err, boot, notice, save, storage, dialog, stage, host, want, emoji: emoji_cache, .. } = app;
+    let App { cam_tex, home, ctl, session, math, images, typed, typed_for, status_msg, status_err, boot, notice, save, storage, dialog, stage, host, want, emoji: emoji_cache, .. } = app;
     let mut acts: Vec<Act> = vec![];
     if let Some(s) = session.as_mut() {
         // js renderWho: Original cannot stay set where both versions read the same
@@ -269,10 +274,11 @@ pub(crate) fn show(app: &mut App, ctx: &egui::Context, t: &Tokens) {
                 stage: &mut *stage,
                 want: &mut *want,
                 emoji: &mut *emoji_cache,
+                camera: cam_tex.as_ref(),
                 scroll_read: false,
             };
             // `.topbar`: padding 8 and a 1px border at the bottom only, `gap: 4px 24px`, min-height 64
-            if !short {
+            if !short && s.view != View::Capture {
                 let hdr = egui::TopBottomPanel::top("hdr")
                     .min_height(64.0)
                     .show_separator_line(false)
@@ -305,6 +311,7 @@ pub(crate) fn show(app: &mut App, ctx: &egui::Context, t: &Tokens) {
             match s.view {
                 View::Inbox => inbox(ctx, &mut cx, s),
                 View::Add => add_view(ctx, &mut cx, s),
+                View::Capture => capture_view(ctx, &mut cx, s),
                 View::Review => review(ctx, &mut cx, s, narrow),
             }
             if let Some(m) = status_msg.as_ref() {
@@ -783,6 +790,25 @@ fn apply(
             s.add = state::AddState { preset, ..Default::default() };
             s.view = View::Add;
             ctl.focus_title = Some("add-title");
+        }
+        Act::OpenCapture => {
+            s.capture = state::CaptureState { auto: s.capture.auto, ..Default::default() };
+            s.view = View::Capture;
+            ctl.focus_title = Some("capture-title");
+            send(Cmd::CameraStart);
+        }
+        Act::CaptureShot => {
+            if let Some(c) = capture_shot(s) {
+                send(c);
+            }
+        }
+        Act::CaptureAuto(on) => {
+            s.capture.auto = on;
+            s.capture.steady.reset();
+        }
+        Act::CaptureClose => {
+            send(Cmd::CameraStop);
+            s.view = View::Add;
         }
         Act::AddChoose => {
             s.add.working = true;
@@ -1375,6 +1401,126 @@ fn inbox(ctx: &egui::Context, cx: &mut Cx, s: &Session) {
     });
 }
 
+/// The shutter: the current frame as a `CaptureShot` command, counted and named. `None` before the first frame.
+pub(crate) fn capture_shot(s: &mut Session) -> Option<Cmd> {
+    let (w, h, rgba) = s.capture.frame.clone()?;
+    s.capture.shots += 1;
+    s.capture.cooldown = 20;
+    s.capture.steady.reset();
+    s.add.working = true;
+    let read_names = s.settings.get("readNames").and_then(|v| v.as_bool()) != Some(false);
+    Some(Cmd::CaptureShot {
+        name: format!("Photo {}.jpg", s.add.seq + s.add.rows.len() as u64 + 1),
+        w,
+        h,
+        rgba,
+        conn: s.read_conn(),
+        read_names,
+        preset: s.add.preset.clone(),
+    })
+}
+
+/// `design/Phone.dc.html`: close, the title, Done; the viewfinder with the page frame and a pill; and the
+/// thumbnail with its count, the shutter and the auto toggle.
+fn capture_view(ctx: &egui::Context, cx: &mut Cx, s: &Session) {
+    let t = cx.t;
+    let bg = Color32::from_rgb(0x12, 0x16, 0x1F);
+    let yellow = Color32::from_rgb(0xFF, 0xE2, 0x7A);
+    let white = Color32::WHITE;
+    egui::CentralPanel::default().frame(egui::Frame::none().fill(bg)).show(ctx, |ui| {
+        ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
+        let full = ui.available_rect_before_wrap();
+        // top bar, 64 high
+        let bar = Rect::from_min_size(full.min, vec2(full.width(), 64.0));
+        let title = if s.a.meta.name().is_empty() { "Capture" } else { s.a.meta.name() };
+        let g = ui.painter().layout_no_wrap(title.to_string(), theme::sans_semi(16.0), white);
+        ui.painter().galley(pos2(bar.center().x - g.size().x.min(bar.width() - 200.0) / 2.0, bar.center().y - g.size().y / 2.0), g.clone(), white);
+        cx.ctl.heading("capture-title", 1, title, TEXT, Rect::from_center_size(bar.center(), g.size()));
+        let mut cui = ui.child_ui(Rect::from_min_size(bar.min + vec2(8.0, 10.0), vec2(TARGET, TARGET)), Layout::top_down(Align::Min), None);
+        if widgets::icon_button(cx.ctl, &mut cui, t, C::new("capture-close", "Close camera", TEXT), Icon::Close, false) {
+            cx.acts.push(Act::CaptureClose);
+        }
+        let done_w = tw(ui, "Done", theme::sans_semi(14.0)) + 28.0;
+        let mut dui = ui.child_ui(Rect::from_min_size(pos2(bar.right() - 8.0 - done_w, bar.top() + 10.0), vec2(done_w, TARGET)), Layout::top_down(Align::Min), None);
+        if widgets::button(cx.ctl, &mut dui, t, C::new("capture-done", "Done", TEXT), "Done", Look::Ghost, done_w) {
+            cx.acts.push(Act::CaptureClose);
+        }
+
+        // viewfinder
+        let foot_h = 148.0;
+        let view = Rect::from_min_max(pos2(full.left(), bar.bottom()), pos2(full.right(), full.bottom() - foot_h));
+        ui.painter().rect_filled(view, 0.0, Color32::from_rgb(0x17, 0x1C, 0x27));
+        let (msg, ok) = match (&s.capture.error, s.capture.found) {
+            (Some(e), _) => (e.clone(), false),
+            (None, Some(_)) => ("Page found. Hold steady.".to_string(), true),
+            (None, None) => ("Looking for the page\u{2026}".to_string(), false),
+        };
+        if let (Some(tex), Some((fw, fh, _))) = (cx.camera, s.capture.frame.as_ref()) {
+            // contain: the whole frame, centred
+            let k = (view.width() / *fw as f32).min(view.height() / *fh as f32);
+            let size = vec2(*fw as f32 * k, *fh as f32 * k);
+            let img = Rect::from_center_size(view.center(), size);
+            ui.painter().image(tex.id(), img, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+            if let Some(f) = s.capture.found {
+                let r = Rect::from_min_max(pos2(img.left() + f.x0 * size.x, img.top() + f.y0 * size.y), pos2(img.left() + f.x1 * size.x, img.top() + f.y1 * size.y));
+                ui.painter().rect_stroke(r.expand(6.0), 6.0, Stroke::new(3.0, yellow));
+                for c in [r.left_top(), r.right_top(), r.left_bottom(), r.right_bottom()] {
+                    let h = Rect::from_center_size(c, vec2(14.0, 14.0));
+                    ui.painter().rect_filled(h, 3.0, yellow);
+                    ui.painter().rect_stroke(h, 3.0, Stroke::new(2.0, bg));
+                }
+            }
+        }
+        let pill = ui.painter().layout_no_wrap(msg.clone(), theme::sans_semi(14.0), if ok { yellow } else { white });
+        let pr = Rect::from_center_size(pos2(view.center().x, view.top() + 12.0 + (pill.size().y + 16.0) / 2.0), vec2(pill.size().x + 32.0, pill.size().y + 16.0));
+        ui.painter().rect_filled(pr, 999.0, Color32::from_rgba_unmultiplied(20, 27, 45, 199));
+        ui.painter().galley(pr.center() - pill.size() / 2.0, pill, if ok { yellow } else { white });
+        cx.ctl.status("capture-status", &msg, TEXT, pr);
+
+        // footer: thumbnail count, shutter, auto
+        let foot = Rect::from_min_size(pos2(full.left(), full.bottom() - foot_h), vec2(full.width(), foot_h));
+        let cy = foot.center().y;
+        let n = s.capture.shots;
+        let review_label = if n == 0 { "No photos yet".to_string() } else { format!("Review {} captured {}", n, if n == 1 { "page" } else { "pages" }) };
+        let thumb = Rect::from_center_size(pos2(foot.left() + 24.0 + 26.0, cy), vec2(52.0, 64.0));
+        ui.painter().rect_filled(thumb, 4.0, Color32::from_rgb(0xFC, 0xFC, 0xF8));
+        ui.painter().rect_stroke(thumb, 4.0, Stroke::new(2.0, white));
+        if n > 0 {
+            let badge = Rect::from_center_size(thumb.right_top() + vec2(0.0, 0.0), vec2(24.0, 24.0));
+            ui.painter().circle_filled(badge.center(), 12.0, yellow);
+            let g = ui.painter().layout_no_wrap(n.to_string(), theme::sans_semi(13.0), Color32::from_rgb(0x14, 0x1B, 0x2D));
+            ui.painter().galley(badge.center() - g.size() / 2.0, g, Color32::from_rgb(0x14, 0x1B, 0x2D));
+        }
+        let hit = Rect::from_center_size(thumb.center(), vec2(thumb.width().max(TARGET), thumb.height().max(TARGET)));
+        let tr = ui.interact(hit, ui.id().with("capture-thumb"), Sense::click());
+        if cx.ctl.reg(ui, &tr, C::new("capture-review", &review_label, TEXT).disabled(n == 0)) && n > 0 {
+            cx.acts.push(Act::CaptureClose);
+        }
+        // shutter
+        let sc = pos2(foot.center().x, cy);
+        let sr = Rect::from_center_size(sc, vec2(76.0, 76.0));
+        let shr = ui.interact(sr, ui.id().with("capture-shutter"), Sense::click());
+        ui.painter().circle_stroke(sc, 36.0, Stroke::new(4.0, white));
+        ui.painter().circle_filled(sc, 29.0, if shr.hovered() { yellow } else { white });
+        if cx.ctl.reg(ui, &shr, C::new("capture-shutter", "Take photo", TEXT).disabled(s.capture.frame.is_none())) {
+            cx.acts.push(Act::CaptureShot);
+        }
+        // auto
+        let auto = s.capture.auto;
+        let label = if auto { "Auto: on" } else { "Auto: off" };
+        let w = tw(ui, label, theme::sans_semi(14.0)) + 36.0;
+        let ar = Rect::from_center_size(pos2(foot.right() - 24.0 - w / 2.0, cy), vec2(w, TARGET));
+        let air = ui.interact(ar, ui.id().with("capture-auto"), Sense::click());
+        let col = if auto { yellow } else { white };
+        ui.painter().rect_stroke(ar, 999.0, Stroke::new(2.0, col));
+        let g = ui.painter().layout_no_wrap(label.to_string(), theme::sans_semi(14.0), col);
+        ui.painter().galley(ar.center() - g.size() / 2.0, g, col);
+        if cx.ctl.reg(ui, &air, C::new("capture-auto", label, TEXT).pressed(auto)) {
+            cx.acts.push(Act::CaptureAuto(!auto));
+        }
+    });
+}
+
 /// js/ui/add.js `render`: choose files, the staged pages with the student each belongs to, the subject, and the
 /// button that saves and starts the run.
 fn add_view(ctx: &egui::Context, cx: &mut Cx, s: &Session) {
@@ -1462,6 +1608,12 @@ fn add_body(ui: &mut Ui, cx: &mut Cx, s: &Session) {
         let label = if busy { "Getting pages ready\u{2026}" } else { "Choose files" };
         if widgets::button(cx.ctl, ui, t, C::new("add-choose", label, TEXT).disabled(busy), label, Look::Primary, 0.0) {
             cx.acts.push(Act::AddChoose);
+        }
+        if cx.ctl.camera_ok {
+            ui.add_space(8.0);
+            if widgets::button(cx.ctl, ui, t, C::new("add-camera", "Use the camera", TEXT).disabled(busy), "Use the camera", Look::Outline, 0.0) {
+                cx.acts.push(Act::OpenCapture);
+            }
         }
         ui.add_space(12.0);
         let tip = "iPhone photos: in Settings, Camera, Formats, choose Most Compatible so pages save as JPG.";

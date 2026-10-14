@@ -141,6 +141,8 @@ pub struct Ctl {
     pub(crate) dialog_was: bool,
     /// The person asked for the home screen (the wordmark); the app shell takes it after the frame.
     pub(crate) want_home: bool,
+    /// This host has a camera to offer (the web build; tests switch it on).
+    pub(crate) camera_ok: bool,
     /// The dialog a confirmation is stacked on (Settings under "Clear remembered fixes", as modal.js stacks
     /// them) and the control that gets focus back when the confirmation closes.
     pub(crate) under: Option<(crate::dialog::Dialog, &'static str)>,
@@ -806,6 +808,8 @@ pub struct App {
     want: Vec<String>,
     /// Colour emoji: the face (linked in natively, fetched on the web) and the pictures drawn from it.
     emoji: emoji::EmojiCache,
+    /// The camera's latest frame as a texture (the Capture view).
+    cam_tex: Option<egui::TextureHandle>,
     emoji_requested: bool,
     /// Bumped when a picture or a font arrives: the page may have moved under the selected word.
     layout_epoch: u32,
@@ -861,7 +865,7 @@ impl App {
         let mut app = App {
             ctx,
             queue,
-            ctl: Ctl { dom_text: cfg!(target_arch = "wasm32"), ..Ctl::default() },
+            ctl: Ctl { dom_text: cfg!(target_arch = "wasm32"), camera_ok: cfg!(target_arch = "wasm32"), ..Ctl::default() },
             last_nodes: vec![],
             last_chrome: HashMap::new(),
             last_screen: (0.0, 0.0),
@@ -903,6 +907,7 @@ impl App {
             dialog: None,
             stage: review::Stage::default(),
             want: vec![],
+            cam_tex: None,
             emoji: {
                 let mut c = emoji::EmojiCache::default();
                 if let Some(b) = theme::bundled_emoji() {
@@ -1025,6 +1030,13 @@ impl App {
     #[doc(hidden)]
     pub fn twin_act(&self, id: &str) {
         self.queue.lock().unwrap().push(format!("act:{id}"));
+    }
+
+    /// Offer (or hide) the camera on the Add screen.
+    #[doc(hidden)]
+    pub fn camera(mut self, on: bool) -> Self {
+        self.ctl.camera_ok = on;
+        self
     }
 
     #[doc(hidden)]
@@ -1190,6 +1202,41 @@ impl App {
                         self.images.insert(format!("staged-{key}"), slot);
                         s.add.names_down |= names_down;
                         s.add.rows.push(state::StagedRow { key, item, picking: false, draft: String::new() });
+                    }
+                }
+                Event::CameraFrame { w, h, rgba } => {
+                    if rgba.len() == (w * h * 4) as usize {
+                        let ci = egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], &rgba);
+                        self.cam_tex = Some(self.ctx.load_texture("camera", ci, egui::TextureOptions::LINEAR));
+                    }
+                    let mut shot = None;
+                    if let Some(s) = &mut self.session {
+                        if s.view == state::View::Capture && rgba.len() == (w * h * 4) as usize {
+                            let found = vishion_core::capture::detect_page(&rgba, w as usize, h as usize);
+                            let c = &mut s.capture;
+                            c.error = None;
+                            c.found = found;
+                            c.frame = Some((w, h, rgba));
+                            if c.cooldown > 0 {
+                                // just after a shot: the same page must not be taken twice, and counting starts over
+                                c.cooldown -= 1;
+                                c.steady.reset();
+                            } else if c.steady.feed(found) && c.auto {
+                                shot = Some(());
+                            }
+                        }
+                    }
+                    if shot.is_some() {
+                        if let Some(s) = &mut self.session {
+                            if let Some(cmd) = review::capture_shot(s) {
+                                self.send(cmd);
+                            }
+                        }
+                    }
+                }
+                Event::CameraError(m) => {
+                    if let Some(s) = &mut self.session {
+                        s.capture.error = Some(m);
                     }
                 }
                 Event::Skipped(list) => {

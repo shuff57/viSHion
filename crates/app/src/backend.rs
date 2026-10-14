@@ -697,6 +697,17 @@ impl Backend {
                 self.stage_pictures(&conn, read_names, preset.as_deref(), &|e| out.borrow_mut().push(e)).await;
                 Event::Many(out.into_inner())
             }
+            // the camera is the browser's: the web executor answers, a native host says so
+            Cmd::CameraStart => Event::CameraError("The camera is available in the browser build.".into()),
+            Cmd::CameraStop => Event::Many(vec![]),
+            Cmd::CaptureShot { name, w, h, rgba, conn, read_names, preset } => match pictures::from_rgba(w, h, &rgba) {
+                Ok(jpg) => {
+                    let out = std::cell::RefCell::new(vec![]);
+                    self.stage_files(vec![Picked { name, bytes: jpg }], &conn, read_names, preset.as_deref(), &|e| out.borrow_mut().push(e)).await;
+                    Event::Many(out.into_inner())
+                }
+                Err(m) => Event::Notice { text: m, error: true },
+            },
             Cmd::StageFiles { files, conn, read_names, preset } => {
                 let out = std::cell::RefCell::new(vec![]);
                 let files = files.into_iter().map(|(name, bytes)| Picked { name, bytes }).collect();

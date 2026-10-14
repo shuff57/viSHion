@@ -35,6 +35,8 @@ js-sys = "0.3"
 web-sys = { version = "0.3", features = [
   "Window", "Location", "Document", "Element", "HtmlElement", "HtmlInputElement", "FileList", "File", "Blob",
   "Event", "EventTarget", "Response", "Headers",
+  "Navigator", "MediaDevices", "MediaStream", "MediaStreamTrack", "MediaStreamConstraints", "HtmlVideoElement",
+  "HtmlMediaElement", "HtmlCanvasElement", "CanvasRenderingContext2d", "ImageData",
 ] }
 log = "0.4"
 

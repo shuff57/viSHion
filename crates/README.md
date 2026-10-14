@@ -74,6 +74,16 @@ node check-assetsignore.mjs
 
 Windows default Chrome path is `C:/Program Files/Google/Chrome/Application/chrome.exe`; Linux `/usr/bin/google-chrome`.
 
+## Capture on phone (Phase 9b)
+
+`View::Capture` is `design/Phone.dc.html`: the Add screen's "Use the camera" (web only) opens the viewfinder.
+The browser side (`app::camera`) sends `Event::CameraFrame`s (RGBA, at most 960 wide, about 6 a second); the
+page is found by `core::capture::detect_page` (a bright, even region covering a quarter of the frame or
+more), and `Steady` fires auto-capture after the page holds still for 12 frames. The shutter (or auto) sends
+`Cmd::CaptureShot`, which stages the frame like a picked file (name reading included); Done returns to the
+Add screen with the photos in the list. The page detector is a heuristic, not a corner finder: it frames the
+bright region's box and does not straighten (the staging step's Straighten still applies).
+
 ## Opening the web build
 
 The web build is a wasm module and needs a web server: it does not run from a `file://` page, so opening

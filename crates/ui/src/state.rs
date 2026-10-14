@@ -154,6 +154,24 @@ pub enum View {
     Inbox,
     /// js/ui/add.js: the staging step in front of adding pages.
     Add,
+    /// `design/Phone.dc.html`: the camera.
+    Capture,
+}
+
+/// The camera screen's state.
+#[derive(Debug, Default)]
+pub struct CaptureState {
+    /// The latest frame, kept for the shutter.
+    pub frame: Option<(u32, u32, Vec<u8>)>,
+    pub found: Option<vishion_core::capture::Found>,
+    pub steady: vishion_core::capture::Steady,
+    /// Take the photo by itself once the page holds still.
+    pub auto: bool,
+    /// Photos taken in this visit.
+    pub shots: usize,
+    pub error: Option<String>,
+    /// Frames to ignore after a shot, so one page is not taken twice.
+    pub cooldown: u32,
 }
 
 /// One picture waiting in the Add screen.
@@ -200,6 +218,7 @@ pub struct Session {
     pub now: i64,
     pub view: View,
     pub add: AddState,
+    pub capture: CaptureState,
     /// `S.d.textView === 'raw'`: the transcript as plain monospace text.
     pub text_raw: bool,
     /// Zoom of the page pane, one of `ZOOMS`.
@@ -268,6 +287,7 @@ impl Session {
             now,
             view: View::Review,
             add: AddState::default(),
+            capture: CaptureState { auto: true, ..Default::default() },
             text_raw: false,
             zoom: 1.0,
             multi: BTreeSet::new(),

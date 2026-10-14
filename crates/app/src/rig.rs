@@ -36,7 +36,7 @@ impl Rig {
             }
             i2.push(block_on(b2.handle(c, 1_700_000_000_000)));
         });
-        let app = App::new(ctx.clone()).with_host(dispatch, inbox.clone()).theme("light");
+        let app = App::new(ctx.clone()).with_host(dispatch, inbox.clone()).theme("light").camera(true);
         inbox.push(block_on(be.open(None, 1_700_000_000_000)));
         let mut r = Rig { app, ctx, out: Default::default(), t: 0.0, size: (w, h), be, slug, inbox: inbox.clone() };
         r.frames(8);
@@ -558,8 +558,55 @@ mod tests {
         check(&r, "add, staged", &mut bad);
         r.act(&format!("staged-change-{k}"));
         check(&r, "add, choosing a student", &mut bad);
+        r.act("add-camera");
+        check(&r, "camera", &mut bad);
+        r.act("capture-close");
         r.act("brand");
         check(&r, "home", &mut bad);
         assert!(bad.is_empty(), "{bad:#?}");
+    }
+
+    /// Capture on phone: frames with a page are recognised, the shutter keeps one, auto-capture takes the next
+    /// once the page holds still, and Done returns to the Add screen with the photos staged.
+    #[test]
+    fn camera_screen_finds_the_page_and_takes_photos() {
+        use vishion_ui::Event;
+        fn page_frame(w: usize, h: usize) -> Vec<u8> {
+            let mut v = vec![0u8; w * h * 4];
+            for y in 0..h {
+                for x in 0..w {
+                    let on = x > w / 5 && x < w * 4 / 5 && y > h / 10 && y < h * 9 / 10;
+                    let l = if on { 235 } else { 40 };
+                    let i = (y * w + x) * 4;
+                    v[i..i + 4].copy_from_slice(&[l, l, l, 255]);
+                }
+            }
+            v
+        }
+        let mut r = Rig::demo();
+        r.act("crumb");
+        r.act("add-pages");
+        r.act("add-camera");
+        assert!(r.has("capture-shutter") && r.has("capture-auto"));
+        assert!(r.app.session().unwrap().capture.error.is_some(), "native has no camera, and says so");
+        // the shutter has nothing to keep before the first frame
+        r.inbox.push(Event::CameraFrame { w: 320, h: 240, rgba: page_frame(320, 240) });
+        r.frames(3);
+        assert!(r.app.session().unwrap().capture.found.is_some());
+        assert!(r.app.session().unwrap().capture.error.is_none());
+        r.act("capture-shutter");
+        assert_eq!(r.app.session().unwrap().capture.shots, 1);
+        assert_eq!(r.app.session().unwrap().add.rows.len(), 1);
+        // auto: the page holds still for a while (after the shutter's cool-down)
+        for _ in 0..40 {
+            r.inbox.push(Event::CameraFrame { w: 320, h: 240, rgba: page_frame(320, 240) });
+        }
+        r.frames(4);
+        let s = r.app.session().unwrap();
+        assert_eq!(s.capture.shots, 2, "auto-capture took one more photo");
+        assert_eq!(s.add.rows.len(), 2);
+        r.act("capture-done");
+        assert_eq!(r.app.session().unwrap().view, vishion_ui::state::View::Add);
+        assert!(r.has("add-commit"));
     }
 }

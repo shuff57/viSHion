@@ -4,6 +4,8 @@
 //! UI's commands against it.
 
 pub mod backend;
+#[cfg(target_arch = "wasm32")]
+mod camera;
 pub mod demo;
 pub mod pictures;
 #[cfg(all(test, not(target_arch = "wasm32")))]
@@ -221,6 +223,17 @@ mod web {
                                 }
                                 // js/state.js `saveSettings`: the whole settings object, API key included, is kept in this
                                 // browser as `ocr_settings_v1`; `settings.json` (secrets stripped) is the backend's part
+                                if matches!(cmd, Cmd::CameraStop) {
+                                    crate::camera::stop();
+                                    return;
+                                }
+                                if matches!(cmd, Cmd::CameraStart) {
+                                    let frames = inbox.clone();
+                                    if let Err(m) = crate::camera::start(move |e| frames.push(e)).await {
+                                        inbox.push(Event::CameraError(m));
+                                    }
+                                    return;
+                                }
                                 if let Cmd::Folder(what) = &cmd {
                                     if let Some(msg) = folder_command(what).await {
                                         inbox.push(Event::Notice { text: msg, error: true });
