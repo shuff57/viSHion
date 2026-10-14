@@ -305,6 +305,46 @@ pub const BRAND_W: f32 = 119.0;
 /// How far the second pass of the wordmark's glyphs sits to the right of the first (see `brand`).
 pub const BRAND_EMBOLDEN: f32 = 0.45;
 
+/// How long the scan-in lasts (`lg-hand` / `lg-clean` / `lg-bar`: 1.6 s ease-in-out).
+const SCAN_SECS: f64 = 1.6;
+
+/// `ease-in-out` of the CSS keyframes (the cubic-bezier is close to this smooth-step).
+fn ease(p: f64) -> f32 {
+    let p = p.clamp(0.0, 1.0);
+    (p * p * (3.0 - 2.0 * p)) as f32
+}
+
+/// Progress of the wordmark's scan-in, `None` at rest. It plays once per page load and again whenever the
+/// pointer or the keyboard arrives (header.js `logo`, css `.brand:hover`). Reduced motion keeps it at rest.
+fn scan_progress(ui: &Ui, r: &egui::Response) -> Option<f64> {
+    if reduced_motion(ui.ctx()) {
+        return None;
+    }
+    let now = ui.input(|i| i.time);
+    let id = egui::Id::new("brand-scan");
+    let (mut start, mut played, mut was_over): (Option<f64>, bool, bool) = ui.ctx().data(|d| d.get_temp(id)).unwrap_or((None, false, false));
+    let over = r.hovered() || r.has_focus();
+    if !played {
+        start = Some(now);
+        played = true;
+    } else if over && !was_over {
+        start = Some(now);
+    }
+    was_over = over;
+    let p = start.map(|s| (now - s) / SCAN_SECS);
+    if p.is_some_and(|p| p >= 1.0) {
+        start = None;
+    }
+    ui.ctx().data_mut(|d| d.insert_temp(id, (start, played, was_over)));
+    match p {
+        Some(p) if p < 1.0 => {
+            ui.ctx().request_repaint();
+            Some(p)
+        }
+        _ => None,
+    }
+}
+
 pub fn brand(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, c: C) -> bool {
     // js/ui/header.js `logo()`: SVG text `600 64px mono`, `textLength=300 spacingAndGlyphs` in a 312 x 84 view box
     // drawn 32px high (x 0.381): glyphs are stretched to 114.3px wide, the baseline sits 24.4px under the top of
@@ -313,6 +353,7 @@ pub fn brand(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, c: C) -> bool {
     let parts = [("vi", t.ink), ("SH", t.accent), ("ion", t.ink)];
     let r = ui.allocate_response(vec2(BRAND_W, TARGET), Sense::click());
     let hover = if r.hovered() { Some(t.accent) } else { None };
+    let scan = scan_progress(ui, &r).map(ease);
     let gs: Vec<_> = parts.iter().map(|(s, col)| ui.painter().layout_no_wrap((*s).to_string(), font.clone(), hover.unwrap_or(*col))).collect();
     let natural: f32 = gs.iter().map(|g| g.size().x).sum();
     let x0 = r.rect.left() + 1.0;
@@ -328,6 +369,12 @@ pub fn brand(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, c: C) -> bool {
     let dy = baseline - bottom + 0.3;
     // the row meshes use texel UVs; the tessellator normalises them for text shapes, here it is done by hand
     let [tw, th] = ui.fonts(|f| f.font_image_size());
+    // during the scan-in the typed word is revealed from the left (`clip-path: inset(0 100% 0 0)` to `inset(0)`)
+    // and the handwriting is wiped away from the left (`inset(0)` to `inset(0 0 0 100%)`)
+    let text_w = 117.4;
+    let edge = x0 + scan.unwrap_or(1.0) * text_w;
+    let clean_clip = if scan.is_some() { Rect::from_min_max(r.rect.min, pos2(edge, r.rect.bottom())) } else { r.rect.expand(4.0) };
+    let p = ui.painter().with_clip_rect(clean_clip);
     let mut x = 0.0;
     for g in &gs {
         for row in &g.rows {
@@ -342,10 +389,39 @@ pub fn brand(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, c: C) -> bool {
             for v in &mut m2.vertices {
                 v.pos.x += BRAND_EMBOLDEN;
             }
-            ui.painter().add(egui::Shape::mesh(m));
-            ui.painter().add(egui::Shape::mesh(m2));
+            p.add(egui::Shape::mesh(m));
+            p.add(egui::Shape::mesh(m2));
         }
         x += g.size().x;
+    }
+    if let Some(e) = scan {
+        // the handwriting: Caveat 600 at 68 units, turned 3 degrees about the middle of the view box, the part
+        // to the right of the scan line
+        let unit = 32.0 / 84.0;
+        let hand = ui.painter().layout_no_wrap("viSHion".to_string(), theme::hand(68.0 * unit), t.accent);
+        let hw = hand.size().x.max(1.0);
+        let kh = (300.0 * unit) / hw;
+        let top = r.rect.center().y - 16.0;
+        let hbottom = hand.rows.first().map(|row| row.visuals.mesh.vertices.iter().map(|v| v.pos.y).fold(f32::MIN, f32::max)).unwrap_or(0.0);
+        let hdy = (top + (82.0 - 18.0) * unit) - hbottom + 0.3;
+        let hx0 = r.rect.left() + (30.0 - 24.0) * unit;
+        let pivot = pos2(r.rect.left() + (180.0 - 24.0) * unit, top + (60.0 - 18.0) * unit);
+        let (sin, cos) = (-3.0f32).to_radians().sin_cos();
+        let hand_clip = Rect::from_min_max(pos2(edge, r.rect.top()), r.rect.right_bottom() + vec2(8.0, 0.0));
+        let hp = ui.painter().with_clip_rect(hand_clip);
+        for row in &hand.rows {
+            let mut m = row.visuals.mesh.clone();
+            for v in &mut m.vertices {
+                let q = pos2(hx0 + v.pos.x * kh, v.pos.y + hdy) - pivot;
+                v.pos = pivot + vec2(q.x * cos - q.y * sin, q.x * sin + q.y * cos);
+                v.uv = pos2(v.uv.x / tw as f32, v.uv.y / th as f32);
+            }
+            hp.add(egui::Shape::mesh(m));
+        }
+        // the scan bar: 4 x 76 units, sweeping 300 units to the right, gone in the last 8% of the time
+        let fade = if e > 0.92 { 1.0 - (e - 0.92) / 0.08 } else { 1.0 };
+        let bar = Rect::from_min_size(pos2(r.rect.left() + (28.0 - 24.0) * unit + e * 300.0 * unit, top + (22.0 - 18.0) * unit), vec2(4.0 * unit, 76.0 * unit));
+        ui.painter().rect_filled(bar, 1.0, t.accent.gamma_multiply(fade));
     }
     ctl.reg(ui, &r, c)
 }

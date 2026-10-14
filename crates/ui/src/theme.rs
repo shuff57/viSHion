@@ -235,6 +235,11 @@ pub fn serif_italic(size: f32) -> FontId {
 
 pub const MONO: &str = "mono-400";
 pub const MONO_BOLD: &str = "mono-700";
+/// Caveat 600, cut to the letters of "viSHion": the handwriting that is scanned into type in the wordmark.
+pub const HAND: &str = "caveat-600";
+pub fn hand(size: f32) -> FontId {
+    FontId::new(size, named(HAND))
+}
 
 pub const FALLBACK: &str = "fallback-cjk-emoji";
 pub const MARKS: &str = "vishion-marks";
@@ -266,7 +271,7 @@ pub fn bundled_emoji() -> Option<&'static [u8]> {
 /// Latin faces do not have (CJK, Hangul, emoji: student writing is in any script).
 pub fn fonts(fallback: Option<&'static [u8]>) -> FontDefinitions {
     let mut f = FontDefinitions::empty();
-    let files: [(&str, &'static [u8]); 9] = [
+    let files: [(&str, &'static [u8]); 10] = [
         ("Instrument Sans", include_bytes!("../assets/fonts/instrument-sans-latin-400-normal.ttf")),
         (SANS_MEDIUM, include_bytes!("../assets/fonts/instrument-sans-latin-500-normal.ttf")),
         (SANS_SEMI, include_bytes!("../assets/fonts/instrument-sans-latin-600-normal.ttf")),
@@ -278,6 +283,7 @@ pub fn fonts(fallback: Option<&'static [u8]>) -> FontDefinitions {
         // check marks and ballot boxes (U+2713, 2717, 2610 to 2612): none of the text faces has them and
         // teachers write them, so the app draws its own
         (MARKS, include_bytes!("../assets/fonts/vishion-marks.ttf")),
+        (HAND, include_bytes!("../assets/fonts/caveat-600-logo.ttf")),
     ];
     for (name, bytes) in files {
         f.font_data.insert(name.to_string(), FontData::from_static(bytes));
@@ -299,6 +305,7 @@ pub fn fonts(fallback: Option<&'static [u8]>) -> FontDefinitions {
     }
     f.families.insert(FontFamily::Monospace, with(MONO));
     f.families.insert(named(MONO_BOLD), with(MONO_BOLD));
+    f.families.insert(named(HAND), vec![HAND.to_string()]);
     f
 }
 

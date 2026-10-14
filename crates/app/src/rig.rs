@@ -609,4 +609,21 @@ mod tests {
         assert_eq!(r.app.session().unwrap().view, vishion_ui::state::View::Add);
         assert!(r.has("add-commit"));
     }
+
+    /// The wordmark's scan-in (header.js `logo`): a bar sweeps across while the handwriting becomes type, once
+    /// after the page loads and again when the pointer arrives; at rest there is no bar.
+    #[test]
+    fn the_wordmark_scans_in_once_and_then_rests() {
+        fn bar(r: &Rig) -> bool {
+            r.out.shapes.iter().any(|s| match &s.shape {
+                egui::epaint::Shape::Rect(rc) => (rc.rect.width() - 1.52).abs() < 0.05 && (rc.rect.height() - 28.95).abs() < 0.1,
+                _ => false,
+            })
+        }
+        let mut r = Rig::demo();
+        // Rig::demo ran 8 frames: 0.8 s in, inside the 1.6 s scan
+        assert!(bar(&r), "the bar is crossing during the scan-in");
+        r.frames(30);
+        assert!(!bar(&r), "the wordmark is at rest after the scan");
+    }
 }
