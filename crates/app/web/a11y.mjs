@@ -411,9 +411,18 @@ try {
   }
   // ---------------------------------------------------------------- Tab and Shift+Tab visit every control of every dialog
   for (const [dlgName, trigger, vp] of [['Settings', 'settings', { width: 1280, height: 800 }], ['Settings', 'settings', { width: 1280, height: 1800 }],
-    ['Change student', 'change-student', { width: 1280, height: 800 }], ['Remove page', 'remove', { width: 1280, height: 800 }]]) {
+    ['Change student', 'change-student', { width: 1280, height: 800 }], ['Remove page', 'remove', { width: 1280, height: 800 }],
+    ['Remove page', 'remove', { width: 390, height: 844 }], ['Change student', 'change-student', { width: 390, height: 844 }],
+    ['Settings', 'settings', { width: 390, height: 844 }], ['Transcribe again', 'transcribe-again', { width: 1280, height: 800 }]]) {
     const a = await open(`dialog tab ${dlgName} ${vp.width}x${vp.height}`, { viewport: vp });
     const { page } = a;
+    if (trigger === 'transcribe-again') {
+      // a page with a decision on it asks before it is read again
+      await page.evaluate(() => document.querySelector('#controls [data-id="word-p-maya-1-c:0"]').focus()); await a.pump(3);
+      await page.keyboard.press('Enter'); await a.pump(8);
+      await page.evaluate(() => document.querySelector('#controls [data-id="alt-written"]').focus()); await a.pump(3);
+      await page.keyboard.press('Enter'); await a.pump(8);
+    }
     await page.evaluate((id) => document.querySelector(`#controls [data-id="${id}"]`).focus(), trigger);
     await a.pump(3);
     await page.keyboard.press('Enter');
