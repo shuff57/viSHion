@@ -354,6 +354,7 @@ pub(crate) fn show(app: &mut App, ctx: &egui::Context, t: &Tokens) {
             HomeAct::Delete(slug) => Cmd::DeleteProject { slug },
             HomeAct::ImportZip => Cmd::ImportZip,
             HomeAct::ImportFolder => Cmd::ImportFolder,
+            HomeAct::ImportLegacy => Cmd::ImportLegacy,
             HomeAct::Folder(what) => Cmd::Folder(what.to_string()),
             HomeAct::DownloadZip(slug) => Cmd::DownloadZip { slug },
         });

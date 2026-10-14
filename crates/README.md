@@ -119,7 +119,9 @@ whenever the inline bootstrap script in `crates/app/web/index.html` changes, so 
   (`Cmd::ImportFolder`: a native folder dialog, `webkitdirectory` on the web) is in too. The storage card has the JS app's four states on the web (choose a folder, reconnect, saving in
   this browser, saving to a folder): `Cmd::Folder(choose|browser|reconnect)` stores or clears the handle as
   `kv/root` in `ocr_fs` and reloads, and boot uses the folder when its permission is still granted
-  (`AnyStore::Fsa`). Not yet: old-session import.
+  (`AnyStore::Fsa`). "Import old sessions" (`Cmd::ImportLegacy`) reads the old app's `ocr_sessions_v2` and `ocr_images` in place on
+  the web, and an exported JSON file natively (`[sessions]` or `{ sessions, images }`); pictures are shrunk, applied
+  corrections stay resolved, line boxes come from the ink scan when the page opens.
 
 Flows are `ui::state::Session` over `core::words` (`choose`, `use_all`, which call `core::judge::toggle`),
 `core::groups`, `core::export`. The screen never touches storage: it sends `host::Cmd`s (`LoadImage`,

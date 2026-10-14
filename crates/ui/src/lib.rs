@@ -1104,6 +1104,7 @@ impl App {
                     self.boot = Boot::Ready;
                 }
                 Event::Folder(f) => self.home.folder = Some(f),
+                Event::LegacyAvailable(on) => self.home.legacy = on,
                 Event::Projects(cards) => {
                     self.home.cards = Some(cards);
                     self.home.asked = false;

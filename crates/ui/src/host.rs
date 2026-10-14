@@ -66,6 +66,8 @@ pub enum Cmd {
     CommitStaged { slug: String, items: Vec<StagedItem> },
     /// Ask for a project zip and import it as a new assignment: `Event::Opened`.
     ImportZip,
+    /// Bring sessions of the old single-file app into a new assignment: `Event::Opened`.
+    ImportLegacy,
     /// Ask for a project folder and import it as a new assignment: `Event::Opened`.
     ImportFolder,
     /// Write `exports/<slug>.zip` with every file of the assignment (the home card's Download zip).
@@ -132,6 +134,8 @@ pub enum Event {
         /// The assignment came from the backup copy of a damaged `project.json`.
         notice: Option<String>,
     },
+    /// Whether Home offers "Import old sessions".
+    LegacyAvailable(bool),
     /// Where assignments are saved (web): `mode` is `none` | `folder` | `idb`, `permission` `granted` | `prompt`.
     Folder(FolderInfo),
     /// One picture is ready to stage. `names_down`: the name reader could not reach the server.

@@ -23,6 +23,8 @@ pub struct Home {
     pub deleting: Option<String>,
     /// Where work is saved (web); `None` on native, which shows the storage line only.
     pub folder: Option<crate::host::FolderInfo>,
+    /// Old single-file sessions can be imported.
+    pub legacy: bool,
 }
 
 pub(crate) enum HomeAct {
@@ -33,6 +35,7 @@ pub(crate) enum HomeAct {
     Delete(String),
     ImportZip,
     ImportFolder,
+    ImportLegacy,
     DownloadZip(String),
     Folder(&'static str),
 }
@@ -181,6 +184,9 @@ fn body(ui: &mut Ui, ctl: &mut Ctl, t: &Tokens, h: &mut Home, storage: &str, nar
         ui.spacing_mut().item_spacing.x = 12.0;
         let r = ui.label(RichText::new("Assignments").font(theme::serif_semi(24.0)).color(t.ink));
         ctl.heading("home-assignments", 2, "Assignments", TEXT, r.rect);
+        if h.legacy && widgets::button(ctl, ui, t, C::new("import-legacy", "Import old sessions", TEXT), "Import old sessions", Look::Outline, 0.0) {
+            acts.push(HomeAct::ImportLegacy);
+        }
         if widgets::button(ctl, ui, t, C::new("import-zip", "Import zip", TEXT), "Import zip", Look::Outline, 0.0) {
             acts.push(HomeAct::ImportZip);
         }

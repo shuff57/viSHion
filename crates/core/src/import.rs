@@ -32,6 +32,25 @@ pub fn parse_sessions(stored: Option<&str>) -> Vec<Value> {
     }
 }
 
+/// A legacy export file as the person hands it over: either the sessions array itself (what the old app kept
+/// under `ocr_sessions_v2`), or `{ "sessions": [...], "images": { "<session id>": "<data URL>" } }`.
+pub fn parse_export(text: &str) -> (Vec<Value>, BTreeMap<String, String>) {
+    let Ok(v) = crate::lenient::parse::<Value>(text) else { return (vec![], BTreeMap::new()) };
+    match v {
+        Value::Array(_) => (parse_sessions(Some(text)), BTreeMap::new()),
+        Value::Object(o) => {
+            let sessions = o.get("sessions").map(|s| parse_sessions(Some(&s.to_string()))).unwrap_or_default();
+            let images = o
+                .get("images")
+                .and_then(Value::as_object)
+                .map(|m| m.iter().filter_map(|(k, v)| v.as_str().map(|u| (k.clone(), u.to_string()))).collect())
+                .unwrap_or_default();
+            (sessions, images)
+        }
+        _ => (vec![], BTreeMap::new()),
+    }
+}
+
 /// `fs.legacyAvailable()`.
 pub fn available(stored: Option<&str>) -> bool {
     !parse_sessions(stored).is_empty()
@@ -376,3 +395,21 @@ mod tests {
         assert_eq!(r.name, "Mine");
     }
 }
+
+#[cfg(test)]
+mod export_tests {
+    use super::*;
+
+    #[test]
+    fn an_array_or_an_object_with_images_is_read() {
+        let arr = r#"[{"id":"a","lastRaw":"Hi"},{"id":"b"},{"lastRaw":"no id"}]"#;
+        let (s, i) = parse_export(arr);
+        assert_eq!((s.len(), i.len()), (1, 0));
+        let obj = r#"{"sessions":[{"id":"a","hasImage":true}],"images":{"a":"data:image/png;base64,AA=="}}"#;
+        let (s, i) = parse_export(obj);
+        assert_eq!(s.len(), 1);
+        assert_eq!(i.get("a").map(String::as_str), Some("data:image/png;base64,AA=="));
+        assert_eq!(parse_export("nope").0.len(), 0);
+    }
+}
+

@@ -446,6 +446,86 @@ impl Backend {
         Event::PagesAdded { pages }
     }
 
+    /// Sessions of the old single-file app and their pictures (`data:` URLs by session id). On the web they are
+    /// read in place from this browser's storage; natively the person picks an exported JSON file
+    /// (`[sessions]` or `{ sessions, images }`).
+    async fn legacy_input(&self) -> Option<(Vec<Value>, std::collections::BTreeMap<String, String>)> {
+        #[cfg(target_arch = "wasm32")]
+        {
+            let sessions = vishion_core::import::parse_sessions(vishion_store::legacy_web::sessions_json().as_deref());
+            if sessions.is_empty() {
+                return None;
+            }
+            Some((sessions, vishion_store::legacy_web::images().await))
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let f = pick_with("Old sessions", &["json"], ".json,application/json", false).await.pop()?;
+            Some(vishion_core::import::parse_export(&String::from_utf8_lossy(&f.bytes)))
+        }
+    }
+
+    /// Whether Home offers "Import old sessions": sessions are waiting in this browser, or (native) a file can
+    /// be picked.
+    fn legacy_available(&self) -> bool {
+        #[cfg(target_arch = "wasm32")]
+        {
+            vishion_core::import::available(vishion_store::legacy_web::sessions_json().as_deref())
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            true
+        }
+    }
+
+    async fn import_legacy(&self, now: i64) -> Event {
+        let Some((sessions, images)) = self.legacy_input().await else {
+            return Event::Notice { text: "No sessions from the old app were found.".into(), error: false };
+        };
+        self.import_legacy_from(&sessions, &images, now).await
+    }
+
+    /// The conversion and the write of [`Backend::import_legacy`], with the sessions already in hand.
+    pub async fn import_legacy_from(&self, sessions: &[Value], images: &std::collections::BTreeMap<String, String>, now: i64) -> Event {
+        let settings = match self.projects.load_settings().await {
+            Ok(Some(m)) => Settings::load(&Value::Object(m)),
+            _ => Settings::defaults(),
+        };
+        let topics = settings.get("topics").and_then(Value::as_object).cloned().unwrap_or_default();
+        let opt = vishion_core::import::Options { name: None, topics: &topics, now };
+        let mut n = 0u64;
+        let mut new_id = || {
+            n += 1;
+            uid(now, 1000 + n)
+        };
+        let plan = vishion_core::import::plan(
+            sessions,
+            images,
+            &opt,
+            &mut new_id,
+            &mut |url, _name| {
+                let (_, bytes) = vishion_core::import::decode_data_url(url)?;
+                pictures::prepare(&bytes).ok()
+            },
+            &mut |_img, _raw| vec![],
+        );
+        match plan {
+            Err(m) => Event::Notice { text: m, error: true },
+            Ok(plan) => match self.projects.apply_legacy(&plan, now).await {
+                Ok(done) => {
+                    let skipped = done.pages - done.with_image;
+                    let text = format!(
+                        "Imported {}{}.",
+                        vishion_ui::state::plural(done.pages, "page", "pages"),
+                        if skipped > 0 { format!(" ({skipped} without an image)") } else { String::new() }
+                    );
+                    Event::Many(vec![Event::Notice { text, error: false }, self.open(Some(&done.slug), now).await])
+                }
+                Err(e) => Event::Notice { text: format!("Import failed: {e}"), error: true },
+            },
+        }
+    }
+
     /// Demo mode of js/ocr.js: the sample assignment, or the `demo` setting.
     async fn demo_mode(&self) -> bool {
         if self.demo {
@@ -654,7 +734,8 @@ impl Backend {
             },
             // the folder card is a browser thing: the web executor answers it, a native host has no such card
             Cmd::Folder(_) => Event::Many(vec![]),
-            Cmd::ListProjects => self.list_event(now).await,
+            Cmd::ImportLegacy => self.import_legacy(now).await,
+            Cmd::ListProjects => Event::Many(vec![Event::LegacyAvailable(self.legacy_available()), self.list_event(now).await]),
             Cmd::OpenProject { slug } => self.open(Some(&slug), now).await,
             Cmd::CreateProject { name } => match self.projects.create_project(&name, now).await {
                 Ok(slug) => self.open(Some(&slug), now).await,

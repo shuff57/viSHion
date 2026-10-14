@@ -441,6 +441,49 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// Old sessions: a session with text and a picture becomes a page of a new assignment named like the old
+    /// app's import, with its applied corrections kept as resolved.
+    #[test]
+    fn old_sessions_import_as_a_new_assignment() {
+        fn b64(data: &[u8]) -> String {
+            const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+            let mut out = String::new();
+            for c in data.chunks(3) {
+                let n = (c[0] as u32) << 16 | (*c.get(1).unwrap_or(&0) as u32) << 8 | *c.get(2).unwrap_or(&0) as u32;
+                for i in 0..4 {
+                    if i <= c.len() {
+                        out.push(T[(n >> (18 - 6 * i) & 63) as usize] as char);
+                    } else {
+                        out.push('=');
+                    }
+                }
+            }
+            out
+        }
+        let mut png = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(40, 30, image::Rgb([250, 250, 250])))
+            .write_to(&mut png, image::ImageFormat::Png)
+            .unwrap();
+        let url = format!("data:image/png;base64,{}", b64(&png.into_inner()));
+        let sessions: Vec<serde_json::Value> = vec![
+            serde_json::json!({"id": "s1", "name": "page one", "lastRaw": "The derivitive", "preRaw": "The derivitive", "created": 2,
+                "appliedDiff": [{"orig": "derivitive", "term": "derivative"}], "topic": "Medical"}),
+            serde_json::json!({"id": "s2", "name": "page zero", "lastRaw": "Hello", "created": 1}),
+        ];
+        let images: std::collections::BTreeMap<String, String> = [("s1".to_string(), url)].into();
+        let (store, _) = block_on(seed(1)).unwrap();
+        let be = Backend::new(store, "Saved");
+        let ev = block_on(be.import_legacy_from(&sessions, &images, 1_700_000_000_000));
+        let Event::Many(evs) = ev else { panic!("{ev:?}") };
+        let Some(Event::Opened { assignment, .. }) = evs.into_iter().find(|e| matches!(e, Event::Opened { .. })) else { panic!("not opened") };
+        assert_eq!(assignment.meta.name(), "Imported from the old app");
+        assert_eq!(assignment.meta.topic(), "Medical");
+        assert_eq!(assignment.pages.len(), 2);
+        let with_corr = assignment.pages.values().find(|p| p.raw() == "The derivitive").unwrap();
+        assert_eq!(with_corr.status(), "done");
+        assert_eq!(with_corr.resolved().get("c:0").and_then(|v| v.as_str()), Some("suggested"));
+    }
+
     /// The native path: a real folder, written and read back through `FsStore` and the project layer.
     #[test]
     fn folder_store_round_trip_keeps_edits() {
