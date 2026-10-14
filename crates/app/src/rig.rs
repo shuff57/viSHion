@@ -621,9 +621,9 @@ mod tests {
             })
         }
         let mut r = Rig::demo();
-        // Rig::demo ran 8 frames: 0.8 s in, inside the 1.6 s scan
+        // Rig::demo ran 8 frames: the scan starts on the third and is driven by capped frame times
         assert!(bar(&r), "the bar is crossing during the scan-in");
-        r.frames(30);
+        r.frames(80);
         assert!(!bar(&r), "the wordmark is at rest after the scan");
     }
 }

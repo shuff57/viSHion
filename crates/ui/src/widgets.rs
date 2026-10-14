@@ -320,22 +320,30 @@ fn scan_progress(ui: &Ui, r: &egui::Response) -> Option<f64> {
     if reduced_motion(ui.ctx()) {
         return None;
     }
-    let now = ui.input(|i| i.time);
+    // The first frames of a page load are slow (fonts, textures) and the time between them is long, so the
+    // scan is driven by the sum of frame times, each capped, and starts on the third frame: it is seen as a
+    // whole, not found half played.
+    let dt = ui.input(|i| i.unstable_dt as f64).clamp(0.0, 1.0 / 30.0);
     let id = egui::Id::new("brand-scan");
-    let (mut start, mut played, mut was_over): (Option<f64>, bool, bool) = ui.ctx().data(|d| d.get_temp(id)).unwrap_or((None, false, false));
+    // (seconds into the scan, played once, pointer was over, frames drawn)
+    let (mut at, mut played, mut was_over, mut frames): (Option<f64>, bool, bool, u32) =
+        ui.ctx().data(|d| d.get_temp(id)).unwrap_or((None, false, false, 0));
+    frames = frames.saturating_add(1);
     let over = r.hovered() || r.has_focus();
-    if !played {
-        start = Some(now);
+    if !played && frames >= 3 {
+        at = Some(0.0);
         played = true;
-    } else if over && !was_over {
-        start = Some(now);
+    } else if played && over && !was_over {
+        at = Some(0.0);
+    } else if let Some(a) = at {
+        at = Some(a + dt);
     }
     was_over = over;
-    let p = start.map(|s| (now - s) / SCAN_SECS);
+    let p = at.map(|a| a / SCAN_SECS);
     if p.is_some_and(|p| p >= 1.0) {
-        start = None;
+        at = None;
     }
-    ui.ctx().data_mut(|d| d.insert_temp(id, (start, played, was_over)));
+    ui.ctx().data_mut(|d| d.insert_temp(id, (at, played, was_over, frames)));
     match p {
         Some(p) if p < 1.0 => {
             ui.ctx().request_repaint();
