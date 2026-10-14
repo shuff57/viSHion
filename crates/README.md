@@ -178,6 +178,13 @@ closing it returns focus to what opened it. The line being read is `data-reading
 - Do not use `std::time::Instant` or `SystemTime` in code that runs on wasm32 (it panics); use egui time.
 - `cargo test` must pass natively; wasm builds with `--target wasm32-unknown-unknown` (CI does both).
 
+## Providers
+
+`vishion_net::Provider` is the seam to a model API (`transcribe` streams a page, `complete` returns one answer).
+`Provider::for_setting(settings.provider)` picks it: every provider the Settings select lists (local, Ollama
+Cloud, OpenRouter, custom) is `OpenAiCompatible`; `mock` answers from memory (tests, trying the seam). The
+backend reads, reads names and guesses only through it, so another API is one more variant.
+
 ## Demo mode and reading pages
 
 `--demo`, `?demo=1` and the `demo` setting answer Retry, Transcribe, Transcribe again and the inbox's Resume

@@ -2,8 +2,11 @@
 //! out); `native` (ureq, blocking) and `web` (fetch) only move bytes. Both expose the same
 //! `async fn transcribe`.
 
+pub mod provider;
 pub mod slots;
 pub mod sse;
+
+pub use provider::{Mock, Provider};
 
 #[cfg(not(target_arch = "wasm32"))]
 mod native;

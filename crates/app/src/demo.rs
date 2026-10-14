@@ -484,6 +484,21 @@ mod tests {
         assert_eq!(with_corr.resolved().get("c:0").and_then(|v| v.as_str()), Some("suggested"));
     }
 
+    /// Phase 8: the provider is picked by the `provider` setting, so a mock answers with no server at all, for
+    /// reading, name reading and guesses.
+    #[test]
+    fn a_mock_provider_answers_without_a_server() {
+        let (store, slug) = block_on(seed(1)).unwrap();
+        let be = Backend::new(store, "Saved");
+        let conn = vishion_ui::Conn { url: "http://127.0.0.1:1".into(), timeout_secs: 5, provider: "mock".into(), ..Default::default() };
+        let Event::Many(evs) = block_on(be.handle(Cmd::Transcribe { slug: slug.clone(), ids: vec!["p-maya-1".into()], conn: conn.clone() }, 0)) else { panic!() };
+        assert!(evs.iter().any(|e| matches!(e, Event::Transcribed { outcome: vishion_ui::ReadOutcome::Done { raw, .. }, .. } if raw == "A mock transcript.")), "{evs:?}");
+        // a guess is answered by the mock's canned reply: an empty list parses to no guesses
+        let ev = block_on(be.handle(Cmd::Guess { slug, id: "p-maya-1".into(), raw: "a [illegible] word".into(), conn, examples: vec![] }, 0));
+        let Event::Guessed { result: Ok(g), .. } = ev else { panic!("{ev:?}") };
+        assert!(g.is_empty());
+    }
+
     /// The native path: a real folder, written and read back through `FsStore` and the project layer.
     #[test]
     fn folder_store_round_trip_keeps_edits() {

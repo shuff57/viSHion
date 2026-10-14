@@ -361,7 +361,7 @@ impl Backend {
             timeout_secs: 45,
             poll_slots: false,
         };
-        match vishion_net::complete_opts(req, 0.1, 60).await {
+        match vishion_net::Provider::for_setting(&conn.provider).complete(req, 0.1, 60).await {
             Ok(t) => Ok(vishion_core::student::parse_reply(&t)),
             Err(vishion_net::Error::Http(_)) => Err(()),
             Err(_) => Err(()),
@@ -578,14 +578,14 @@ impl Backend {
             prompt: &conn.prompt,
             image: &image,
             timeout_secs: conn.timeout_secs,
-            poll_slots: true,
+            poll_slots: vishion_net::Provider::for_setting(&conn.provider).polls_slots(),
         };
         let mut on = |p: Progress| {
             if let Progress::Text { full, .. } = p {
                 emit(Event::Reading { id: id.into(), text: full.to_string() });
             }
         };
-        match vishion_net::transcribe(req, &self.cancel, &mut on).await {
+        match vishion_net::Provider::for_setting(&conn.provider).transcribe(req, &self.cancel, &mut on).await {
             Ok(d) => {
                 let raw = vishion_core::clean::clean(&d.text);
                 // `autoGuess`: when a page finishes with unreadable words, look again (a failure leaves none)
@@ -624,7 +624,7 @@ impl Backend {
             timeout_secs: conn.timeout_secs,
             poll_slots: false,
         };
-        match vishion_net::complete(req).await {
+        match vishion_net::Provider::for_setting(&conn.provider).complete(req, 0.2, 500).await {
             Ok(t) => Ok(vishion_core::guess::parse_guesses(&t, count)),
             Err(vishion_net::Error::Http(m)) | Err(vishion_net::Error::Network(m)) | Err(vishion_net::Error::Unavailable(m)) => Err(m),
             Err(_) => Err(NEEDS_OCR.into()),
