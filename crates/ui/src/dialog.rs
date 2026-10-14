@@ -482,7 +482,7 @@ fn settings(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, s: &Session, drafts: &mut Dr
     let mut clip = ui.clip_rect();
     let pid = provider(&setting_str(s, "provider", "local"));
     let cloud = pid.3;
-    egui::ScrollArea::vertical().max_height(max_body).auto_shrink([false, true]).show(ui, |ui| {
+    egui::ScrollArea::vertical().max_height(max_body).max_width(w).auto_shrink([false, true]).show(ui, |ui| {
         clip = ui.clip_rect();
         ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
         egui::Frame::none().inner_margin(Margin::symmetric(28.0, 24.0)).show(ui, |ui| {
@@ -623,8 +623,8 @@ fn settings(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, s: &Session, drafts: &mut Dr
             ui.add_space(14.0);
             let n = s.settings.get("reference").and_then(|v| v.as_array()).map_or(0, |a| a.len());
             let count = format!("{} remembered.", crate::state::plural(n, "fix", "fixes"));
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing = vec2(12.0, 0.0);
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing = vec2(12.0, 8.0);
                 let g = ui.painter().layout_no_wrap(count.clone(), theme::sans(14.0), t.muted);
                 let (r, _) = ui.allocate_exact_size(vec2(g.size().x, TARGET), Sense::hover());
                 ui.painter().galley(widgets::centered(r, g.size()), g, t.muted);

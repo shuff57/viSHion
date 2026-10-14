@@ -1545,6 +1545,18 @@ fn review(ctx: &egui::Context, cx: &mut Cx, s: &Session, narrow: bool) {
     }
 }
 
+/// The word panel is part of the transcript's pane in the browser (`position: sticky` inside `.text`), so a wheel
+/// turn over it that the panel does not use scrolls the pane. Here the panel is a layer of its own, which the
+/// pane's scroll area does not see the pointer through: what is left is handed on for the next frame.
+fn pass_wheel_on(ui: &mut Ui, cx: &mut Cx, over: Rect) {
+    let left = ui.input(|i| i.smooth_scroll_delta.y);
+    if left != 0.0 && ui.rect_contains_pointer(over) {
+        cx.ctl.scroll_by += -left;
+        ui.ctx().input_mut(|i| i.smooth_scroll_delta.y = 0.0);
+        ui.ctx().request_repaint();
+    }
+}
+
 /// The page scrolled the DOM transcript (find-in-page, a drag-selection at its edge): the scroll area follows.
 fn take_scroll_by(ui: &mut Ui, cx: &mut Cx) {
     let d = std::mem::take(&mut cx.ctl.scroll_by);
@@ -1573,7 +1585,6 @@ fn review_panes(ctx: &egui::Context, cx: &mut Cx, s: &Session, narrow: bool) {
         let tray_h = if sticky { cx.stage.tray_box_h } else { 0.0 };
         let central = egui::CentralPanel::default().frame(egui::Frame::none().fill(t.surface)).show(ctx, |ui| {
             egui::ScrollArea::vertical().auto_shrink([false, false]).animated(false).id_source("review-scroll").show(ui, |ui| {
-                take_scroll_by(ui, cx);
                 // the panes of `.review` are stacked boxes with nothing between them
                 ui.spacing_mut().item_spacing.y = 0.0;
                 if cx.inline_header {
@@ -1609,6 +1620,8 @@ fn review_panes(ctx: &egui::Context, cx: &mut Cx, s: &Session, narrow: bool) {
                     }
                 }
                 cx.ctl.flush_scroll(ui, &[HEADER, SCAN, TEXT, TRAY]);
+                // last, so that no scroll area inside (the page's stage) ends after it and takes the request
+                take_scroll_by(ui, cx);
             });
         });
         if sticky {
@@ -1620,13 +1633,16 @@ fn review_panes(ctx: &egui::Context, cx: &mut Cx, s: &Session, narrow: bool) {
                 .constrain(false)
                 .show(ctx, |ui| {
                     ui.set_width(vp.width());
+                    // a short window: the tray scrolls inside what is left after the header and a strip of
+                    // the transcript, so every control in it can be reached (400% zoom, a phone on its side)
+                    let cap = (vp.height() - 96.0).max(120.0);
+                    // (an area only has the room from its top to the screen's bottom: asked for its own height so
+                    // the box does not settle at the height it happened to start with)
+                    ui.set_max_height(cap + 8.0);
                     egui::Frame::none().fill(t.sunken).show(ui, |ui| {
                         ui.set_width(vp.width());
                         ui.spacing_mut().item_spacing = vec2(8.0, 8.0);
-                        // a short window: the tray scrolls inside what is left after the header and a strip of
-                        // the transcript, so every control in it can be reached (400% zoom, a phone on its side)
-                        let cap = (vp.height() - 96.0).max(120.0);
-                        egui::ScrollArea::vertical()
+                        let sa = egui::ScrollArea::vertical()
                             .id_source("tray-scroll-narrow")
                             .max_height(cap)
                             .auto_shrink([false, true])
@@ -1635,6 +1651,7 @@ fn review_panes(ctx: &egui::Context, cx: &mut Cx, s: &Session, narrow: bool) {
                                 tray(ui, cx, s, &entries);
                                 cx.ctl.flush_scroll(ui, &[TRAY]);
                             });
+                        pass_wheel_on(ui, cx, sa.inner_rect);
                     });
                 });
             let r = inner.response.rect;
@@ -1690,6 +1707,7 @@ fn review_panes(ctx: &egui::Context, cx: &mut Cx, s: &Session, narrow: bool) {
                                 });
                             cx.stage.tray_h = out.content_size.y;
                             cx.stage.tray_in = out.inner_rect.height();
+                            pass_wheel_on(ui, cx, out.inner_rect);
                         });
                     cx.stage.tray_px = if cx.narrow { 0.0 } else { tray_panel.response.rect.height() };
                     tray_rect = Some(tray_panel.response.rect);

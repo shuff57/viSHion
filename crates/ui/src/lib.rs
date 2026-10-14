@@ -150,6 +150,8 @@ pub struct Ctl {
     /// A mouse press arrived with this frame's messages: the focus it gave is not scrolled to (Chrome only
     /// scrolls a focus made by key or script).
     pub(crate) pointer_down: bool,
+    /// The control being registered is a text box (it always shows its ring).
+    in_text: bool,
     /// `now_ms()` of the last mouse press on the twin.
     pub(crate) pointer_at: f64,
     /// Twin focus arrived since the control last drew: bring it into view (browsers scroll focus into view;
@@ -278,7 +280,9 @@ impl Ctl {
         if twin_focus || r.has_focus() {
             // a mouse click on the transcript focuses it without a ring (`:focus-visible`); the web twin
             // reports `kbd:1` when Tab or a script moved focus there with the keyboard in use
-            let visible = self.kbd || id != "transcript";
+            // (`:focus-visible` is also what a text box always has; anything else focused by script after a
+            // mouse press has no ring)
+            let visible = self.kbd || self.in_text;
             if visible {
                 let (rect, radius) = ring.unwrap_or((r.rect.expand(2.0), 6.0));
                 ui.painter().rect_stroke(rect, radius, Stroke::new(2.0, self.ring));
@@ -360,7 +364,9 @@ impl Ctl {
             size: (r.rect.width().round() as u16, r.rect.height().round() as u16),
             shown: None,
         });
+        self.in_text = true;
         self.track_focus(ui, r, c.id, c.region, c.ring);
+        self.in_text = false;
         typed
     }
 
