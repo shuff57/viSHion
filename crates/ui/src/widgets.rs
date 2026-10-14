@@ -230,7 +230,7 @@ pub fn paint_icon(ui: &Ui, rect: Rect, icon: Icon, color: Color32) {
 pub fn paint_spinner(ui: &Ui, rect: Rect, color: Color32, time: f64) {
     let k = rect.width().min(rect.height()) / 24.0;
     let c = rect.center();
-    let turn = (time / 0.9).fract() as f32 * std::f32::consts::TAU;
+    let turn = spinner_turn(time, reduced_motion(ui.ctx()));
     let (sin, cos) = turn.sin_cos();
     let pts: Vec<egui::Pos2> = (0..=24)
         .map(|i| {
@@ -241,6 +241,27 @@ pub fn paint_spinner(ui: &Ui, rect: Rect, color: Color32, time: f64) {
         })
         .collect();
     ui.painter().add(Shape::line(pts, Stroke::new((2.0 * k).max(1.5), color)));
+}
+
+/// Where the spinner is, in radians: it turns once in 0.9 s, and stands still when the person asked for
+/// reduced motion (the CSS `animation: none`).
+pub fn spinner_turn(time: f64, reduced: bool) -> f32 {
+    if reduced {
+        0.0
+    } else {
+        (time / 0.9).fract() as f32 * std::f32::consts::TAU
+    }
+}
+
+const REDUCED_MOTION: &str = "reduced-motion";
+
+/// The display preference, kept in the context so drawing code can read it.
+pub fn set_reduced_motion(ctx: &egui::Context, on: bool) {
+    ctx.data_mut(|d| d.insert_temp(egui::Id::new(REDUCED_MOTION), on));
+}
+
+pub fn reduced_motion(ctx: &egui::Context) -> bool {
+    ctx.data(|d| d.get_temp::<bool>(egui::Id::new(REDUCED_MOTION))).unwrap_or(false)
 }
 
 /// A text button with a leading icon ("Add page").
@@ -397,3 +418,20 @@ pub fn pill_at(ui: &Ui, t: &Tokens, kind: crate::state::PillKind, text: &str, mi
     ui.painter().galley(centered(rect, g.size()), g, fg);
     rect
 }
+
+#[cfg(test)]
+mod motion_tests {
+    use super::*;
+
+    #[test]
+    fn the_spinner_stands_still_when_motion_is_reduced() {
+        assert!(spinner_turn(0.45, false) > 0.0);
+        assert_eq!(spinner_turn(0.45, true), 0.0);
+        assert_eq!(spinner_turn(7.3, true), 0.0);
+        let ctx = egui::Context::default();
+        assert!(!reduced_motion(&ctx));
+        set_reduced_motion(&ctx, true);
+        assert!(reduced_motion(&ctx));
+    }
+}
+

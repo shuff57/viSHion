@@ -850,6 +850,7 @@ impl App {
             let reduced = web::media("(prefers-reduced-motion: reduce)");
             if reduced {
                 ctx.style_mut(|s| s.animation_time = 0.0);
+                widgets::set_reduced_motion(&ctx, true);
             }
             let hc = web::media("(forced-colors: active)") || web::media("(prefers-contrast: more)");
             web::mark_preferences(reduced, hc);
