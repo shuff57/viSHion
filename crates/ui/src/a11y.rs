@@ -552,7 +552,15 @@ fn command(cs: &[char], p: &mut usize) -> String {
                 format!(" {head} {a} ")
             }
         }
-        "bar" | "overline" => format!(" {} bar ", atom(cs, p)),
+        "bar" | "overline" => {
+            let a = atom(cs, p);
+            // a bar over several things needs a scope, or only the last one is heard as barred
+            if multi(&a) {
+                format!(" bar over {} end bar ", a.trim())
+            } else {
+                format!(" {a} bar ")
+            }
+        }
         "hat" => format!(" {} hat ", atom(cs, p)),
         "widehat" => {
             // an arc over vertex letters is an arc, not a hat
@@ -628,7 +636,28 @@ fn command(cs: &[char], p: &mut usize) -> String {
             };
             format!(" {w} ")
         }
-        "text" | "textbf" | "textit" | "mathrm" | "mathbf" | "mathit" | "mathcal" | "operatorname" | "mbox" => {
+        "mathcal" | "mathscr" => {
+            let g = raw_group(cs, p);
+            let g = g.trim();
+            if g == "P" && cs.get(*p) == Some(&'(') {
+                " the power set of ".into()
+            } else if g.chars().count() == 1 && g.chars().all(|c| c.is_ascii_alphabetic()) {
+                format!(" script {g} ")
+            } else {
+                format!(" {g} ")
+            }
+        }
+        "mathbf" | "mathit" | "boldsymbol" | "bm" => {
+            // a short run of letters is a product of variables, not a word
+            let g = raw_group(cs, p);
+            let g = g.trim();
+            if g.chars().count() <= 3 && g.chars().all(|c| c.is_ascii_alphabetic()) {
+                format!(" {} ", g.chars().map(String::from).collect::<Vec<_>>().join(" "))
+            } else {
+                format!(" {g} ")
+            }
+        }
+        "text" | "textbf" | "textit" | "mathrm" | "operatorname" | "mbox" => {
             format!(" {} ", raw_group(cs, p))
         }
         "sum" => limits(cs, p, "the sum"),
@@ -668,7 +697,7 @@ fn command(cs: &[char], p: &mut usize) -> String {
         "overleftrightarrow" => format!(" line {} ", atom(cs, p)),
         "ddot" => format!(" {} double dot ", atom(cs, p)),
         "dddot" => format!(" {} triple dot ", atom(cs, p)),
-        "underline" | "underbar" | "boldsymbol" | "bm" | "mathsf" | "mathtt" | "mathfrak" | "mathscr" | "mathbbm" => {
+        "underline" | "underbar" | "mathsf" | "mathtt" | "mathfrak" | "mathbbm" => {
             format!(" {} ", atom(cs, p))
         }
         "overrightarrow" | "overleftarrow" | "overrightarrow*" => format!(" vector {} ", atom(cs, p)),
@@ -1007,6 +1036,17 @@ fn divider(paren: i32, in_set: bool) -> &'static str {
     }
 }
 
+/// Is there a finished clause before a quantifier (`\forall \epsilon>0 \exists \delta`), so a pause keeps the
+/// two quantifiers from running into one sentence?
+fn quantifier_follows_clause(out: &str) -> bool {
+    let t = out.trim_end();
+    if t.is_empty() || t.ends_with(',') {
+        return false;
+    }
+    let last = t.split_whitespace().next_back().unwrap_or("");
+    !matches!(last, "not" | "and" | "or" | "implies" | "if" | "that" | "some" | "all" | "of" | "open" | "paren" | "bracket" | "set" | "to" | "equals" | "plus" | "minus" | "times" | "divides" | "given")
+}
+
 fn seq(cs: &[char], p: &mut usize, in_group: bool) -> String {
     let mut out = String::new();
     // `|x - 3|`: the first bar opens an absolute value and the next closes it
@@ -1139,6 +1179,14 @@ fn seq(cs: &[char], p: &mut usize, in_group: bool) -> String {
                 *p += 4;
                 out.push_str(divider(paren, in_set));
             }
+            '\\' if ["forall", "exists", "nexists"].iter().any(|w| {
+                let n = w.chars().count();
+                cs[*p + 1..].len() >= n && cs[*p + 1..*p + 1 + n].iter().copied().eq(w.chars()) && !cs.get(*p + 1 + n).is_some_and(|c| c.is_ascii_alphabetic())
+            }) && quantifier_follows_clause(&out) =>
+            {
+                out.push_str(" , ");
+                out.push_str(&command(cs, p));
+            }
             '}' if in_group => break,
             '}' => *p += 1,
             '{' => {
@@ -1176,6 +1224,9 @@ fn seq(cs: &[char], p: &mut usize, in_group: bool) -> String {
                         "minus" => out.push_str(&format!(" negative {w} ")),
                         n => out.push_str(&format!(" {w} in {n} dimensions ")),
                     }
+                } else if one == "times" {
+                    // z^* (a critical value): the asterisk is a star, not a product
+                    out.push_str(" star ");
                 } else if a.trim() == "c" && lone_capital {
                     out.push_str(" complement ");
                 } else {
@@ -1216,7 +1267,7 @@ fn seq(cs: &[char], p: &mut usize, in_group: bool) -> String {
                     *p += 1;
                 }
                 out.push(' ');
-                // `1rac{1}{2}` is a mixed number
+                // `1\frac{1}{2}` is a mixed number
                 if cs[*p..].starts_with(&['\\', 'f', 'r', 'a', 'c']) || cs[*p..].starts_with(&['\\', 'd', 'f', 'r', 'a', 'c']) {
                     out.push_str(" and ");
                 }
@@ -1381,6 +1432,25 @@ mod tests {
         assert!(!tex_speech(r"\textcolor{blue}{x^2}").contains("blue"));
         assert!(tex_speech(r"f: \mathbb{R} \to \mathbb{R}").contains("real numbers to real numbers"));
         assert!(tex_speech(r"\mathbb{Z}^+").contains("positive integers"));
+    }
+
+    /// Critic round 11: critical value star, script letters, bar scope, quantifier pause, bold letters.
+    #[test]
+    fn round11_star_script_bar_quantifiers_bold() {
+        let s = tex_speech(r"\hat{p}\pm z^*\sqrt{\frac{\hat p(1-\hat p)}{n}}");
+        assert!(s.contains("z star square root of") && !s.contains("to the power of"), "{s}");
+        assert_eq!(tex_speech(r"z^{*}"), "z star");
+        assert_eq!(tex_speech(r"\mathcal{P}(A)"), "the power set of open paren A close paren");
+        assert_eq!(tex_speech(r"\mathcal{L}"), "script L");
+        assert_eq!(tex_speech(r"\overline{A\cup B}=\overline{A}\cap\overline{B}"), "bar over A union B end bar equals A bar intersection B bar");
+        assert_eq!(tex_speech(r"\overline{AB}"), "bar over A B end bar");
+        assert_eq!(tex_speech(r"\overline{x}"), "x bar");
+        assert_eq!(
+            tex_speech(r"\forall \epsilon>0\,\exists\delta>0"),
+            "for all epsilon is greater than 0, there is some delta is greater than 0"
+        );
+        assert_eq!(tex_speech(r"\forall x \exists y"), "for all x, there is some y");
+        assert_eq!(tex_speech(r"\mathbf{Ax}=\lambda\mathbf{x}"), "A x equals lambda x");
     }
 
     /// Blind critic round 8: formulas a listener mishears. `#[ignore]`d so the workspace stays green; run with

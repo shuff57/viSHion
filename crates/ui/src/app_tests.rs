@@ -2820,3 +2820,21 @@ fn rotate_says_orientation_home_end_move_and_dimmed_zoom_out_is_a_stop() {
     assert!(h.ctl("zoom-out").unwrap().disabled);
     assert!(twin::tab_stops(h.app.nodes()).contains(&"zoom-out"));
 }
+
+#[test]
+fn ctrl_z_takes_back_the_last_choice_and_says_so() {
+    let mut h = H::new("m1");
+    let w = h.word_id("c:0");
+    h.act(&w);
+    h.act("alt-suggested");
+    assert!(h.s().page("m1").unwrap().corrected().contains("confidence"));
+    h.app.queue.lock().unwrap().push("key:undo".into());
+    h.frames(3);
+    assert!(!h.s().page("m1").unwrap().corrected().contains("confidence"));
+    assert_eq!(h.s().sel_word, Some(("m1".into(), "c:0".into())));
+    assert!(h.app.announced().iter().any(|a| a.starts_with("Undid the last choice.")), "{:?}", h.app.announced());
+    // nothing left: it says so rather than staying silent
+    h.app.queue.lock().unwrap().push("key:undo".into());
+    h.frames(3);
+    assert!(h.app.announced().iter().any(|a| a.starts_with("Nothing to undo.")), "{:?}", h.app.announced());
+}

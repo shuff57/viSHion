@@ -204,6 +204,13 @@ pub fn install(q: Queue, ctx: egui::Context) {
         if matches!(el.tag_name().as_str(), "INPUT" | "TEXTAREA" | "SELECT") && key != "Escape" {
             return;
         }
+        // Ctrl+Z (Cmd+Z) takes back the last word decision, from anywhere on the page but a text box
+        if (e.ctrl_key() || e.meta_key()) && !e.shift_key() && !e.alt_key() && key.eq_ignore_ascii_case("z") {
+            e.prevent_default();
+            q4.lock().unwrap().push("key:undo".to_string());
+            c4.request_repaint();
+            return;
+        }
         // The keys that scroll a pane scroll the transcript, as they do the JS app's `#tx-pane` (the canvas owns the
         // position, so the page is asked: `scrollby:`). Space on a button is the button's; a formula that scrolls
         // sideways keeps what it does with them.

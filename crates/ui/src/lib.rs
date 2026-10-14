@@ -1631,6 +1631,7 @@ impl App {
                     egui::Key::Equals => "=",
                     egui::Key::Minus => "-",
                     egui::Key::Num0 => "0",
+                    egui::Key::Z if modifiers.command && !modifiers.shift => "undo",
                     _ => continue,
                 };
                 self.ctl.keys.push(KeyEv { key: name.into(), alt: modifiers.alt });

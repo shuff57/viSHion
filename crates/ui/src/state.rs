@@ -182,6 +182,8 @@ pub struct Session {
     /// Where the transcript pane should scroll to now (`meta.ui.scroll` when it belongs to the selected
     /// page, else the top). The counter changes with every request so the screen applies each once.
     pub scroll_req: Option<(u32, f32)>,
+    /// The last word decision, so Ctrl+Z can take it back: (page id, the page before, the settings before, the word).
+    pub undo: Option<(String, Page, Settings, String)>,
 }
 
 fn ui_str<'a>(a: &'a Assignment, k: &str) -> Option<&'a str> {
@@ -241,6 +243,7 @@ impl Session {
             multi: BTreeSet::new(),
             filter: Filter::All,
             scroll_req: None,
+            undo: None,
         };
         s.request_scroll();
         s.sync_tray();
@@ -665,10 +668,12 @@ impl Session {
     pub fn choose(&mut self, page: &str, key: &str, via: &str, text: &str) -> bool {
         let topic = self.a.meta.topic().to_string();
         let before = self.settings.get("reference").cloned();
+        let snap = self.a.pages.get(page).map(|p| (page.to_string(), p.clone(), self.settings.clone(), key.to_string()));
         let Some(p) = self.a.pages.get_mut(page) else { return false };
         if !words::choose(p, key, via, text, &mut self.settings, &topic, self.now) {
             return false;
         }
+        self.undo = snap;
         self.dirty.pages.insert(page.to_string());
         if self.settings.get("reference") != before.as_ref() {
             self.dirty.settings = true;
@@ -676,8 +681,28 @@ impl Session {
         true
     }
 
+    /// Take back the last word decision (the page and the settings as they were), reopening that word.
+    /// `None`: there is nothing to undo.
+    pub fn undo_choice(&mut self) -> Option<()> {
+        let (id, page, settings, key) = self.undo.take()?;
+        self.a.pages.insert(id.clone(), page);
+        if self.settings != settings {
+            self.settings = settings;
+            self.dirty.settings = true;
+        }
+        self.dirty.pages.insert(id.clone());
+        if self.selected.as_deref() != Some(id.as_str()) {
+            self.select(&id);
+        }
+        self.sel_word = Some((id, key));
+        self.tray_open = true;
+        self.sync_tray();
+        Some(())
+    }
+
     /// `Use all N suggestions` for the current student.
     pub fn use_all(&mut self) {
+        self.undo = None;
         let Some(g) = self.group() else { return };
         let topic = self.a.meta.topic().to_string();
         for id in &g.pages {

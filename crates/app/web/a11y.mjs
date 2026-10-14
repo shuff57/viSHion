@@ -447,6 +447,20 @@ try {
     expect(vis, `${dlgName} ${vp.width}x${vp.height}: the focused control is on screen`);
     await a.close();
   }
+  // ---------------------------------------------------------------- Ctrl+Z takes back the last choice and says so
+  {
+    const a = await open('undo');
+    const { page } = a;
+    await page.evaluate(() => document.querySelector('#controls [data-id="word-p-maya-1-c:0"]').focus()); await a.pump(3);
+    await page.keyboard.press('Enter'); await a.pump(8);
+    await page.evaluate(() => document.querySelector('#controls [data-id="alt-suggested"]').focus()); await a.pump(3);
+    await page.keyboard.press('Enter'); await a.pump(8);
+    await page.keyboard.press('Control+z'); await a.pump(8);
+    expect(await a.wait(async () => /Undid the last choice/.test((await a.announced()).join(' '))), 'Ctrl+Z after a choice says it was undone: ' + JSON.stringify(await a.announced()));
+    await page.keyboard.press('Control+z'); await a.pump(8);
+    expect(await a.wait(async () => /Nothing to undo/.test((await a.announced()).join(' '))), 'Ctrl+Z with nothing to undo says so');
+    await a.close();
+  }
 } catch (e) {
   console.error(e);
   failures.push('exception: ' + (e && e.message));

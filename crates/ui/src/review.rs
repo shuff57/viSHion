@@ -56,6 +56,7 @@ pub(crate) struct Stage {
 
 pub(crate) enum Act {
     Pick(String, String),
+    Undo,
     SetSplit(bool),
     TypeFirst,
     Original(bool),
@@ -358,6 +359,7 @@ fn route_keys(ctl: &Ctl, s: &Session, dialog_open: bool, acts: &mut Vec<Act>) {
         let in_stage = ctl.focus_in("stage");
         let strip_id = ctl.focused.as_ref().and_then(|(id, _)| id.strip_prefix("page-")).map(String::from);
         match key.as_str() {
+            "undo" => acts.push(Act::Undo),
             "Escape" if in_tray => acts.push(Act::Tray(false)),
             "Escape" if in_tx => {
                 if s.selected.as_ref().is_some_and(|id| s.read_line.contains_key(id)) {
@@ -545,6 +547,18 @@ fn apply(
                 if let Some((p, k)) = s.sel_word.clone() {
                     ctl.want_focus = Some(format!("word-{p}-{k}"));
                 }
+            }
+        }
+        Act::Undo => {
+            if s.undo_choice().is_some() {
+                ctx.request_repaint();
+                typed.clear();
+                ctl.say(format!("Undid the last choice. {}", s.next_word_phrase()));
+                if let Some((p, k)) = s.sel_word.clone() {
+                    ctl.want_focus = Some(format!("word-{p}-{k}"));
+                }
+            } else {
+                ctl.say("Nothing to undo. To change a word, open it and choose another option.".to_string());
             }
         }
         Act::UseAll => {
