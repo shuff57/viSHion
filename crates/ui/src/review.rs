@@ -40,6 +40,9 @@ pub(crate) struct Stage {
     target: Option<(Vec2, u8)>,
     /// Content height of the tray last frame (the phone tray scrolls inside half the screen).
     tray_h: f32,
+    /// Painted height of the bottom tray panel last frame (wide layout). It overlays the transcript pane in
+    /// the browser, so a line under it still counts as in view for `scrollIntoView({ block: 'nearest' })`.
+    tray_px: f32,
     /// Height of the phone's sticky tray box last frame (it is reserved at the end of the transcript).
     tray_box_h: f32,
     /// Content height of the page stage last frame (phone: the stage is as tall as the page).
@@ -317,7 +320,10 @@ pub(crate) fn show(app: &mut App, ctx: &egui::Context, t: &Tokens) {
             if !matches!(a, Act::ReadLine(_) | Act::ReadMove(_) | Act::ReadEdge(_) | Act::ReadClear | Act::Zoom(_) | Act::ZoomSet(_) | Act::Pan(_) | Act::Dialog(_) | Act::CloseDialog | Act::Scrolled(_)) {
                 *status_msg = None;
             }
-            ctl.quiet_focus = None;
+            if ctl.want_focus.is_none() {
+                // (a focus request still waiting for its word keeps its "no scroll" mark)
+                ctl.quiet_focus = None;
+            }
             apply(a, s, ctx, ctl, typed, status_msg, status_err, dialog, &send);
         }
         // the typed fix belongs to one word
@@ -1607,7 +1613,7 @@ fn review_panes(ctx: &egui::Context, cx: &mut Cx, s: &Session, narrow: bool) {
                     // a short window: the tray scrolls inside what is left after 150 for the transcript, so
                     // the word being decided always has room above it
                     let cap = (ui.available_height() - 150.0).max(120.0);
-                    egui::TopBottomPanel::bottom("tray")
+                    let tray_panel = egui::TopBottomPanel::bottom("tray")
                         .resizable(false)
                         .frame(egui::Frame::none().fill(t.sunken))
                         .show_inside(ui, |ui| {
@@ -1623,8 +1629,15 @@ fn review_panes(ctx: &egui::Context, cx: &mut Cx, s: &Session, narrow: bool) {
                                 });
                             cx.stage.tray_h = out.content_size.y;
                         });
+                    cx.stage.tray_px = if cx.narrow { 0.0 } else { tray_panel.response.rect.height() };
                 }
-                let mut area = egui::ScrollArea::vertical().auto_shrink([false, false]).animated(false).id_source("text-scroll");
+                if !tray_on {
+                    cx.stage.tray_px = 0.0;
+                }
+                let mut area = egui::ScrollArea::vertical().auto_shrink([false, false]).animated(false).id_source("text-scroll")
+                    // the browser owns touch scrolling of the transcript (the DOM text takes the pointer); a press that
+                    // arrives with a pointer jump in one frame (a tap, a scripted click) must not drag the pane
+                    .drag_to_scroll(false);
                 if let Some((n, off)) = s.scroll_req {
                     if cx.stage.scroll_epoch != n {
                         cx.stage.scroll_epoch = n;
@@ -2041,7 +2054,13 @@ fn page_image(ui: &mut Ui, cx: &mut Cx, s: &Session, p: &Page, im: &Img, pad: f3
     if cx.stage.mark_seen != Some(now) {
         let target = sel_unit.or(read).and_then(|i| boxes.get(i)).map(|b| at(b));
         if let Some(r) = target {
-            ui.scroll_to_rect(Rect::from_min_max(r.min, pos2(r.max.x, r.max.y + 14.0)), None);
+            // `scrollIntoView({ block: 'nearest' })`: nothing to do for a mark that is in view (and a scroll
+            // request that no area of the page takes would be taken by the transcript's)
+            let want = Rect::from_min_max(r.min, pos2(r.max.x, r.max.y + 14.0));
+            let vis = ui.clip_rect();
+            if want.top() < vis.top() || want.bottom() > vis.bottom() {
+                ui.scroll_to_rect(want, None);
+            }
         }
         cx.stage.mark_seen = Some(now);
     }
@@ -2483,7 +2502,7 @@ fn unit(ui: &mut Ui, cx: &mut Cx, s: &Session, p: &Page, line: &Line, items: &[w
         if reading {
             ui.painter().rect_filled(Rect::from_min_size(pos2(rect.left(), rect.bottom() - 4.0), vec2(rect.width(), 3.0)), 1.0, t.accent);
             if cx.scroll_read {
-                ui.scroll_to_rect(rect, None);
+                scroll_line_into_view(ui, cx.stage.tray_px, rect);
             }
         }
         cx.ctl.end_para(&id, TEXT, rect, true, reading);
@@ -2706,7 +2725,7 @@ fn unit(ui: &mut Ui, cx: &mut Cx, s: &Session, p: &Page, line: &Line, items: &[w
         }
     }
     if reading && cx.scroll_read {
-        ui.scroll_to_rect(rect, None);
+        scroll_line_into_view(ui, cx.stage.tray_px, rect);
     }
     if reading {
         // `text-decoration: underline 3px accent; text-underline-offset: 7px` on the line: the browser draws it
@@ -2832,7 +2851,7 @@ fn dom_unit(ui: &mut Ui, cx: &mut Cx, s: &Session, p: &Page, line: &Line, items:
         }
     }
     if reading && cx.scroll_read {
-        ui.scroll_to_rect(rect, None);
+        scroll_line_into_view(ui, cx.stage.tray_px, rect);
     }
     cx.ctl.end_para(&id, TEXT, rect, true, reading);
     rect
@@ -3269,4 +3288,15 @@ fn crop_for(p: &Page, e: &Entry, images: &HashMap<String, Slot>) -> Option<(egui
         dw = dh * pw / ph.max(1.0);
     }
     Some((im.full.id(), Rect::from_min_max(pos2(x, y), pos2(x + w, y + h)), vec2(dw, dh)))
+}
+
+/// `ln.scrollIntoView({ block: 'nearest' })`: the tray overlays the bottom of the transcript pane in the
+/// browser, so a line that is under it is already in view; only a line past the pane's real edge scrolls.
+fn scroll_line_into_view(ui: &Ui, tray_px: f32, rect: Rect) {
+    let clip = ui.clip_rect();
+    if tray_px > 0.0 && rect.top() >= clip.top() && rect.bottom() <= clip.bottom() + tray_px {
+        return;
+    }
+    let r = if tray_px > 0.0 && rect.bottom() > clip.bottom() { rect.translate(vec2(0.0, -tray_px)) } else { rect };
+    ui.scroll_to_rect(r, None);
 }

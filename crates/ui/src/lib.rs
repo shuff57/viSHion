@@ -247,6 +247,10 @@ impl Ctl {
         if self.restore_kb.as_deref() == Some(id) && !r.has_focus() && ui.ctx().memory(|m| m.focused().is_none()) {
             r.request_focus();
         }
+        if twin_focus && self.focus_fresh && !self.kbd {
+            // a mouse click focuses without scrolling (Chrome only scrolls a focus made by key or script)
+            self.focus_fresh = false;
+        }
         if twin_focus && self.focus_fresh && self.scrolls.get(region as usize).copied().unwrap_or(false) {
             self.focus_fresh = false;
             // the ring and a little air round it; a tall region (the transcript) only needs its top on screen
@@ -636,6 +640,8 @@ impl Ctl {
                 }
             } else if m == "kbd:1" {
                 self.kbd = true;
+            } else if m == "kbd:0" {
+                self.kbd = false;
             } else if let Some(rest) = m.strip_prefix("key:") {
                 let (key, alt) = match rest.split_once('\u{1}') {
                     Some((k, m)) => (k, m.contains("alt")),

@@ -137,6 +137,16 @@ pub fn install(q: Queue, ctx: egui::Context) {
         let _ = h.add_event_listener_with_callback("focusin", cb.as_ref().unchecked_ref());
         cb.forget();
     }
+    // a mouse press on the twin (a click on a word of the DOM transcript) ends "the keyboard is in use"
+    {
+        let (q, ctx) = (q.clone(), ctx.clone());
+        let cb = Closure::<dyn FnMut(web_sys::Event)>::new(move |_e: web_sys::Event| {
+            q.lock().unwrap().push("kbd:0".to_string());
+            ctx.request_repaint();
+        });
+        let _ = h.add_event_listener_with_callback("pointerdown", cb.as_ref().unchecked_ref());
+        cb.forget();
+    }
     listen("focusin", "focus");
     // a formula that scrolls sideways takes keyboard focus: the screen brings its line into view (the twin is
     // `overflow: clip`, so the browser cannot)
