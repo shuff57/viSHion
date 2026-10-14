@@ -2798,3 +2798,25 @@ fn a11y_a_dimmed_control_says_why() {
     let said = h.app.announced()[before..].join(" | ");
     assert!(said.contains("smallest"), "{said}");
 }
+
+/// Round 11: rotate says the resulting orientation (not the same words every press), Home and End in the
+/// transcript move the reading underline to the first and last line, and a dimmed control that has a reason
+/// (Zoom out at fit) is a Tab stop natively as it is on the web.
+#[test]
+fn rotate_says_orientation_home_end_move_and_dimmed_zoom_out_is_a_stop() {
+    let mut h = H::new("m1");
+    h.act("rotate");
+    h.frames(3);
+    assert!(h.app.said_log.iter().any(|s| s.contains("90 degrees clockwise")), "{:?}", h.app.said_log);
+    h.act("rotate");
+    h.frames(3);
+    assert!(h.app.said_log.iter().any(|s| s.contains("upside down")), "{:?}", h.app.said_log);
+    h.focus("transcript");
+    h.twin_key("End", false);
+    let last = *h.s().read_line.get("m1").expect("End moved the underline");
+    assert!(last > 0, "{last}");
+    h.twin_key("Home", false);
+    assert_eq!(h.s().read_line.get("m1"), Some(&0));
+    assert!(h.ctl("zoom-out").unwrap().disabled);
+    assert!(twin::tab_stops(h.app.nodes()).contains(&"zoom-out"));
+}

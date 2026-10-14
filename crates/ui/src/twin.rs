@@ -144,16 +144,20 @@ pub fn pos_of(min: egui::Pos2) -> (i32, i32) {
 /// focusable key regions. The web gets this from the DOM; the native window has to be told, because egui
 /// would walk widgets in the order they were drawn (a panel docked at the bottom is drawn before the page
 /// that surrounds it) and stop on its own scroll areas and splitters, which have no name.
+fn stop(c: &Reg) -> bool {
+    !c.disabled || crate::a11y::disabled_reason(&c.id).is_some()
+}
+
 pub fn tab_stops(nodes: &[Node]) -> Vec<&str> {
     let mut out = vec![];
     for n in nodes {
         match n {
-            Node::Control(c) if !c.disabled => out.push(c.id.as_str()),
+            Node::Control(c) if stop(c) => out.push(c.id.as_str()),
             Node::Group { id, .. } => out.push(id.as_str()),
             Node::Para { parts, .. } => {
                 for p in parts {
                     if let Part::Control(c) = p {
-                        if !c.disabled {
+                        if stop(c) {
                             out.push(c.id.as_str());
                         }
                     }

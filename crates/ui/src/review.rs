@@ -73,6 +73,7 @@ pub(crate) enum Act {
     Tray(bool),
     ReadLine(usize),
     ReadMove(i32),
+    ReadEdge(bool),
     ReadClear,
     Zoom(i32),
     ZoomSet(f32),
@@ -312,7 +313,7 @@ pub(crate) fn show(app: &mut App, ctx: &egui::Context, t: &Tokens) {
     if let Some(s) = session.as_mut() {
         s.now = crate::now_ms();
         for a in acts {
-            if !matches!(a, Act::ReadLine(_) | Act::ReadMove(_) | Act::ReadClear | Act::Zoom(_) | Act::ZoomSet(_) | Act::Pan(_) | Act::Dialog(_) | Act::CloseDialog | Act::Scrolled(_)) {
+            if !matches!(a, Act::ReadLine(_) | Act::ReadMove(_) | Act::ReadEdge(_) | Act::ReadClear | Act::Zoom(_) | Act::ZoomSet(_) | Act::Pan(_) | Act::Dialog(_) | Act::CloseDialog | Act::Scrolled(_)) {
                 *status_msg = None;
             }
             apply(a, s, ctx, ctl, typed, status_msg, status_err, dialog, &send);
@@ -365,6 +366,8 @@ fn route_keys(ctl: &Ctl, s: &Session, dialog_open: bool, acts: &mut Vec<Act>) {
             }
             "ArrowDown" if in_tx => acts.push(Act::ReadMove(1)),
             "ArrowUp" if in_tx => acts.push(Act::ReadMove(-1)),
+            "Home" if in_tx => acts.push(Act::ReadEdge(false)),
+            "End" if in_tx => acts.push(Act::ReadEdge(true)),
             "+" | "=" if in_stage => acts.push(Act::Zoom(1)),
             "-" if in_stage => acts.push(Act::Zoom(-1)),
             "0" if in_stage => acts.push(Act::ZoomSet(1.0)),
@@ -594,6 +597,14 @@ fn apply(
                 ctl.say(format!("Line {} of {}: {}", next + 1, n, spoken_line(&units[next])));
             }
         }
+        Act::ReadEdge(end) => {
+            let units = s.current().map(|p| vishion_core::render::units(p.raw())).unwrap_or_default();
+            if !units.is_empty() {
+                let i = if end { units.len() - 1 } else { 0 };
+                s.set_read_line(Some(i));
+                ctl.say(format!("Line {} of {}: {}", i + 1, units.len(), spoken_line(&units[i])));
+            }
+        }
         Act::ReadClear => s.set_read_line(None),
         Act::Zoom(d) => {
             s.step_zoom(d);
@@ -606,7 +617,14 @@ fn apply(
         Act::Pan(p) => ctl.pan = Some(p),
         Act::Rotate => {
             if s.rotate_current() {
-                ctl.say("Page turned 90 degrees.");
+                // the resulting orientation, so a second press is not the same words as the first
+                let rot = s.current().and_then(|p| p.get("rotation").map(vishion_core::jsx::number)).unwrap_or(0.0) as i64;
+                ctl.say(match rot.rem_euclid(360) {
+                    90 => "Page turned. Now rotated 90 degrees clockwise.",
+                    180 => "Page turned. Now upside down.",
+                    270 => "Page turned. Now rotated 90 degrees counterclockwise.",
+                    _ => "Page turned. Now upright again.",
+                });
             }
         }
         Act::Level => {

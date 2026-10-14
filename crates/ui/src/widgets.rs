@@ -26,6 +26,18 @@ pub enum Look {
     Ghost,
 }
 
+/// What a control senses. A dimmed control with a reason stays a Tab stop natively (as `aria-disabled` does
+/// on the web) so a keyboard user can land on it and hear why; one without a reason is skipped.
+fn sense_of(c: &C) -> Sense {
+    if !c.disabled {
+        Sense::click()
+    } else if crate::a11y::disabled_reason(c.id).is_some() {
+        Sense::focusable_noninteractive()
+    } else {
+        Sense::hover()
+    }
+}
+
 fn paint_look(ui: &Ui, r: &Response, t: &Tokens, look: Look, on: bool, disabled: bool) {
     let p = ui.painter();
     let hover = r.hovered() && !disabled;
@@ -60,7 +72,7 @@ pub fn button_pad(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, c: C, text: &str, look
     };
     let g = ui.painter().layout_no_wrap(text.to_string(), theme::sans_semi(14.0), fg);
     let w = (g.size().x + pad).max(min_w);
-    let sense = if c.disabled { Sense::hover() } else { Sense::click() };
+    let sense = sense_of(&c);
     let r = ui.allocate_response(vec2(w, TARGET), sense);
     paint_button(ui, &r, t, &c, g, look);
     ctl.reg(ui, &r, c)
@@ -73,7 +85,7 @@ pub fn button_sized(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, c: C, text: &str, lo
         _ => if c.disabled { t.faint } else { t.ink },
     };
     let g = ui.painter().layout_no_wrap(text.to_string(), theme::sans_semi(size), fg);
-    let sense = if c.disabled { Sense::hover() } else { Sense::click() };
+    let sense = sense_of(&c);
     let r = ui.allocate_response(vec2(g.size().x + BTN_PAD, TARGET), sense);
     paint_button(ui, &r, t, &c, g, look);
     ctl.reg(ui, &r, c)
@@ -98,7 +110,7 @@ pub fn button_at(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, c: C, text: &str, look:
     };
     let g = ui.painter().layout_no_wrap(text.to_string(), theme::sans_semi(14.0), fg);
     let rect = Rect::from_min_size(at, vec2(g.size().x + BTN_PAD, TARGET));
-    let sense = if c.disabled { Sense::hover() } else { Sense::click() };
+    let sense = sense_of(&c);
     let r = ui.interact(rect, ui.id().with(("button-at", c.id)), sense);
     paint_button(ui, &r, t, &c, g, look);
     let disabled = c.disabled;
@@ -191,7 +203,7 @@ pub fn icon_text_button(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, c: C, icon: Icon
     let g = ui.painter().layout_no_wrap(text.to_string(), theme::sans_semi(14.0), fg);
     // `.btn`: 1px border and 16px padding each side, a 20px icon and a gap of 8
     let w = g.size().x + BTN_PAD + 20.0 + 8.0;
-    let sense = if c.disabled { Sense::hover() } else { Sense::click() };
+    let sense = sense_of(&c);
     let r = ui.allocate_response(vec2(w, TARGET), sense);
     paint_look(ui, &r, t, look, false, c.disabled);
     paint_icon(ui, Rect::from_center_size(pos2(r.rect.left() + 17.0 + 10.0, r.rect.center().y), vec2(20.0, 20.0)), icon, fg);
@@ -265,7 +277,7 @@ pub fn brand(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, c: C) -> bool {
 /// A 44 x 44 icon-only button; `label` is its accessible name.
 pub fn icon_button(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, c: C, icon: Icon, on: bool) -> bool {
     let disabled = c.disabled;
-    let sense = if disabled { Sense::hover() } else { Sense::click() };
+    let sense = sense_of(&c);
     let r = ui.allocate_response(vec2(TARGET, TARGET), sense);
     paint_look(ui, &r, t, Look::Ghost, on, disabled);
     paint_icon(ui, Rect::from_center_size(r.rect.center(), vec2(22.0, 22.0)), icon, if disabled { t.faint } else { t.ink });
