@@ -1104,7 +1104,8 @@ impl App {
                     if let Some(id) = &self.start_page {
                         sess.select(id);
                     }
-                    if self.start_inbox {
+                    // an assignment with no pages has nothing to review: it opens on the overview, where "Add pages" is
+                    if self.start_inbox || sess.a.pages.is_empty() {
                         sess.view = state::View::Inbox;
                     }
                     if self.start_no_tray {

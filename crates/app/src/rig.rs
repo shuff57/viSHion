@@ -332,6 +332,11 @@ mod tests {
         r.act("create-assignment");
         assert_eq!(r.app.session().unwrap().a.meta.name(), "Fresh start");
         assert!(!r.has("new-assignment"), "the new assignment is open, not the home screen");
+        // no pages yet: it opens on the overview, which offers Add pages (not an empty review screen)
+        assert_eq!(r.app.session().unwrap().view, vishion_ui::state::View::Inbox);
+        assert!(r.has("add-pages"));
+        r.act("add-pages");
+        assert!(r.has("add-choose"));
     }
 
     /// Opening a card from the home screen shows that assignment.

@@ -1888,6 +1888,10 @@ fn inbox_body(ui: &mut Ui, cx: &mut Cx, s: &Session) {
                 ui.add_space(10.0);
                 let r = css_text(ui, "No pages in this assignment", theme::sans_semi(18.0), t.ink, 18.0 * 1.4, w, false);
                 cx.ctl.heading("inbox-empty", 2, "No pages in this assignment", TEXT, r);
+                ui.add_space(14.0);
+                if widgets::button(cx.ctl, ui, t, C::new("add-pages-empty", "Add pages", TEXT), "Add pages", Look::Primary, 0.0) {
+                    cx.acts.push(Act::OpenAdd(None));
+                }
             });
         });
         return;
@@ -2037,16 +2041,6 @@ fn inbox_body(ui: &mut Ui, cx: &mut Cx, s: &Session) {
             }
         });
     }
-    ui.add_space(12.0);
-    css_text(
-        ui,
-        "Adding pages in bulk and exporting arrive with phase 5 and 6.",
-        theme::sans(13.0),
-        t.muted,
-        13.0 * 1.4,
-        w,
-        false,
-    );
 }
 
 /// `.srow`: selection box, thumbnail, name and counts, the status chip, a chevron, and Retry for a failed one.
