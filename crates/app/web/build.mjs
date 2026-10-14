@@ -53,7 +53,7 @@ fs.copyFileSync(path.join(repo, 'crates/ui/assets/fonts/twemoji-colr.ttf'), path
 // The transcript is DOM text (a user stylesheet and text spacing apply to it): the JS app's own faces, and KaTeX,
 // which typesets formulas as MathML. Fetched when the page has a formula.
 fs.mkdirSync(path.join(dist, 'fonts'), { recursive: true });
-for (const f of fs.readdirSync(path.join(repo, 'fonts')).filter((n) => /^(instrument-sans|source-serif-4).*\.woff2$/.test(n))) {
+for (const f of fs.readdirSync(path.join(repo, 'fonts')).filter((n) => /^(instrument-sans|source-serif-4|caveat).*\.woff2$/.test(n))) {
   fs.copyFileSync(path.join(repo, 'fonts', f), path.join(dist, 'fonts', f));
 }
 fs.copyFileSync(path.join(repo, 'crates/ui/assets/fonts/hack-latin-400-normal.ttf'), path.join(dist, 'fonts/hack-latin-400-normal.ttf'));

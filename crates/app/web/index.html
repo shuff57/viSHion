@@ -124,6 +124,7 @@
   #boot { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px;
           padding: 24px; text-align: center; font: 18px/1.4 system-ui, sans-serif; color: #1B2230; }
   #boot p { margin: 0; max-width: 40em; }
+  #boot .boot-logo { width: min(260px, 70vw); height: auto; }
   #boot .detail { font-size: 14px; opacity: .8; }
   @media (prefers-color-scheme: dark) { #boot { color: #E6EAF2; } }
   /* Windows contrast themes: the page behind the canvas takes the system colours */
@@ -135,7 +136,27 @@
 <div id="controls"></div>
 <div id="announce" class="live" role="status" aria-live="polite" aria-atomic="true"></div>
 <div id="announce-alert" class="live" role="alert" aria-live="assertive" aria-atomic="true"></div>
-<div id="boot"><p id="boot-status" role="status">Loading viSHion&hellip;</p><div id="boot-error" role="alert"></div></div>
+<div id="boot"><svg class="boot-logo" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 120" aria-hidden="true" focusable="false">
+  <style>
+    @font-face { font-family:'Caveat'; font-weight:600; src:url(fonts/caveat-600-logo.woff2) format('woff2'); }
+    @font-face { font-family:'Instrument Sans'; font-weight:600; src:url(fonts/instrument-sans-latin-600-normal.woff2) format('woff2'); }
+    .boot-logo { --ink:#141B2D; --accent:#26358F; }
+    @media (prefers-color-scheme: dark) { .boot-logo { --ink:#E8ECF3; --accent:#8FA0FF; } }
+    .hand  { font:600 68px 'Caveat','Segoe Script','Bradley Hand',cursive; fill:var(--accent); opacity:.85;
+             animation:hand 5s ease-in-out infinite alternate; }
+    .clean { font:600 56px 'Instrument Sans','Segoe UI',system-ui,sans-serif; fill:var(--ink);
+             animation:clean 5s ease-in-out infinite alternate; }
+    .clean tspan { fill:var(--accent); }
+    .bar   { fill:var(--accent); animation:bar 5s ease-in-out infinite alternate; }
+    @keyframes clean { 0%,12% { clip-path:inset(0 100% 0 0); } 88%,100% { clip-path:inset(0); } }
+    @keyframes hand  { 0%,12% { clip-path:inset(0); } 88%,100% { clip-path:inset(0 0 0 100%); } }
+    @keyframes bar   { 0%,12% { transform:translateX(0); } 88%,100% { transform:translateX(300px); } }
+    @media (prefers-reduced-motion: reduce) { .boot-logo * { animation:none !important; } .hand { display:none; } .clean { clip-path:none; } .bar { display:none; } }
+  </style>
+  <text class="hand"  x="30" y="82" textLength="300" lengthAdjust="spacingAndGlyphs" transform="rotate(-3 180 60)">viSHion</text>
+  <text class="clean" x="30" y="82" textLength="300" lengthAdjust="spacingAndGlyphs">vi<tspan>SH</tspan>ion</text>
+  <rect class="bar" x="28" y="22" width="4" height="76" rx="2"/>
+</svg><p id="boot-status" role="status">Loading viSHion&hellip;</p><div id="boot-error" role="alert"></div></div>
 <noscript>viSHion needs JavaScript and WebAssembly.</noscript>
 <script type="module">
 import init, { start } from './vishion_app.js';
