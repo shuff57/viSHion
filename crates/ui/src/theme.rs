@@ -305,7 +305,8 @@ pub fn fonts(fallback: Option<&'static [u8]>) -> FontDefinitions {
     }
     f.families.insert(FontFamily::Monospace, with(MONO));
     f.families.insert(named(MONO_BOLD), with(MONO_BOLD));
-    f.families.insert(named(HAND), vec![HAND.to_string()]);
+    // (the face has only the letters of the wordmark; the others give it the replacement glyphs egui looks for)
+    f.families.insert(named(HAND), with(HAND));
     f
 }
 
