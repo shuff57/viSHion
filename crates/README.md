@@ -219,6 +219,13 @@ provider is asked when Settings opens.
 whether the key was refused. "Show every model again" clears `working`. `dialog::remember` merges into the
 profile, so `working` survives a provider switch.
 
+## Paste on the web
+
+`ui::web::install_paste` listens for `paste` on the window. Pictures on the clipboard (not when the target is an
+input, textarea or select, where paste is text) are read with `arrayBuffer()`, a nameless screenshot is called
+`pasted-<ms>-<n>.png`, and the next frame passes them to `App::paste_files`: the Add screen opens (it does not
+from Home) and the files are staged like dropped ones (`Cmd::StageFiles`).
+
 ## Add screen: Turn, Straighten and Look
 
 A staged row keeps the shrunk picture (`StagedItem::base`); `fit_picture` (turn by quarter turns, then deskew when
