@@ -661,6 +661,32 @@ mod tests {
         }
     }
 
+    /// The banner's Retry pings `/health`: a server that answers is fine, a dead port is not, and hosted
+    /// endpoints (no `/health`) always count as there.
+    #[test]
+    fn ping_asks_health_of_a_local_server_only() {
+        use std::io::{Read, Write};
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let up = format!("http://{}", l.local_addr().unwrap());
+        std::thread::spawn(move || {
+            for conn in l.incoming() {
+                let Ok(mut s) = conn else { return };
+                let mut b = [0u8; 2048];
+                let _ = s.read(&mut b);
+                let _ = s.write_all(b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 2\r\n\r\nok");
+            }
+        });
+        let be = Backend::new(AnyStore::Mem(vishion_store::mem::MemStore::default()), "Saved");
+        let ping = |url: &str, provider: &str| match block_on(be.ping(&vishion_ui::Conn { url: url.into(), provider: provider.into(), ..Default::default() })) {
+            Event::Pinged { ok, text } => (ok, text),
+            e => panic!("{e:?}"),
+        };
+        assert!(ping(&up, "local").0);
+        let (ok, text) = ping("http://127.0.0.1:1", "local");
+        assert!(!ok && text.starts_with("Cannot reach OCR server at http://127.0.0.1:1"), "{text}");
+        assert!(ping("http://127.0.0.1:1", "openrouter").0, "a hosted endpoint has no /health");
+    }
+
     /// The native path: a real folder, written and read back through `FsStore` and the project layer.
     #[test]
     fn folder_store_round_trip_keeps_edits() {

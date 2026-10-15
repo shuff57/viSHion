@@ -552,6 +552,20 @@ impl Backend {
         }
     }
 
+    /// `O.ping`: is the server answering? Demo mode and hosted endpoints (no `/health`) always are.
+    pub async fn ping(&self, conn: &Conn) -> Event {
+        let id = if conn.provider.is_empty() { "local" } else { conn.provider.as_str() };
+        if self.demo || conn.demo || self.demo_mode().await || (id != "local" && id != "mock") {
+            return Event::Pinged { ok: true, text: String::new() };
+        }
+        let base = conn.url.trim_end_matches('/');
+        let provider = vishion_net::Provider::for_setting(id);
+        match provider.get(&format!("{base}/health"), &conn.api_key, 10).await {
+            Ok(r) if r.status == 200 => Event::Pinged { ok: true, text: String::new() },
+            _ => Event::Pinged { ok: false, text: format!("Cannot reach OCR server at {base}. Is llama-server running with CORS enabled?") },
+        }
+    }
+
     /// Settings, Check which models work (`M.probe` and the button of js/ui/settings.js): list every model that
     /// takes images, send each a tiny picture, keep those that answer. `emit` hears the progress.
     pub async fn check_models(&self, conn: &Conn, emit: &dyn Fn(Event)) {
@@ -838,6 +852,7 @@ impl Backend {
             // the folder card is a browser thing: the web executor answers it, a native host has no such card
             Cmd::Folder(_) => Event::Many(vec![]),
             Cmd::ImportLegacy => self.import_legacy(now).await,
+            Cmd::Ping { conn } => self.ping(&conn).await,
             Cmd::TestConnection { conn } => self.test_connection(&conn).await,
             Cmd::CheckModels { conn } => {
                 let out = std::cell::RefCell::new(vec![]);

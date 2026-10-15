@@ -101,6 +101,7 @@ pub(crate) enum Act {
     OpenAssignment,
     OpenExport,
     OpenAdd(Option<String>),
+    ServerRetry,
     AddChoose,
     OpenCapture,
     CaptureShot,
@@ -307,6 +308,28 @@ pub(crate) fn show(app: &mut App, ctx: &egui::Context, t: &Tokens) {
                     });
                 let hr = hdr.response.rect;
                 ctx.layer_painter(egui::LayerId::new(egui::Order::Middle, egui::Id::new("hdr-line"))).hline(hr.x_range(), hr.bottom() - 0.5, Stroke::new(1.0, t.line));
+            }
+            // `banner.js`: the transcription server could not be reached; stays until a retry gets an answer
+            if let Some(err) = s.server_error.clone() {
+                let url = s.settings.get("ocrUrl").and_then(|v| v.as_str()).unwrap_or("").trim_end_matches('/').to_string();
+                let text = if err.starts_with("Cannot reach OCR server") {
+                    format!("Can\u{2019}t reach the transcription server at {url}. Start llama-server with CORS turned on, then retry.")
+                } else {
+                    err
+                };
+                egui::TopBottomPanel::top("server-banner")
+                    .show_separator_line(false)
+                    .frame(egui::Frame::none().fill(t.bad_bg).inner_margin(Margin::symmetric(if narrow { 16.0 } else { 24.0 }, 10.0)))
+                    .show(ctx, |ui| {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.spacing_mut().item_spacing = vec2(12.0, 8.0);
+                            let r = ui.label(RichText::new(&text).font(theme::sans(14.0)).color(t.bad));
+                            cx.ctl.status("server-banner", &text, HEADER, r.rect);
+                            if widgets::button(cx.ctl, ui, t, C::new("server-retry", "Retry", HEADER), "Retry", Look::Outline, 0.0) {
+                                cx.acts.push(Act::ServerRetry);
+                            }
+                        });
+                    });
             }
             match s.view {
                 View::Inbox => inbox(ctx, &mut cx, s),
@@ -803,6 +826,7 @@ fn apply(
             s.view = View::Add;
             ctl.focus_title = Some("add-title");
         }
+        Act::ServerRetry => send(Cmd::Ping { conn: s.read_conn() }),
         Act::OpenCapture => {
             s.capture = state::CaptureState { auto: s.capture.auto, ..Default::default() };
             s.view = View::Capture;

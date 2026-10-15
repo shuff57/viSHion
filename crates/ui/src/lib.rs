@@ -1118,6 +1118,23 @@ impl App {
                 }
                 Event::Folder(f) => self.home.folder = Some(f),
                 Event::LegacyAvailable(on) => self.home.legacy = on,
+                Event::Pinged { ok, text } => {
+                    let mut start = None;
+                    if let Some(s) = &mut self.session {
+                        if ok {
+                            // `U.resumeAll`: every page that still has no transcript, not only the last run's
+                            s.server_error = None;
+                            start = Some((s.slug.clone(), s.pending_ids(), s.read_conn()));
+                        } else {
+                            s.server_error = Some(text);
+                        }
+                    }
+                    if let Some((slug, ids, conn)) = start {
+                        if !ids.is_empty() {
+                            self.send(Cmd::Transcribe { slug, ids, conn });
+                        }
+                    }
+                }
                 Event::ModelsProgress { done, total } => {
                     if let Some(s) = &mut self.session {
                         s.check_note = format!("Checking {done} of {total}\u{2026}");
@@ -1328,6 +1345,7 @@ impl App {
                                 _ => vec![],
                             };
                             if let Some(s) = &mut self.session {
+                                s.server_error = None;
                                 s.page_read(&id, &raw, tokens, ms, guesses, &bands);
                             }
                         }
@@ -1335,9 +1353,10 @@ impl App {
                             if let Some(s) = &mut self.session {
                                 s.page_unread(&id);
                             }
-                            self.status_msg = Some(m);
-                            self.ctl.toast_serial += 1;
-                            self.status_err = true;
+                            // (`S.set({ serverError })`: a banner under the header, not a toast)
+                            if let Some(s) = &mut self.session {
+                                s.server_error = Some(m);
+                            }
                         }
                         Failed(m) => {
                             if let Some(s) = &mut self.session {

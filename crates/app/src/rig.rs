@@ -686,4 +686,27 @@ mod tests {
         let p = r.app.session().unwrap().settings.get("profiles").unwrap().clone();
         assert!(p["local"].get("working").is_none());
     }
+
+    /// An unreachable server shows a banner under the header until Retry gets an answer, then the pages that
+    /// still have no transcript are read.
+    #[test]
+    fn server_down_banner_stays_until_retry_gets_an_answer() {
+        use vishion_ui::{Event, ReadOutcome};
+        let mut r = Rig::demo();
+        r.inbox.push(Event::Transcribed {
+            id: "p-ben-1".into(),
+            outcome: ReadOutcome::Unreachable("Cannot reach OCR server at http://localhost:8188. Is llama-server running with CORS enabled?".into()),
+        });
+        r.frames(3);
+        assert!(r.has("server-retry"));
+        let said: Vec<String> = r.app.nodes().iter().filter_map(|n| match n {
+            vishion_ui::Node::Status { text, .. } => Some(text.clone()),
+            _ => None,
+        }).collect();
+        assert!(said.iter().any(|t| t.starts_with("Can\u{2019}t reach the transcription server at")), "{said:?}");
+        // the demo backend answers the ping, so the banner clears and the waiting page is read
+        r.act("server-retry");
+        assert!(!r.has("server-retry"));
+        assert_eq!(r.page("p-ben-1").status(), "done");
+    }
 }

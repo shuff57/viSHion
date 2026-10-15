@@ -223,6 +223,8 @@ pub struct Session {
     /// What Find models found: (id, label, takes images), and the note under the model picker.
     pub found_models: Vec<(String, String, Option<bool>)>,
     pub models_note: String,
+    /// The transcription server could not be reached (`S.d.serverError`): the banner says so until a retry works.
+    pub server_error: Option<String>,
     /// "Check which models work" is running, and what it said.
     pub checking: bool,
     pub check_note: String,
@@ -298,6 +300,7 @@ impl Session {
             conn_test: None,
             found_models: vec![],
             models_note: String::new(),
+            server_error: None,
             checking: false,
             check_note: String::new(),
             capture: CaptureState { auto: true, ..Default::default() },

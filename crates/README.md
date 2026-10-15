@@ -219,6 +219,13 @@ provider is asked when Settings opens.
 whether the key was refused. "Show every model again" clears `working`. `dialog::remember` merges into the
 profile, so `working` survives a provider switch.
 
+## Server-down banner
+
+A read that cannot reach the server (`ReadOutcome::Unreachable`) sets `Session::server_error`: a banner under the
+header (`banner.js`) with the address and **Retry**, instead of a toast. A page that reads clears it. Retry sends
+`Cmd::Ping` (`GET /health` for a local server; demo mode and hosted endpoints always answer) and, when it
+answers, reads every page that still has no transcript (`U.resumeAll`).
+
 ## Demo mode and reading pages
 
 `--demo`, `?demo=1` and the `demo` setting answer Retry, Transcribe, Transcribe again and the inbox's Resume

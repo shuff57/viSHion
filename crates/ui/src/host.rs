@@ -61,6 +61,8 @@ pub enum Cmd {
     /// Settings, Find models: the models the server lists that can read images (`working` narrows a cloud
     /// picker to the models a check found usable; `all` ignores it).
     FindModels { conn: Conn, working: Option<Vec<String>>, all: bool },
+    /// The banner's Retry: is the transcription server answering? `Event::Pinged`.
+    Ping { conn: Conn },
     /// Settings, Check which models work: one tiny image to every model that takes images, `Event::ModelsProgress`
     /// as they answer and `Event::ModelsChecked` at the end.
     CheckModels { conn: Conn },
@@ -154,6 +156,8 @@ pub enum Event {
     },
     /// Whether Home offers "Import old sessions".
     LegacyAvailable(bool),
+    /// The answer to `Ping`.
+    Pinged { ok: bool, text: String },
     /// How far Check which models work has got.
     ModelsProgress { done: usize, total: usize },
     /// The end of Check which models work: the ids that answered (what to remember as working), the picker
