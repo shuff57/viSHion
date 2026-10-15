@@ -537,6 +537,68 @@ mod tests {
         assert!(ask(vishion_ui::Conn { demo: true, ..Default::default() }).1.starts_with("Demo mode is on"));
     }
 
+    /// Settings, Find models: a local Ollama's models, with /api/show telling which can see images; hosted ones
+    /// stay out of the local picker and text-only ones out of every picker.
+    #[test]
+    fn find_models_lists_the_vision_models_of_a_local_ollama() {
+        use std::io::{Read, Write};
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", l.local_addr().unwrap());
+        std::thread::spawn(move || {
+            for conn in l.incoming() {
+                let Ok(mut s) = conn else { return };
+                std::thread::spawn(move || {
+                    s.set_read_timeout(Some(std::time::Duration::from_millis(300))).unwrap();
+                    let mut req = Vec::new();
+                    let mut b = [0u8; 8192];
+                    while let Ok(n) = s.read(&mut b) {
+                        if n == 0 {
+                            break;
+                        }
+                        req.extend_from_slice(&b[..n]);
+                        if req.windows(4).any(|w| w == b"\r\n\r\n") && (String::from_utf8_lossy(&req).starts_with("GET ") || req.ends_with(b"}")) {
+                            break;
+                        }
+                    }
+                    let text = String::from_utf8_lossy(&req).to_string();
+                    let body = if text.starts_with("GET /v1/models") {
+                        r#"{"data":[{"id":"llava:7b"},{"id":"coder:7b"},{"id":"gemma4:31b-cloud"}]}"#.to_string()
+                    } else if text.contains("llava:7b") || text.contains("gemma4:31b-cloud") {
+                        r#"{"capabilities":["completion","vision"]}"#.to_string()
+                    } else {
+                        r#"{"capabilities":["completion"]}"#.to_string()
+                    };
+                    let _ = s.write_all(format!("HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{body}", body.len()).as_bytes());
+                });
+            }
+        });
+        let be = Backend::new(AnyStore::Mem(vishion_store::mem::MemStore::default()), "Saved");
+        let ids = |ev: Event| -> Vec<String> {
+            match ev {
+                Event::ModelsFound(Ok(v)) => v.into_iter().map(|m| m.0).collect(),
+                e => panic!("{e:?}"),
+            }
+        };
+        let local = vishion_ui::Conn { url: url.clone(), provider: "local".into(), ..Default::default() };
+        assert_eq!(ids(block_on(be.find_models(&local, None, false))), ["llava:7b"]);
+        // another provider keeps the hosted model (and has no /api/show: the listing says nothing about images)
+        let custom = vishion_ui::Conn { url, provider: "custom".into(), ..Default::default() };
+        let mut got = ids(block_on(be.find_models(&custom, None, false)));
+        got.sort();
+        assert_eq!(got, ["coder:7b", "gemma4:31b-cloud", "llava:7b"]);
+        // a working list narrows a cloud picker; asking for all ignores it
+        assert_eq!(ids(block_on(be.find_models(&custom, Some(vec!["llava:7b".into()]), false))), ["llava:7b"]);
+        assert_eq!(ids(block_on(be.find_models(&custom, Some(vec!["llava:7b".into()]), true))).len(), 3);
+        // errors are sentences
+        let dead = vishion_ui::Conn { url: "http://127.0.0.1:1".into(), provider: "custom".into(), ..Default::default() };
+        match block_on(be.find_models(&dead, None, false)) {
+            Event::ModelsFound(Err(m)) => assert!(m.starts_with("Can\u{2019}t reach"), "{m}"),
+            e => panic!("{e:?}"),
+        }
+        let empty = vishion_ui::Conn::default();
+        assert!(matches!(block_on(be.find_models(&empty, None, false)), Event::ModelsFound(Err(m)) if m == "Enter the server address first."));
+    }
+
     /// The native path: a real folder, written and read back through `FsStore` and the project layer.
     #[test]
     fn folder_store_round_trip_keeps_edits() {

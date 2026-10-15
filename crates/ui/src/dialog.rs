@@ -143,6 +143,8 @@ pub enum Out {
     Provider(String),
     /// Test connection: the engine address and key as typed.
     TestConnection(String, String),
+    /// Find models: the engine address and key as typed.
+    FindModels(String, String),
     /// An assignment field changed in the open dialog (it stays open): key, value, what is said.
     Meta(&'static str, serde_json::Value, String),
     /// Make this kind of export (combined | pages | csv | json | copy | all) for the scope shown.
@@ -992,8 +994,12 @@ fn settings(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, s: &Session, drafts: &mut Dr
             ui.add_space(14.0);
             // the model: the one in use (or the server's own choice), and another name typed
             let cur_model = setting_str(s, "model", "");
-            let mut mitems = vec![(String::new(), "Whatever the server has loaded".to_string())];
-            if !cur_model.is_empty() {
+            let found = &s.found_models;
+            let mut mitems = vec![(String::new(), if found.is_empty() { "Whatever the server has loaded" } else { "Choose a model" }.to_string())];
+            for (id, label, _) in found {
+                mitems.push((id.clone(), label.clone()));
+            }
+            if !cur_model.is_empty() && !found.iter().any(|m| m.0 == cur_model) {
                 mitems.push((cur_model.clone(), cur_model.clone()));
             }
             mitems.push(("__other".to_string(), "Another model name\u{2026}".to_string()));
@@ -1008,6 +1014,22 @@ fn settings(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, s: &Session, drafts: &mut Dr
                     out = Some(Out::Setting("model", json!(v), said));
                 }
             }
+            ui.add_space(6.0);
+            ui.add_space(8.0);
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing = vec2(12.0, 8.0);
+                if widgets::button(ctl, ui, t, C::new("st-find-models", "Find models", DIALOG), "Find models", Look::Outline, 0.0) {
+                    let shown = drafts.get("st-ocr").cloned().unwrap_or_else(|| shown_url(pid.0, &setting_str(s, "ocrUrl", pid.2)));
+                    let key = drafts.get("st-key").cloned().unwrap_or_else(|| setting_str(s, "apiKey", ""));
+                    out = Some(Out::FindModels(engine_url(s, pid.0, &shown), key.trim().to_string()));
+                }
+                if !s.models_note.is_empty() {
+                    let g = ui.painter().layout_no_wrap(s.models_note.clone(), theme::sans(13.0), t.muted);
+                    let (r, _) = ui.allocate_exact_size(vec2(g.size().x, TARGET), Sense::hover());
+                    ui.painter().galley(widgets::centered(r, g.size()), g, t.muted);
+                    ctl.status("st-models-note", &s.models_note, DIALOG, r);
+                }
+            });
             ui.add_space(6.0);
             hint_p(ctl, ui, t, iw, "st-model-hint", "Choose which model reads the pages. A local server swaps it in when you pick another.");
             if *custom {

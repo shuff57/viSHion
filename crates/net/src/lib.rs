@@ -12,11 +12,11 @@ pub use provider::{Mock, Provider};
 #[cfg(not(target_arch = "wasm32"))]
 mod native;
 #[cfg(not(target_arch = "wasm32"))]
-pub use native::{complete, complete_opts, get, transcribe};
+pub use native::{complete, complete_opts, get, post_json, transcribe};
 #[cfg(target_arch = "wasm32")]
 mod web;
 #[cfg(target_arch = "wasm32")]
-pub use web::{complete, complete_opts, get, transcribe};
+pub use web::{complete, complete_opts, get, post_json, transcribe};
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;

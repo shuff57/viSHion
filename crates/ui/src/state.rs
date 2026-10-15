@@ -220,6 +220,9 @@ pub struct Session {
     pub add: AddState,
     /// The result line under Settings' Test connection.
     pub conn_test: Option<(bool, String)>,
+    /// What Find models found: (id, label, takes images), and the note under the model picker.
+    pub found_models: Vec<(String, String, Option<bool>)>,
+    pub models_note: String,
     pub capture: CaptureState,
     /// `S.d.textView === 'raw'`: the transcript as plain monospace text.
     pub text_raw: bool,
@@ -290,6 +293,8 @@ impl Session {
             view: View::Review,
             add: AddState::default(),
             conn_test: None,
+            found_models: vec![],
+            models_note: String::new(),
             capture: CaptureState { auto: true, ..Default::default() },
             text_raw: false,
             zoom: 1.0,

@@ -84,6 +84,56 @@ impl Provider {
         }
     }
 
+    /// A `POST` with a JSON body.
+    pub async fn post_json(&self, url: &str, api_key: &str, body: &str, timeout_secs: u64) -> Result<crate::Reply, Error> {
+        match self {
+            Provider::OpenAiCompatible => crate::post_json(url, api_key, body, timeout_secs).await,
+            Provider::Mock(m) => match &m.fail {
+                Some(msg) => Err(Error::Network(msg.clone())),
+                None => Ok(crate::Reply { status: 200, body: "{\"capabilities\":[\"completion\",\"vision\"]}".into() }),
+            },
+        }
+    }
+
+    /// `M.list` (before the picker's tidying): the rows the server lists, each with what `/api/show` says about
+    /// vision when the provider is a local Ollama. Errors are the sentences Settings shows.
+    pub async fn list_models(&self, base: &str, api_key: &str, shows: bool, relay: bool) -> Result<Vec<(crate::models::ModelRow, Option<bool>)>, String> {
+        let base = base.trim_end_matches('/');
+        if base.is_empty() {
+            return Err("Enter the server address first.".into());
+        }
+        let r = match self.get(&format!("{base}/v1/models"), api_key, 15).await {
+            Ok(r) => r,
+            Err(_) if relay => return Err("The relay is not running. Start it once with: node tools/relay.js".into()),
+            Err(_) => return Err(format!("Can\u{2019}t reach {base}. Is it running, and does it allow this page (CORS)?")),
+        };
+        if r.status == 401 || r.status == 403 {
+            return Err("The server did not accept the API key.".into());
+        }
+        if r.status != 200 {
+            return Err(format!("The server answered with {}.", r.status));
+        }
+        let rows = crate::models::parse_rows(&r.body);
+        let router = rows.iter().any(|m| m.router);
+        let mut out = vec![];
+        for m in rows {
+            let mut shown = None;
+            // a local Ollama can tell which of its models see images; llama.cpp has no /api/show
+            if shows && !router {
+                let body = serde_json::json!({ "model": m.id }).to_string();
+                if let Ok(s) = self.post_json(&format!("{base}/api/show"), api_key, &body, 15).await {
+                    if s.status == 200 {
+                        if let Some(caps) = serde_json::from_str::<serde_json::Value>(&s.body).ok().and_then(|v| v.get("capabilities").and_then(|c| c.as_array().cloned())) {
+                            shown = Some(caps.iter().any(|c| c.as_str() == Some("vision")));
+                        }
+                    }
+                }
+            }
+            out.push((m, shown));
+        }
+        Ok(out)
+    }
+
     /// One answer that is not streamed (name reading, guesses).
     pub async fn complete(&self, req: Request<'_>, temperature: f64, max_tokens: u32) -> Result<String, Error> {
         match self {

@@ -54,6 +54,28 @@ pub async fn get(url: &str, api_key: &str, _timeout_secs: u64) -> Result<crate::
     Ok(crate::Reply { status: res.status(), body })
 }
 
+/// `POST url` with a JSON body (see the native `post_json`).
+pub async fn post_json(url: &str, api_key: &str, body: &str, _timeout_secs: u64) -> Result<crate::Reply, Error> {
+    let network = || Error::Network(format!("Can\u{2019}t reach {url}."));
+    let headers = Headers::new().map_err(|_| network())?;
+    let _ = headers.set("Content-Type", "application/json");
+    if !api_key.is_empty() {
+        let _ = headers.set("Authorization", &format!("Bearer {api_key}"));
+    }
+    let init = RequestInit::new();
+    init.set_method("POST");
+    init.set_headers(&headers);
+    init.set_body(&wasm_bindgen::JsValue::from_str(body));
+    let request = web_sys::Request::new_with_str_and_init(url, &init).map_err(|_| network())?;
+    let global = js_sys::global().unchecked_into::<web_sys::WorkerGlobalScope>();
+    let res: Response = JsFuture::from(global.fetch_with_request(&request)).await.map_err(|_| network())?.unchecked_into();
+    let text = match res.text() {
+        Ok(p) => JsFuture::from(p).await.ok().and_then(|v| v.as_string()).unwrap_or_default(),
+        Err(_) => String::new(),
+    };
+    Ok(crate::Reply { status: res.status(), body: text })
+}
+
 /// One non-streamed answer (`W.guess`).
 pub async fn complete(req: Request<'_>) -> Result<String, Error> {
     complete_opts(req, 0.2, 500).await

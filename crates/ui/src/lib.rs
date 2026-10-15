@@ -1118,6 +1118,22 @@ impl App {
                 }
                 Event::Folder(f) => self.home.folder = Some(f),
                 Event::LegacyAvailable(on) => self.home.legacy = on,
+                Event::ModelsFound(r) => {
+                    if let Some(s) = &mut self.session {
+                        match r {
+                            Ok(list) => {
+                                let seeing = list.iter().filter(|m| m.2 == Some(true)).count();
+                                s.models_note = format!(
+                                    "{} found{} Pick one from the list.",
+                                    state::plural(list.len(), "model", "models"),
+                                    if seeing > 0 { format!(", {seeing} that can see images.") } else { ".".into() }
+                                );
+                                s.found_models = list;
+                            }
+                            Err(m) => s.models_note = m,
+                        }
+                    }
+                }
                 Event::ConnectionTested { ok, text } => {
                     if let Some(s) = &mut self.session {
                         s.conn_test = Some((ok, text));

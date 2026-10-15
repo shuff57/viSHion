@@ -552,6 +552,20 @@ impl Backend {
         }
     }
 
+    /// Settings, Find models (`M.list`): what the server lists that can read images.
+    pub async fn find_models(&self, conn: &Conn, working: Option<Vec<String>>, all: bool) -> Event {
+        let id = if conn.provider.is_empty() { "local" } else { conn.provider.as_str() };
+        let provider = vishion_net::Provider::for_setting(id);
+        let (shows, cloud, relay) = (id == "local", id != "local", id == "ollama-cloud");
+        let result = provider.list_models(&conn.url, &conn.api_key, shows, relay).await.map(|rows| {
+            vishion_net::models::assemble(rows, id, cloud, working.as_deref(), all)
+                .into_iter()
+                .map(|m| (m.id, m.label, m.vision))
+                .collect::<Vec<_>>()
+        });
+        Event::ModelsFound(result)
+    }
+
     /// Demo mode of js/ocr.js: the sample assignment, or the `demo` setting.
     async fn demo_mode(&self) -> bool {
         if self.demo {
@@ -779,6 +793,7 @@ impl Backend {
             Cmd::Folder(_) => Event::Many(vec![]),
             Cmd::ImportLegacy => self.import_legacy(now).await,
             Cmd::TestConnection { conn } => self.test_connection(&conn).await,
+            Cmd::FindModels { conn, working, all } => self.find_models(&conn, working, all).await,
             Cmd::ListProjects => Event::Many(vec![Event::LegacyAvailable(self.legacy_available()), self.list_event(now).await]),
             Cmd::OpenProject { slug } => self.open(Some(&slug), now).await,
             Cmd::CreateProject { name } => match self.projects.create_project(&name, now).await {

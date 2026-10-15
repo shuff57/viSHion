@@ -787,6 +787,13 @@ fn apply(
         }
         Act::OpenSettings => {
             s.conn_test = None;
+            s.models_note.clear();
+            // a local server is cheap to ask, so the picker is filled when Settings opens (js settings.js)
+            let provider = s.settings.get("provider").and_then(|v| v.as_str()).unwrap_or("local").to_string();
+            if provider == "local" && s.settings.get("demo").and_then(|v| v.as_bool()) != Some(true) {
+                let c = s.read_conn();
+                send(Cmd::FindModels { conn: c, working: None, all: false });
+            }
             *dialog = Some(Dialog::settings());
         }
         Act::OpenAdd(preset) => {
@@ -1005,6 +1012,11 @@ fn apply(
                         }
                         dialog::TopicResult::Nothing => {}
                     }
+                    return;
+                }
+                dialog::Out::FindModels(url, key) => {
+                    s.models_note = "Looking\u{2026}".into();
+                    send(Cmd::FindModels { conn: find_conn(s, url, key), working: working_models(s), all: false });
                     return;
                 }
                 dialog::Out::TestConnection(url, key) => {
@@ -1410,6 +1422,25 @@ fn inbox(ctx: &egui::Context, cx: &mut Cx, s: &Session) {
             cx.ctl.flush_scroll(ui, &[HEADER, TEXT]);
         });
     });
+}
+
+/// The connection of a Find models request: the address and key as typed in Settings.
+fn find_conn(s: &Session, url: String, key: String) -> crate::host::Conn {
+    let mut c = s.read_conn();
+    c.url = url;
+    c.api_key = key;
+    c
+}
+
+/// `profiles[provider].working`: the models a check found usable (kept per provider).
+fn working_models(s: &Session) -> Option<Vec<String>> {
+    let id = s.settings.get("provider").and_then(|v| v.as_str()).unwrap_or("local");
+    s.settings
+        .get("profiles")
+        .and_then(|p| p.get(id))
+        .and_then(|p| p.get("working"))
+        .and_then(|w| w.as_array())
+        .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
 }
 
 /// The shutter: the current frame as a `CaptureShot` command, counted and named. `None` before the first frame.

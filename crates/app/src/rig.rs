@@ -646,4 +646,22 @@ mod tests {
         }).collect();
         assert!(said.iter().any(|t| t.starts_with("Demo mode is on")), "{said:?}");
     }
+
+    /// Settings has Find models and shows the models the host found in the picker.
+    #[test]
+    fn settings_find_models_fills_the_picker() {
+        let mut r = Rig::demo();
+        r.act("crumb");
+        r.act("settings");
+        assert!(r.has("st-find-models"));
+        r.inbox.push(vishion_ui::Event::ModelsFound(Ok(vec![("gemma4:31b-cloud".into(), "Gemma 4 31B".into(), Some(true))])));
+        r.frames(3);
+        r.act("st-model");
+        assert!(r.has("st-model-opt-gemma4:31b-cloud"), "{:?}", r.app.controls().iter().map(|c| &c.id).collect::<Vec<_>>());
+        let said: Vec<String> = r.app.nodes().iter().filter_map(|n| match n {
+            vishion_ui::Node::Status { text, .. } => Some(text.clone()),
+            _ => None,
+        }).collect();
+        assert!(said.iter().any(|t| t.starts_with("1 model found, 1 that can see images")), "{said:?}");
+    }
 }

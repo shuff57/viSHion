@@ -58,6 +58,9 @@ pub struct Card {
 pub enum Cmd {
     /// The home screen's list: `Event::Projects`.
     ListProjects,
+    /// Settings, Find models: the models the server lists that can read images (`working` narrows a cloud
+    /// picker to the models a check found usable; `all` ignores it).
+    FindModels { conn: Conn, working: Option<Vec<String>>, all: bool },
     /// Settings, Test connection: ask the server (the address and key as typed) what it serves.
     TestConnection { conn: Conn },
     /// Web: `choose` a folder to save in, `browser` storage instead, or `reconnect` the remembered folder.
@@ -148,6 +151,8 @@ pub enum Event {
     },
     /// Whether Home offers "Import old sessions".
     LegacyAvailable(bool),
+    /// The answer to `FindModels`: the models, or the sentence that says why not.
+    ModelsFound(Result<Vec<(String, String, Option<bool>)>, String>),
     /// The answer to `TestConnection`: a line for the Settings dialog, and whether it is good news.
     ConnectionTested { ok: bool, text: String },
     /// Where assignments are saved (web): `mode` is `none` | `folder` | `idb`, `permission` `granted` | `prompt`.

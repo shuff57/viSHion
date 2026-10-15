@@ -110,6 +110,29 @@ pub async fn get(url: &str, api_key: &str, timeout_secs: u64) -> Result<crate::R
     }
 }
 
+/// `POST url` with a JSON body (the Ollama `/api/show` question). Any HTTP status is a `Reply`.
+pub async fn post_json(url: &str, api_key: &str, body: &str, timeout_secs: u64) -> Result<crate::Reply, Error> {
+    let agent = ureq::AgentBuilder::new().timeout(Duration::from_secs(timeout_secs.max(1))).build();
+    let mut r = agent.post(url).set("Content-Type", "application/json");
+    if !api_key.is_empty() {
+        r = r.set("Authorization", &format!("Bearer {api_key}"));
+    }
+    match r.send_string(body) {
+        Ok(res) => {
+            let status = res.status();
+            let mut s = String::new();
+            let _ = res.into_reader().take(1 << 20).read_to_string(&mut s);
+            Ok(crate::Reply { status, body: s })
+        }
+        Err(ureq::Error::Status(status, res)) => {
+            let mut s = String::new();
+            let _ = res.into_reader().take(1 << 16).read_to_string(&mut s);
+            Ok(crate::Reply { status, body: s })
+        }
+        Err(_) => Err(Error::Network(format!("Can\u{2019}t reach {url}."))),
+    }
+}
+
 /// One non-streamed answer (`W.guess`): the model's text. Blocks the calling thread (the host's worker),
 /// for at most `timeout_secs`.
 pub async fn complete(req: Request<'_>) -> Result<String, Error> {

@@ -202,6 +202,15 @@ typed and says "Connected. N models available", that the key was refused (401/40
 list, falls back to `/health` ("Connected.") and then "Can’t reach ...". Demo mode says no server is
 needed. `net::models::parse_rows` reads the listing (OpenAI shape, OpenRouter modalities, llama.cpp router).
 
+## Settings: finding models
+
+"Find models" (`Cmd::FindModels`, `Backend::find_models`, `Provider::list_models`) reads `GET /v1/models`; for the
+local provider it asks `POST /api/show` per model for `capabilities` (a llama.cpp router has no `/api/show`).
+`net::models::assemble` drops hosted (`:cloud`, `-cloud`) models from the local picker and text-only models from
+every picker, narrows a cloud picker to `profiles[provider].working` unless asked for all, and sorts vision
+first; `pretty` tidies the ids ("gemma4:31b-cloud" is "Gemma 4 31B"). The picker lists the result; a local
+provider is asked when Settings opens.
+
 ## Demo mode and reading pages
 
 `--demo`, `?demo=1` and the `demo` setting answer Retry, Transcribe, Transcribe again and the inbox's Resume
