@@ -84,6 +84,29 @@ Each phase ends with a runnable build on both targets and a parity check against
 Rough order of risk: phase 4 first (earliest real validation of the UI), then 2 (data loss is the worst failure).
 If staffing is one person, do 0, 1, 4, then 2, 3, 5, 6, 7.
 
+## Phase 11: gaps against the JS app
+
+Found by comparing `js/` with the Rust build after phases 3 to 10. Each slice is small, ends with `cargo test`
+and the wasm32 build green, and gets its own commit. Order matters: 11.1 and 11.2 make the others testable
+against a real model server.
+
+| # | Slice | JS source (oracle) | Done when |
+|---|---|---|---|
+| 11.1 | Settings: **Test connection** | `js/ui/settings.js` `test`, `js/ocr.js` `ping`, `models.js` `list` | A button under the server address says "Connected. N models available" or why not; demo mode says no server is needed. |
+| 11.2 | Settings: **Find models** and the vision flag | `models.js` `list`, `pretty`, `shownUrl`; `settings.js` `findModels` | Lists `/v1/models` (and Ollama `/api/tags` capabilities), fills the picker, "N found, M that can see images", picks the only one. |
+| 11.3 | Settings: **Check which models work** and Show every model again | `models.js` `probe`, `setWorking`; `settings.js` `checkBtn`, `showAll` | Tiny test image per vision model with progress; only those that answer stay listed; stored in `profiles`. |
+| 11.4 | **Server-down banner** with a health ping and Retry | `js/ui/banner.js`, `U.resumeAll`, `ocr.js` `ping` | An unreachable run shows a banner under the header with the address; Retry pings, then resumes every page without a transcript. |
+| 11.5 | **Storage banners** (folder access lost, couldn't save) | `banner.js`, `fs.js` `reconnect`, `retry`, `beforeunload` | Banner with Reconnect folder / Try again; closing the tab while a save has failed asks first (web). |
+| 11.6 | **Model spelling check** (`judgeMode: auto`) and `judgeUrl` | `js/judge.js` `J.run`, `core::judge::parse_remote` | After a read, glossary suggestions come from the model when the mode asks for it, built-in matching on any failure; the judge address setting is honoured. |
+| 11.7 | **Idle unload** and manual unload | `models.js` `unload`, `idleCheck`, `core::idle` | After `idleUnloadMin` idle minutes (no run in flight) the model is unloaded (llama.cpp router `/models/unload`, Ollama `keep_alive: 0`); a Settings button unloads now. |
+| 11.8 | **Keep originals** | `fs.js` `saveImage` with `keepOriginals`, `store::save_original` | With the setting on, each added or replaced picture is also stored as `originals/<id>.<ext>`. |
+| 11.9 | Add screen: **Turn 90 / Straighten** per photo and the **photo preview** with detected lines | `js/ui/add.js` `fit`, `preview` | A staged row can turn and level its picture; a preview shows the sheet with numbered line boxes and a summary. |
+| 11.10 | Add screen: **paste** (web) | `js/ui/upload.js` paste handler | Pasting pictures on the Add screen stages them (a DOM `paste` listener sends the files). |
+
+Rules for every slice: follow the surrounding code and the "Rules to keep" in `crates/README.md`; keep decisions
+that are already recorded (above); no push, no PR; update this table's "Done when" with what was built and
+what could not be verified without a live server or browser.
+
 ## Test strategy
 
 - **Oracle tests** reuse the spike harnesses: S1 `harness/run.js` (imaging), S3 `run.mjs` (storage), S4
