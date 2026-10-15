@@ -16,6 +16,10 @@ pub struct Conn {
     pub demo: bool,
     /// `settings.provider`: which provider answers (`net::Provider::for_setting`).
     pub provider: String,
+    /// The course words of the open assignment's subject and `settings.judgeMode` (`auto`, `heuristic` or
+    /// `typesafe`): what the model spelling check needs after a page is read.
+    pub judge_terms: Vec<String>,
+    pub judge_mode: String,
     /// `settings.guessIllegible` (default on): ask the model for likely words after a page is read.
     pub guess: bool,
     /// The teacher's earlier resolutions for the guess prompt (`W.referenceExamples`).
@@ -30,6 +34,15 @@ pub struct StagedItem {
     /// The student's name (read from the page, or chosen) and where it came from: `read` | `chosen` | `file`.
     pub name: Option<String>,
     pub source: String,
+    /// The file as it came (`settings.keepOriginals`), with its extension, to be stored next to the resized copy.
+    pub original: Option<(String, Vec<u8>)>,
+    /// The picture after shrinking only (`s.orig` of add.js): what Turn and Straighten start from. Left out of
+    /// the commit.
+    pub base: Vec<u8>,
+    /// Quarter turns asked for, in degrees (0, 90, 180, 270), whether to level it, and the tilt that was removed.
+    pub turn: u32,
+    pub straighten: bool,
+    pub angle: f64,
 }
 
 /// The storage card of the home screen (`S.d.folder`).
@@ -58,6 +71,18 @@ pub struct Card {
 pub enum Cmd {
     /// The home screen's list: `Event::Projects`.
     ListProjects,
+    /// Settings, Find models: the models the server lists that can read images (`working` narrows a cloud
+    /// picker to the models a check found usable; `all` ignores it).
+    FindModels { conn: Conn, working: Option<Vec<String>>, all: bool },
+    /// Settings, Unload now, or the idle timer (`idle_mins`): free the local model from memory: `Event::Unloaded`.
+    UnloadModel { conn: Conn, idle_mins: Option<f64> },
+    /// The banner's Retry: is the transcription server answering? `Event::Pinged`.
+    Ping { conn: Conn },
+    /// Settings, Check which models work: one tiny image to every model that takes images, `Event::ModelsProgress`
+    /// as they answer and `Event::ModelsChecked` at the end.
+    CheckModels { conn: Conn },
+    /// Settings, Test connection: ask the server (the address and key as typed) what it serves.
+    TestConnection { conn: Conn },
     /// Web: `choose` a folder to save in, `browser` storage instead, or `reconnect` the remembered folder.
     Folder(String),
     /// Ask for pictures and get each one ready for staging (`Event::Staged` one by one, `Event::Skipped` for
@@ -72,6 +97,8 @@ pub enum Cmd {
     /// The shutter: keep this frame (RGBA, `w` x `h`) as a staged picture named `name`; answered by
     /// `Event::Staged` like a picked file.
     CaptureShot { name: String, w: u32, h: u32, rgba: Vec<u8>, conn: Conn, read_names: bool, preset: Option<String> },
+    /// Turn and Straighten on a staged picture: redo it from `base`; answered by `Event::Refit`.
+    RefitStaged { key: u64, base: Vec<u8>, turn: u32, straighten: bool },
     /// Save the staged pictures as new pages: `Event::PagesAdded`.
     CommitStaged { slug: String, items: Vec<StagedItem> },
     /// Ask for a project zip and import it as a new assignment: `Event::Opened`.
@@ -146,12 +173,29 @@ pub enum Event {
     },
     /// Whether Home offers "Import old sessions".
     LegacyAvailable(bool),
+    /// The browser allowed the remembered folder again (the banner's Reconnect): save everything once more.
+    Reconnected,
+    /// The answer to `UnloadModel`: readable names of what was freed (empty: nothing was loaded).
+    Unloaded { names: Vec<String>, idle_mins: Option<f64> },
+    /// The answer to `Ping`.
+    Pinged { ok: bool, text: String },
+    /// How far Check which models work has got.
+    ModelsProgress { done: usize, total: usize },
+    /// The end of Check which models work: the ids that answered (what to remember as working), the picker
+    /// narrowed to them (when any did) and the sentence for Settings.
+    ModelsChecked { ok: Vec<String>, list: Vec<(String, String, Option<bool>)>, note: String },
+    /// The answer to `FindModels`: the models, or the sentence that says why not.
+    ModelsFound(Result<Vec<(String, String, Option<bool>)>, String>),
+    /// The answer to `TestConnection`: a line for the Settings dialog, and whether it is good news.
+    ConnectionTested { ok: bool, text: String },
     /// Where assignments are saved (web): `mode` is `none` | `folder` | `idb`, `permission` `granted` | `prompt`.
     Folder(FolderInfo),
     /// A frame of the camera (RGBA).
     CameraFrame { w: u32, h: u32, rgba: Vec<u8> },
     /// The camera could not be opened (the person said no, or there is none).
     CameraError(String),
+    /// The answer to `RefitStaged`: the picture to show and keep, and the tilt removed (degrees).
+    Refit { key: u64, bytes: Vec<u8>, angle: f64 },
     /// One picture is ready to stage. `names_down`: the name reader could not reach the server.
     Staged { item: StagedItem, names_down: bool },
     /// Files that cannot be added, with the reason each.
@@ -194,7 +238,14 @@ pub enum Event {
 #[derive(Debug)]
 pub enum ReadOutcome {
     /// A transcript. `guesses` are present when the host also guessed the unreadable words (demo mode).
-    Done { raw: String, tokens: u32, ms: u32, guesses: Option<serde_json::Map<String, serde_json::Value>> },
+    Done {
+        raw: String,
+        tokens: u32,
+        ms: u32,
+        guesses: Option<serde_json::Map<String, serde_json::Value>>,
+        /// Glossary suggestions the model gave (`J.remote`); `None` leaves the built-in matching to the screen.
+        found: Option<Vec<vishion_core::judge::Found>>,
+    },
     /// The server could not be reached: the page keeps what it had (`queue.js` "unreachable").
     Unreachable(String),
     /// Stop was pressed: the page goes back to pending (`queue.js` abort).

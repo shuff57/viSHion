@@ -72,6 +72,145 @@ impl Provider {
         }
     }
 
+    /// A plain `GET` (the model list, the health check).
+    pub async fn get(&self, url: &str, api_key: &str, timeout_secs: u64) -> Result<crate::Reply, Error> {
+        match self {
+            Provider::OpenAiCompatible => crate::get(url, api_key, timeout_secs).await,
+            Provider::Mock(m) => match &m.fail {
+                Some(msg) => Err(Error::Network(msg.clone())),
+                None if url.ends_with("/health") => Ok(crate::Reply { status: 200, body: "ok".into() }),
+                None => Ok(crate::Reply { status: 200, body: "{\"data\":[{\"id\":\"mock-vision\"}]}".into() }),
+            },
+        }
+    }
+
+    /// A `POST` with a JSON body.
+    pub async fn post_json(&self, url: &str, api_key: &str, body: &str, timeout_secs: u64) -> Result<crate::Reply, Error> {
+        match self {
+            Provider::OpenAiCompatible => crate::post_json(url, api_key, body, timeout_secs).await,
+            Provider::Mock(m) => match &m.fail {
+                Some(msg) => Err(Error::Network(msg.clone())),
+                None if url.ends_with("/v1/chat/completions") => {
+                    Ok(crate::Reply { status: 200, body: "{\"choices\":[{\"message\":{\"content\":\"OK\"}}]}".into() })
+                }
+                None => Ok(crate::Reply { status: 200, body: "{\"capabilities\":[\"completion\",\"vision\"]}".into() }),
+            },
+        }
+    }
+
+    /// `M.unload`: free the model from memory. llama.cpp in router mode: `POST /models/unload` for each loaded
+    /// model; otherwise Ollama: `POST /api/generate { keep_alive: 0 }` for each model `/api/ps` lists. Returns the
+    /// ids that were unloaded (nothing is an empty list, not an error).
+    pub async fn unload(&self, base: &str, api_key: &str) -> Vec<String> {
+        let base = base.trim_end_matches('/');
+        let mut names = vec![];
+        if base.is_empty() {
+            return names;
+        }
+        if let Ok(r) = self.get(&format!("{base}/v1/models"), api_key, 10).await {
+            if r.status == 200 {
+                for m in crate::models::parse_rows(&r.body).into_iter().filter(|m| m.loaded) {
+                    let body = serde_json::json!({ "model": m.id }).to_string();
+                    if let Ok(u) = self.post_json(&format!("{base}/models/unload"), api_key, &body, 30).await {
+                        if (200..300).contains(&u.status) {
+                            names.push(m.id);
+                        }
+                    }
+                }
+                if !names.is_empty() {
+                    return names;
+                }
+            }
+        }
+        if let Ok(r) = self.get(&format!("{base}/api/ps"), api_key, 10).await {
+            if r.status == 200 {
+                let models = serde_json::from_str::<serde_json::Value>(&r.body).ok().and_then(|v| v.get("models").and_then(|m| m.as_array().cloned())).unwrap_or_default();
+                for m in models {
+                    let Some(id) = m.get("name").or_else(|| m.get("model")).and_then(|v| v.as_str()).map(String::from) else { continue };
+                    let body = serde_json::json!({ "model": id, "keep_alive": 0 }).to_string();
+                    if let Ok(u) = self.post_json(&format!("{base}/api/generate"), api_key, &body, 30).await {
+                        if (200..300).contains(&u.status) {
+                            names.push(id);
+                        }
+                    }
+                }
+            }
+        }
+        names
+    }
+
+    /// `M.probe`: one tiny picture and a one-word question to each model, with the key. A model that answers
+    /// accepts images with this key; one that is refused is left out. `progress(done, total)` after each.
+    pub async fn probe(&self, base: &str, api_key: &str, ids: &[String], progress: &dyn Fn(usize, usize)) -> (Vec<String>, Vec<(String, String)>) {
+        const TINY: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAIAAAD8GO2jAAAAN0lEQVR4nO3RwQ0AMAjDwJT9d05HMB9+vgGCZF7bXJrT9XhgwR8gEyETIRMhEyETIRMhEyEThXzH8QM9OMM6fAAAAABJRU5ErkJggg==";
+        let url = format!("{}/v1/chat/completions", base.trim_end_matches('/'));
+        let (mut ok, mut failed) = (vec![], vec![]);
+        for (i, id) in ids.iter().enumerate() {
+            let body = serde_json::json!({
+                "model": id, "stream": false, "max_tokens": 8, "temperature": 0,
+                "messages": [{"role": "user", "content": [
+                    {"type": "image_url", "image_url": {"url": TINY}},
+                    {"type": "text", "text": "Reply with the single word OK."}]}]
+            })
+            .to_string();
+            match self.post_json(&url, api_key, &body, 60).await {
+                Ok(r) if r.status == 200 => {
+                    let answered = serde_json::from_str::<serde_json::Value>(&r.body)
+                        .ok()
+                        .is_some_and(|v| v["choices"][0]["message"]["content"].is_string());
+                    if answered {
+                        ok.push(id.clone());
+                    } else {
+                        failed.push((id.clone(), "empty answer".to_string()));
+                    }
+                }
+                Ok(r) => failed.push((id.clone(), format!("HTTP {}", r.status))),
+                Err(_) => failed.push((id.clone(), "no connection".to_string())),
+            }
+            progress(i + 1, ids.len());
+        }
+        (ok, failed)
+    }
+
+    /// `M.list` (before the picker's tidying): the rows the server lists, each with what `/api/show` says about
+    /// vision when the provider is a local Ollama. Errors are the sentences Settings shows.
+    pub async fn list_models(&self, base: &str, api_key: &str, shows: bool, relay: bool) -> Result<Vec<(crate::models::ModelRow, Option<bool>)>, String> {
+        let base = base.trim_end_matches('/');
+        if base.is_empty() {
+            return Err("Enter the server address first.".into());
+        }
+        let r = match self.get(&format!("{base}/v1/models"), api_key, 15).await {
+            Ok(r) => r,
+            Err(_) if relay => return Err("The relay is not running. Start it once with: node tools/relay.js".into()),
+            Err(_) => return Err(format!("Can\u{2019}t reach {base}. Is it running, and does it allow this page (CORS)?")),
+        };
+        if r.status == 401 || r.status == 403 {
+            return Err("The server did not accept the API key.".into());
+        }
+        if r.status != 200 {
+            return Err(format!("The server answered with {}.", r.status));
+        }
+        let rows = crate::models::parse_rows(&r.body);
+        let router = rows.iter().any(|m| m.router);
+        let mut out = vec![];
+        for m in rows {
+            let mut shown = None;
+            // a local Ollama can tell which of its models see images; llama.cpp has no /api/show
+            if shows && !router {
+                let body = serde_json::json!({ "model": m.id }).to_string();
+                if let Ok(s) = self.post_json(&format!("{base}/api/show"), api_key, &body, 15).await {
+                    if s.status == 200 {
+                        if let Some(caps) = serde_json::from_str::<serde_json::Value>(&s.body).ok().and_then(|v| v.get("capabilities").and_then(|c| c.as_array().cloned())) {
+                            shown = Some(caps.iter().any(|c| c.as_str() == Some("vision")));
+                        }
+                    }
+                }
+            }
+            out.push((m, shown));
+        }
+        Ok(out)
+    }
+
     /// One answer that is not streamed (name reading, guesses).
     pub async fn complete(&self, req: Request<'_>, temperature: f64, max_tokens: u32) -> Result<String, Error> {
         match self {

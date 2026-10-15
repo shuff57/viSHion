@@ -3701,6 +3701,7 @@ dependencies = [
  "ttf-parser",
  "vishion-core",
  "wasm-bindgen",
+ "wasm-bindgen-futures",
  "web-sys",
 ]
 

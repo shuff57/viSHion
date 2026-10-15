@@ -2,6 +2,7 @@
 //! out); `native` (ureq, blocking) and `web` (fetch) only move bytes. Both expose the same
 //! `async fn transcribe`.
 
+pub mod models;
 pub mod provider;
 pub mod slots;
 pub mod sse;
@@ -11,11 +12,11 @@ pub use provider::{Mock, Provider};
 #[cfg(not(target_arch = "wasm32"))]
 mod native;
 #[cfg(not(target_arch = "wasm32"))]
-pub use native::{complete, complete_opts, transcribe};
+pub use native::{complete, complete_opts, get, post_json, transcribe};
 #[cfg(target_arch = "wasm32")]
 mod web;
 #[cfg(target_arch = "wasm32")]
-pub use web::{complete, complete_opts, transcribe};
+pub use web::{complete, complete_opts, get, post_json, transcribe};
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -46,6 +47,13 @@ impl Endpoint {
     pub fn chat_completions_url(&self) -> String {
         format!("{}/v1/chat/completions", self.base_url.trim_end_matches('/'))
     }
+}
+
+/// An answer to a plain `GET`: the status and the text, whatever the status was.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Reply {
+    pub status: u16,
+    pub body: String,
 }
 
 /// One page to read.

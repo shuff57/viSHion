@@ -810,6 +810,9 @@ pub struct App {
     emoji: emoji::EmojiCache,
     /// The camera's latest frame as a texture (the Capture view).
     cam_tex: Option<egui::TextureHandle>,
+    /// `M.idleCheck`: when the model was last used, and when to look again (egui seconds).
+    idle: vishion_core::idle::Idle,
+    idle_next: f64,
     emoji_requested: bool,
     /// Bumped when a picture or a font arrives: the page may have moved under the selected word.
     layout_epoch: u32,
@@ -847,6 +850,8 @@ impl App {
         let queue: Queue = Arc::default();
         #[cfg(target_arch = "wasm32")]
         web::install(queue.clone(), ctx.clone());
+        #[cfg(target_arch = "wasm32")]
+        web::install_paste(ctx.clone());
         theme::install(&ctx);
         // display preferences (web): no easing when the person asks for reduced motion; more contrast
         #[cfg(target_arch = "wasm32")]
@@ -908,6 +913,8 @@ impl App {
             stage: review::Stage::default(),
             want: vec![],
             cam_tex: None,
+            idle: vishion_core::idle::Idle::new(now_ms()),
+            idle_next: 0.0,
             emoji: {
                 let mut c = emoji::EmojiCache::default();
                 if let Some(b) = theme::bundled_emoji() {
@@ -1071,6 +1078,14 @@ impl App {
         let mut evs = vec![];
         drained.into_iter().for_each(|e| flatten(e, &mut evs));
         for e in evs {
+            if matches!(
+                e,
+                Event::Reading { .. } | Event::Transcribed { .. } | Event::Guessed { .. } | Event::Staged { .. } | Event::ModelsFound(_) | Event::ModelsChecked { .. } | Event::ConnectionTested { .. } | Event::Pinged { .. }
+            ) {
+                let n = now_ms();
+                self.idle.request_started(n);
+                self.idle.request_finished(n);
+            }
             match e {
                 Event::Opened { slug, assignment, settings, storage, unreadable, notice } => {
                     self.storage = storage;
@@ -1118,6 +1133,83 @@ impl App {
                 }
                 Event::Folder(f) => self.home.folder = Some(f),
                 Event::LegacyAvailable(on) => self.home.legacy = on,
+                Event::Unloaded { names, idle_mins } => {
+                    let said = match (names.is_empty(), idle_mins) {
+                        (false, Some(m)) => Some(format!("Unloaded {} after {} idle.", names.join(", "), state::plural(m as usize, "minute", "minutes"))),
+                        (false, None) => Some(format!("Unloaded {}.", names.join(", "))),
+                        (true, None) => Some("Nothing was loaded.".to_string()),
+                        (true, Some(_)) => None,
+                    };
+                    if let Some(s) = &mut self.session {
+                        s.unload_note = said.clone().unwrap_or_default();
+                    }
+                    // the idle unload tells the person (a toast); the button's answer is in Settings
+                    if idle_mins.is_some() {
+                        if let Some(t) = said {
+                            self.status_msg = Some(t);
+                            self.ctl.toast_serial += 1;
+                            self.status_err = false;
+                        }
+                    }
+                }
+                Event::Reconnected => {
+                    if let Some(s) = &mut self.session {
+                        s.mark_all_dirty();
+                    }
+                }
+                Event::Pinged { ok, text } => {
+                    let mut start = None;
+                    if let Some(s) = &mut self.session {
+                        if ok {
+                            // `U.resumeAll`: every page that still has no transcript, not only the last run's
+                            s.server_error = None;
+                            start = Some((s.slug.clone(), s.pending_ids(), s.read_conn()));
+                        } else {
+                            s.server_error = Some(text);
+                        }
+                    }
+                    if let Some((slug, ids, conn)) = start {
+                        if !ids.is_empty() {
+                            self.send(Cmd::Transcribe { slug, ids, conn });
+                        }
+                    }
+                }
+                Event::ModelsProgress { done, total } => {
+                    if let Some(s) = &mut self.session {
+                        s.check_note = format!("Checking {done} of {total}\u{2026}");
+                    }
+                }
+                Event::ModelsChecked { ok, list, note } => {
+                    if let Some(s) = &mut self.session {
+                        s.checking = false;
+                        s.check_note = note;
+                        if !ok.is_empty() {
+                            dialog::set_working(s, Some(&ok));
+                            s.found_models = list;
+                        }
+                    }
+                }
+                Event::ModelsFound(r) => {
+                    if let Some(s) = &mut self.session {
+                        match r {
+                            Ok(list) => {
+                                let seeing = list.iter().filter(|m| m.2 == Some(true)).count();
+                                s.models_note = format!(
+                                    "{} found{} Pick one from the list.",
+                                    state::plural(list.len(), "model", "models"),
+                                    if seeing > 0 { format!(", {seeing} that can see images.") } else { ".".into() }
+                                );
+                                s.found_models = list;
+                            }
+                            Err(m) => s.models_note = m,
+                        }
+                    }
+                }
+                Event::ConnectionTested { ok, text } => {
+                    if let Some(s) = &mut self.session {
+                        s.conn_test = Some((ok, text));
+                    }
+                }
                 Event::Projects(cards) => {
                     self.home.cards = Some(cards);
                     self.home.asked = false;
@@ -1240,6 +1332,16 @@ impl App {
                         s.capture.error = Some(m);
                     }
                 }
+                Event::Refit { key, bytes, angle } => {
+                    let slot = decode_image(&self.ctx, &format!("staged-{key}"), &bytes).map_or(Slot::Missing, Slot::Ready);
+                    self.images.insert(format!("staged-{key}"), slot);
+                    if let Some(s) = &mut self.session {
+                        if let Some(r) = s.add.rows.iter_mut().find(|r| r.key == key) {
+                            r.item.bytes = bytes;
+                            r.item.angle = angle;
+                        }
+                    }
+                }
                 Event::Skipped(list) => {
                     if let Some(s) = &mut self.session {
                         s.add.skipped.extend(list);
@@ -1286,22 +1388,24 @@ impl App {
                             self.ctl.toast_serial += 1;
                             self.status_err = false;
                         }
-                        Done { raw, tokens, ms, guesses } => {
+                        Done { raw, tokens, ms, guesses, found } => {
                             let bands: Vec<bands::Band> = match self.images.get(&id) {
                                 Some(Slot::Ready(im)) => im.bands.clone(),
                                 _ => vec![],
                             };
                             if let Some(s) = &mut self.session {
-                                s.page_read(&id, &raw, tokens, ms, guesses, &bands);
+                                s.server_error = None;
+                                s.page_read(&id, &raw, tokens, ms, guesses, found, &bands);
                             }
                         }
                         Unreachable(m) => {
                             if let Some(s) = &mut self.session {
                                 s.page_unread(&id);
                             }
-                            self.status_msg = Some(m);
-                            self.ctl.toast_serial += 1;
-                            self.status_err = true;
+                            // (`S.set({ serverError })`: a banner under the header, not a toast)
+                            if let Some(s) = &mut self.session {
+                                s.server_error = Some(m);
+                            }
                         }
                         Failed(m) => {
                             if let Some(s) = &mut self.session {
@@ -1371,6 +1475,54 @@ impl App {
                 self.images.insert(id.clone(), Slot::Loading);
                 self.send(Cmd::LoadImage { slug: slug.clone(), id });
             }
+        }
+    }
+
+    /// Pictures pasted into the page (`upload.js`): staged on the Add screen, which opens if another screen of
+    /// an assignment is showing. Nothing happens on the home screen or without an assignment.
+    pub fn paste_files(&mut self, files: Vec<(String, Vec<u8>)>) {
+        if self.home.active {
+            return;
+        }
+        let Some(s) = &mut self.session else { return };
+        if s.view != state::View::Add {
+            s.add = state::AddState::default();
+            s.view = state::View::Add;
+        }
+        s.add.working = true;
+        let read_names = s.settings.get("readNames").and_then(|v| v.as_bool()) != Some(false);
+        let cmd = Cmd::StageFiles { files, conn: s.read_conn(), read_names, preset: s.add.preset.clone() };
+        self.send(cmd);
+    }
+
+    /// `M.idleCheck`, every 20 seconds: after `idleUnloadMin` minutes with no request to the model and no page
+    /// being read, ask the host to free it (a local server only; it works while this page is open).
+    fn idle_tick(&mut self, ctx: &egui::Context) {
+        let Some(s) = &self.session else { return };
+        let mins = vishion_core::idle::Idle::minutes(s.settings.get("idleUnloadMin").or(Some(&serde_json::json!(10))));
+        if !(mins > 0.0) {
+            return;
+        }
+        let now_t = ctx.input(|i| i.time);
+        let busy = s.a.pages.values().any(|p| p.status() == "transcribing");
+        if busy {
+            let n = now_ms();
+            self.idle.request_started(n);
+            self.idle.request_finished(n);
+        }
+        ctx.request_repaint_after(Duration::from_secs(20));
+        if now_t < self.idle_next {
+            return;
+        }
+        self.idle_next = now_t + 20.0;
+        let local = s.settings.get("provider").and_then(|v| v.as_str()).unwrap_or("local") == "local";
+        let demo = s.settings.get("demo").and_then(|v| v.as_bool()) == Some(true);
+        if !local || demo {
+            return;
+        }
+        if self.idle.check(now_ms(), mins, busy, false) {
+            let conn = s.read_conn();
+            self.send(Cmd::UnloadModel { conn, idle_mins: Some(mins) });
         }
     }
 
@@ -1670,6 +1822,16 @@ impl App {
 
         self.want_images();
         self.flush_dirty();
+        #[cfg(target_arch = "wasm32")]
+        {
+            let pasted = web::take_pasted();
+            if !pasted.is_empty() {
+                self.paste_files(pasted);
+            }
+        }
+        self.idle_tick(ctx);
+        #[cfg(target_arch = "wasm32")]
+        web::set_unsaved(self.save.failed.is_some());
 
         let t = ctx.input(|i| i.time);
         #[cfg(not(target_arch = "wasm32"))]

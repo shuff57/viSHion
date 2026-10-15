@@ -196,6 +196,8 @@ pub struct AddState {
     /// A student chosen beforehand ("Add pages for Maya").
     pub preset: Option<String>,
     pub seq: u64,
+    /// The row whose picture is shown large, with the lines the scan found.
+    pub look: Option<u64>,
     /// The pages just committed are to be read when the host answers.
     pub starting: bool,
 }
@@ -218,6 +220,18 @@ pub struct Session {
     pub now: i64,
     pub view: View,
     pub add: AddState,
+    /// The result line under Settings' Test connection.
+    pub conn_test: Option<(bool, String)>,
+    /// What Find models found: (id, label, takes images), and the note under the model picker.
+    pub found_models: Vec<(String, String, Option<bool>)>,
+    pub models_note: String,
+    /// The transcription server could not be reached (`S.d.serverError`): the banner says so until a retry works.
+    pub server_error: Option<String>,
+    /// "Check which models work" is running, and what it said.
+    pub checking: bool,
+    pub check_note: String,
+    /// What Unload now said.
+    pub unload_note: String,
     pub capture: CaptureState,
     /// `S.d.textView === 'raw'`: the transcript as plain monospace text.
     pub text_raw: bool,
@@ -287,6 +301,13 @@ impl Session {
             now,
             view: View::Review,
             add: AddState::default(),
+            conn_test: None,
+            found_models: vec![],
+            models_note: String::new(),
+            server_error: None,
+            checking: false,
+            check_note: String::new(),
+            unload_note: String::new(),
             capture: CaptureState { auto: true, ..Default::default() },
             text_raw: false,
             zoom: 1.0,
@@ -1124,7 +1145,17 @@ impl Session {
     /// transcript, its line boxes when the ink scan agrees with the line count, the glossary suggestions
     /// from the offline judge, and guesses for unreadable words when the host made them. Decisions already
     /// on the page (`resolved`, `edits`) are left as they are, exactly as the JS queue leaves them.
-    pub fn page_read(&mut self, id: &str, raw: &str, tokens: u32, ms: u32, guesses: Option<serde_json::Map<String, Value>>, bands: &[Band]) {
+    #[allow(clippy::too_many_arguments)]
+    pub fn page_read(
+        &mut self,
+        id: &str,
+        raw: &str,
+        tokens: u32,
+        ms: u32,
+        guesses: Option<serde_json::Map<String, Value>>,
+        found: Option<Vec<vishion_core::judge::Found>>,
+        bands: &[Band],
+    ) {
         let topic = self.a.meta.topic().to_string();
         let terms = self.settings.terms(&topic);
         let guess_on = self.settings.get("guessIllegible").and_then(Value::as_bool) != Some(false);
@@ -1146,7 +1177,8 @@ impl Session {
         p.set("error", json!(""));
         p.set("timings", json!({"ms": ms, "tokens": tokens}));
         if !raw.is_empty() && !terms.is_empty() {
-            let found = vishion_core::judge::heuristic(&raw, &terms);
+            // (`J.run`: the model's suggestions, or the built-in matching when it gave none)
+            let found = found.unwrap_or_else(|| vishion_core::judge::heuristic(&raw, &terms));
             vishion_core::judge::apply_found(p, &found);
         }
         if guess_on && !jsx::truthy(p.get("guessed")) && has_illegible(&raw) {
@@ -1192,6 +1224,12 @@ impl Session {
             prompt: vishion_core::words::build_prompt(st, &self.a.meta),
             demo: st.get("demo").and_then(Value::as_bool) == Some(true),
             provider: text("provider"),
+            judge_terms: st.terms(self.a.meta.topic()),
+            judge_mode: match text("judgeMode").as_str() {
+                "heuristic" => "heuristic".into(),
+                "typesafe" => "typesafe".into(),
+                _ => "auto".into(),
+            },
             guess: st.get("guessIllegible").and_then(Value::as_bool) != Some(false),
             examples: self.reference_examples(),
         }
@@ -1262,6 +1300,14 @@ impl Session {
     pub fn plain_text(&self, p: &Page) -> String {
         let t = if self.original { p.raw().to_string() } else { words::effective(p) };
         t.chars().filter(|c| !('\u{E000}'..='\u{E002}').contains(c)).collect()
+    }
+
+    /// Everything is written again (`fs.retry`, and after a folder is reconnected): the pages, the project and the
+    /// settings. A failed write is not remembered one by one, and writing a file twice is harmless.
+    pub fn mark_all_dirty(&mut self) {
+        self.dirty.pages.extend(self.a.pages.keys().cloned());
+        self.dirty.meta = true;
+        self.dirty.settings = true;
     }
 
     pub fn take_dirty(&mut self) -> Dirty {

@@ -195,6 +195,83 @@ closing it returns focus to what opened it. The line being read is `data-reading
 Cloud, OpenRouter, custom) is `OpenAiCompatible`; `mock` answers from memory (tests, trying the seam). The
 backend reads, reads names and guesses only through it, so another API is one more variant.
 
+## Settings: connection
+
+"Test connection" (`Cmd::TestConnection`, `Backend::test_connection`) asks `GET <address>/v1/models` with the key as
+typed and says "Connected. N models available", that the key was refused (401/403), or, when there is no
+list, falls back to `/health` ("Connected.") and then "Can’t reach ...". Demo mode says no server is
+needed. `net::models::parse_rows` reads the listing (OpenAI shape, OpenRouter modalities, llama.cpp router).
+
+## Settings: finding models
+
+"Find models" (`Cmd::FindModels`, `Backend::find_models`, `Provider::list_models`) reads `GET /v1/models`; for the
+local provider it asks `POST /api/show` per model for `capabilities` (a llama.cpp router has no `/api/show`).
+`net::models::assemble` drops hosted (`:cloud`, `-cloud`) models from the local picker and text-only models from
+every picker, narrows a cloud picker to `profiles[provider].working` unless asked for all, and sorts vision
+first; `pretty` tidies the ids ("gemma4:31b-cloud" is "Gemma 4 31B"). The picker lists the result; a local
+provider is asked when Settings opens.
+
+### Check which models work
+
+`Cmd::CheckModels` lists every model that takes images, sends each a tiny picture and a one-word question
+(`Provider::probe`), and reports `Event::ModelsProgress` as they answer. The ids that answered are stored as
+`profiles[provider].working` and narrow a cloud picker (`assemble`); none answering keeps the full list and says
+whether the key was refused. "Show every model again" clears `working`. `dialog::remember` merges into the
+profile, so `working` survives a provider switch.
+
+## Paste on the web
+
+`ui::web::install_paste` listens for `paste` on the window. Pictures on the clipboard (not when the target is an
+input, textarea or select, where paste is text) are read with `arrayBuffer()`, a nameless screenshot is called
+`pasted-<ms>-<n>.png`, and the next frame passes them to `App::paste_files`: the Add screen opens (it does not
+from Home) and the files are staged like dropped ones (`Cmd::StageFiles`).
+
+## Add screen: Turn, Straighten and Look
+
+A staged row keeps the shrunk picture (`StagedItem::base`); `fit_picture` (turn by quarter turns, then deskew when
+asked) makes the one shown and committed. **Turn 90\u00b0** and **Straighten** send `Cmd::RefitStaged` and the
+answer (`Event::Refit`) replaces the row's picture and texture; **Look** shows the photo large with the ink-scan
+lines (`Img::bands`) boxed and numbered, the faint ones (under 30% of the median strength, with four or more
+lines) thin, and the sentence of add.js `preview`. `base` is dropped from `CommitStaged`.
+
+## Keeping originals
+
+`settings.keepOriginals` (default off) stores each added picture as it came, next to the resized copy, as
+`originals/<id>.<ext>`: pictures staged on the Add screen (`StagedItem::original`, carried only while the setting
+is on, so nothing large waits in memory otherwise) and pictures added from the strip's Add page. Replace page does
+not keep one, as in js/ui/upload.js. Deleting a page deletes its originals (`Projects::delete_page`).
+
+## Unloading the model
+
+`Provider::unload` frees a local model: llama.cpp in router mode gets `POST /models/unload` for each row whose
+`status.value` is `loaded`; otherwise Ollama's `/api/ps` is read and each model gets
+`POST /api/generate { keep_alive: 0 }`. Settings' **Unload now** sends `Cmd::UnloadModel`. The idle timer
+(`App::idle_tick`) uses `core::idle::Idle`: any model-touching event marks use, a page being read counts as
+busy, and every 20 s `idleUnloadMin` minutes of quiet sends the same command (local provider, not demo).
+
+## Model spelling check
+
+After a live read, `Backend::judge_remote` (js/judge.js `J.remote`) sends the transcript and the subject's words to
+the same model at `settings.ocrUrl` (text only, 20 s) and keeps the suggestions that are glossary terms close to
+the written word. `settings.judgeMode` is `auto` (ask the model, fall back), `heuristic` (never ask) or
+`typesafe` (any bad entry rejects the answer). The result rides on `ReadOutcome::Done { found }`; `None` means the
+screen applies the built-in matching, as the JS does when the judge fails.
+
+## Storage banners
+
+A failed write (`Event::SaveFailed`) shows a banner under the header: "Couldn\u2019t save to \u201Cfolder\u201D." with **Try
+again** (`Session::mark_all_dirty`, then the usual flush), or, when the message says the permission was refused,
+"Folder access was lost." with **Reconnect folder** (`Cmd::Folder("regrant")`: `requestPermission` on the stored
+handle, then `Event::Reconnected` saves everything again; no reload, so unsaved work stays). While a save has
+failed the web build asks before the tab closes (`ui::web::set_unsaved`).
+
+## Server-down banner
+
+A read that cannot reach the server (`ReadOutcome::Unreachable`) sets `Session::server_error`: a banner under the
+header (`banner.js`) with the address and **Retry**, instead of a toast. A page that reads clears it. Retry sends
+`Cmd::Ping` (`GET /health` for a local server; demo mode and hosted endpoints always answer) and, when it
+answers, reads every page that still has no transcript (`U.resumeAll`).
+
 ## Demo mode and reading pages
 
 `--demo`, `?demo=1` and the `demo` setting answer Retry, Transcribe, Transcribe again and the inbox's Resume

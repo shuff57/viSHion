@@ -631,4 +631,162 @@ mod tests {
         r.frames(80);
         assert!(!bar(&r), "the wordmark is at rest after the scan");
     }
+
+    /// Settings shows a Test connection button and the answer under it (demo mode needs no server).
+    #[test]
+    fn settings_test_connection_button_shows_its_answer() {
+        let mut r = Rig::demo();
+        r.act("crumb");
+        r.act("settings");
+        assert!(r.has("st-test"));
+        r.act("st-test");
+        let said: Vec<String> = r.app.nodes().iter().filter_map(|n| match n {
+            vishion_ui::Node::Status { text, .. } => Some(text.clone()),
+            _ => None,
+        }).collect();
+        assert!(said.iter().any(|t| t.starts_with("Demo mode is on")), "{said:?}");
+    }
+
+    /// Settings has Find models and shows the models the host found in the picker.
+    #[test]
+    fn settings_find_models_fills_the_picker() {
+        let mut r = Rig::demo();
+        r.act("crumb");
+        r.act("settings");
+        assert!(r.has("st-find-models"));
+        r.inbox.push(vishion_ui::Event::ModelsFound(Ok(vec![("gemma4:31b-cloud".into(), "Gemma 4 31B".into(), Some(true))])));
+        r.frames(3);
+        r.act("st-model");
+        assert!(r.has("st-model-opt-gemma4:31b-cloud"), "{:?}", r.app.controls().iter().map(|c| &c.id).collect::<Vec<_>>());
+        let said: Vec<String> = r.app.nodes().iter().filter_map(|n| match n {
+            vishion_ui::Node::Status { text, .. } => Some(text.clone()),
+            _ => None,
+        }).collect();
+        assert!(said.iter().any(|t| t.starts_with("1 model found, 1 that can see images")), "{said:?}");
+    }
+
+    /// Check which models work remembers the usable models for the provider, and Show every model again clears
+    /// them; the other profile values survive both.
+    #[test]
+    fn checked_models_are_remembered_as_working() {
+        use vishion_ui::Event;
+        let mut r = Rig::demo();
+        r.act("crumb");
+        r.act("settings");
+        assert!(r.has("st-check-models") && r.has("st-show-all-models"));
+        r.inbox.push(Event::ModelsChecked {
+            ok: vec!["m1".into()],
+            list: vec![("m1".into(), "M 1".into(), Some(true))],
+            note: "1 of 2 models answered with your key. Only those are listed.".into(),
+        });
+        r.frames(3);
+        let p = r.app.session().unwrap().settings.get("profiles").unwrap().clone();
+        assert_eq!(p["local"]["working"], serde_json::json!(["m1"]));
+        r.act("st-show-all-models");
+        let p = r.app.session().unwrap().settings.get("profiles").unwrap().clone();
+        assert!(p["local"].get("working").is_none());
+    }
+
+    /// An unreachable server shows a banner under the header until Retry gets an answer, then the pages that
+    /// still have no transcript are read.
+    #[test]
+    fn server_down_banner_stays_until_retry_gets_an_answer() {
+        use vishion_ui::{Event, ReadOutcome};
+        let mut r = Rig::demo();
+        r.inbox.push(Event::Transcribed {
+            id: "p-ben-1".into(),
+            outcome: ReadOutcome::Unreachable("Cannot reach OCR server at http://localhost:8188. Is llama-server running with CORS enabled?".into()),
+        });
+        r.frames(3);
+        assert!(r.has("server-retry"));
+        let said: Vec<String> = r.app.nodes().iter().filter_map(|n| match n {
+            vishion_ui::Node::Status { text, .. } => Some(text.clone()),
+            _ => None,
+        }).collect();
+        assert!(said.iter().any(|t| t.starts_with("Can\u{2019}t reach the transcription server at")), "{said:?}");
+        // the demo backend answers the ping, so the banner clears and the waiting page is read
+        r.act("server-retry");
+        assert!(!r.has("server-retry"));
+        assert_eq!(r.page("p-ben-1").status(), "done");
+    }
+
+    /// A failed save shows a banner with Try again (everything is written once more and the banner goes when it
+    /// works); a lost folder permission offers Reconnect instead.
+    #[test]
+    fn save_failure_banners_offer_try_again_or_reconnect() {
+        use vishion_ui::Event;
+        let mut r = Rig::demo();
+        r.inbox.push(Event::SaveFailed("disk is full".into()));
+        r.frames(3);
+        assert!(r.has("save-banner-act"));
+        let label = r.app.controls().into_iter().find(|c| c.id == "save-banner-act").map(|c| c.label.clone()).unwrap();
+        assert_eq!(label, "Try again");
+        r.act("save-banner-act");
+        r.frames(6);
+        assert!(!r.has("save-banner-act"), "the retry saved, so the banner is gone");
+        // a permission that was taken back
+        r.inbox.push(Event::SaveFailed("storage: NotAllowedError: The request is not allowed".into()));
+        r.frames(3);
+        let label = r.app.controls().into_iter().find(|c| c.id == "save-banner-act").map(|c| c.label.clone()).unwrap();
+        assert_eq!(label, "Reconnect folder");
+    }
+
+    /// A transcript read with the model's own suggestions uses them (not the built-in matching) as the
+    /// page's corrections.
+    #[test]
+    fn model_suggestions_become_the_pages_corrections() {
+        use vishion_ui::{Event, ReadOutcome};
+        let mut r = Rig::demo();
+        r.inbox.push(Event::Transcribed {
+            id: "p-ben-1".into(),
+            outcome: ReadOutcome::Done {
+                raw: "The standard devation of the sample".into(),
+                tokens: 6,
+                ms: 100,
+                guesses: None,
+                found: Some(vec![vishion_core::judge::Found { word: "devation".into(), term: "deviation".into(), conf: 0.8 }]),
+            },
+        });
+        r.frames(3);
+        let p = r.page("p-ben-1");
+        let c = p.get("corrections").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+        assert_eq!(c.len(), 1, "{c:?}");
+        assert_eq!(c[0]["term"], "deviation");
+    }
+
+    /// Add screen: a staged photo can be turned and un-levelled, and shown large with what the scan found.
+    #[test]
+    fn staged_photo_turns_levels_and_shows_its_lines() {
+        use crate::backend::Picked;
+        let mut r = Rig::demo();
+        r.act("crumb");
+        r.act("add-pages");
+        let conn = vishion_ui::Conn { demo: true, ..Default::default() };
+        let inbox = r.inbox.clone();
+        block_on(r.be.stage_files(vec![Picked { name: "p.png".into(), bytes: png(200, 300) }], &conn, false, Some("Maya R."), &|e| inbox.push(e)));
+        r.frames(4);
+        let k = r.app.session().unwrap().add.rows[0].key;
+        let size = |r: &Rig| {
+            let b = r.app.session().unwrap().add.rows[0].item.bytes.clone();
+            let im = image::load_from_memory(&b).unwrap();
+            (im.width(), im.height())
+        };
+        assert_eq!(size(&r), (200, 300));
+        assert!(r.app.session().unwrap().add.rows[0].item.straighten, "the setting's default");
+        r.act(&format!("staged-turn-{k}"));
+        assert_eq!(size(&r), (300, 200), "a quarter turn swaps the sides");
+        assert_eq!(r.app.session().unwrap().add.rows[0].item.turn, 90);
+        r.act(&format!("staged-level-{k}"));
+        assert!(!r.app.session().unwrap().add.rows[0].item.straighten);
+        r.act(&format!("staged-look-{k}"));
+        assert_eq!(r.app.session().unwrap().add.look, Some(k));
+        let said: Vec<String> = r.app.nodes().iter().filter_map(|n| match n {
+            vishion_ui::Node::Status { text, .. } => Some(text.clone()),
+            _ => None,
+        }).collect();
+        assert!(said.iter().any(|t| t.starts_with("Straightening is off for this photo.")), "{said:?}");
+        // committing keeps the turned picture, not the shrunk copy it started from
+        r.act("add-commit");
+        assert_eq!(r.app.session().unwrap().view, vishion_ui::state::View::Inbox);
+    }
 }

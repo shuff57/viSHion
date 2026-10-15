@@ -46,6 +46,32 @@ pub fn uid(now: i64, salt: u64) -> String {
     format!("{}{:0>5}", b36(now as u64), tail)
 }
 
+/// `fit` of add.js: the shrunk picture turned `turn` degrees and, when asked, levelled. Returns the picture and the
+/// tilt that was removed (0 when it was level or nothing could be done).
+pub fn fit_picture(base: &[u8], turn: u32, straighten: bool) -> (Vec<u8>, f64) {
+    let mut b = base.to_vec();
+    for _ in 0..((turn / 90) % 4) {
+        match pictures::rotate90(&b) {
+            Ok(r) => b = r,
+            Err(_) => break,
+        }
+    }
+    if straighten {
+        if let Ok((Some(level), angle)) = pictures::deskew(&b) {
+            return (level, angle);
+        }
+    }
+    (b, 0.0)
+}
+
+/// The extension of a picked file, lower case (`img` when it has none), as `upload.js` names an original.
+fn file_ext(name: &str) -> String {
+    match name.rsplit_once('.') {
+        Some((stem, ext)) if !stem.is_empty() && !ext.is_empty() && ext.len() <= 8 && ext.bytes().all(|b| b.is_ascii_alphanumeric()) => ext.to_ascii_lowercase(),
+        _ => "img".to_string(),
+    }
+}
+
 /// The file dialog (native). The worker thread blocks on it, which is what it is for.
 #[cfg(not(target_arch = "wasm32"))]
 pub async fn pick_pictures(multiple: bool) -> Vec<Picked> {
@@ -294,6 +320,14 @@ impl Backend {
         }
     }
 
+    /// `settings.keepOriginals`: store each upload as it came, next to the resized copy.
+    async fn keep_originals(&self) -> bool {
+        match self.projects.load_settings().await {
+            Ok(Some(m)) => Settings::load(&Value::Object(m)).get("keepOriginals").and_then(Value::as_bool) == Some(true),
+            _ => false,
+        }
+    }
+
     /// `prepare`, then `deskew` when the setting asks for it (upload.js `doReplace`, add.js).
     async fn prepare_picture(&self, bytes: &[u8]) -> std::result::Result<Vec<u8>, String> {
         let jpg = pictures::prepare(bytes)?;
@@ -322,6 +356,7 @@ impl Backend {
     pub async fn add_with(&self, slug: &str, student: &str, files: Vec<Picked>, now: i64) -> Event {
         let mut pages: Vec<(Page, Vec<u8>)> = vec![];
         let mut skipped: Vec<String> = vec![];
+        let keep = self.keep_originals().await;
         for (n, f) in files.into_iter().enumerate() {
             match self.prepare_picture(&f.bytes).await {
                 Ok(jpg) => {
@@ -329,6 +364,9 @@ impl Backend {
                     if self.projects.save_image(slug, &id, &jpg).await.is_err() {
                         skipped.push(f.name);
                         continue;
+                    }
+                    if keep {
+                        let _ = self.projects.save_original(slug, &id, &file_ext(&f.name), &f.bytes).await;
                     }
                     let mut p = Assignment::new_page(&id, &f.name);
                     p.set("student", serde_json::json!({"name": student, "source": "chosen", "confirmed": true}));
@@ -376,18 +414,22 @@ impl Backend {
         // `page2` before `page10`
         files.sort_by(|a, b| vishion_core::jsx::nat_compare(&a.name, &b.name));
         let mut down = false;
+        let keep = self.keep_originals().await;
         for f in files {
             if let Some(why) = vishion_core::student::check_file(&f.name, f.bytes.len()) {
                 skipped.push((f.name, why.to_string()));
                 continue;
             }
-            let jpg = match self.prepare_picture(&f.bytes).await {
+            // shrunk only; Turn and Straighten start from this (`s.orig` of add.js), levelled by the setting
+            let base = match pictures::prepare(&f.bytes) {
                 Ok(j) => j,
                 Err(_) => {
                     skipped.push((f.name, "Could not read this image.".into()));
                     continue;
                 }
             };
+            let straighten = self.straighten_on().await;
+            let (jpg, angle) = fit_picture(&base, 0, straighten);
             let (name, source) = if let Some(p) = preset {
                 (Some(p.to_string()), "chosen")
             } else if !read_names {
@@ -405,7 +447,11 @@ impl Backend {
                     }
                 }
             };
-            emit(Event::Staged { item: vishion_ui::StagedItem { file_name: f.name, bytes: jpg, name, source: source.into() }, names_down: down });
+            let original = keep.then(|| (file_ext(&f.name), f.bytes.clone()));
+            emit(Event::Staged {
+                item: vishion_ui::StagedItem { file_name: f.name, bytes: jpg, name, source: source.into(), original, base, turn: 0, straighten, angle },
+                names_down: down,
+            });
         }
         // always sent: it ends the staging (the screen stops saying it is working)
         emit(Event::Skipped(skipped));
@@ -425,6 +471,10 @@ impl Backend {
             let id = uid(now, n as u64);
             if self.projects.save_image(slug, &id, &it.bytes).await.is_err() {
                 return Event::Notice { text: format!("Could not save {}.", it.file_name), error: true };
+            }
+            if let Some((ext, bytes)) = &it.original {
+                // (a failure to keep the original never loses the page)
+                let _ = self.projects.save_original(slug, &id, ext, bytes).await;
             }
             let mut p = Assignment::new_page(&id, &it.file_name);
             let student = match &it.name {
@@ -526,6 +576,128 @@ impl Backend {
         }
     }
 
+    /// Settings, Test connection (js/ui/settings.js `test`): the model list says "Connected. N models
+    /// available"; a server with no list but a `/health` is still "Connected".
+    pub async fn test_connection(&self, conn: &Conn) -> Event {
+        let say = |ok: bool, text: String| Event::ConnectionTested { ok, text };
+        if self.demo || conn.demo || self.demo_mode().await {
+            return say(true, "Demo mode is on, so no server is needed.".into());
+        }
+        let base = conn.url.trim_end_matches('/').to_string();
+        if base.is_empty() {
+            return say(false, "Enter the server address first.".into());
+        }
+        let provider = vishion_net::Provider::for_setting(&conn.provider);
+        match provider.get(&format!("{base}/v1/models"), &conn.api_key, 15).await {
+            Ok(r) if r.status == 200 => {
+                let n = vishion_net::models::parse_rows(&r.body).len();
+                say(true, format!("Connected. {} available.", vishion_ui::state::plural(n, "model", "models")))
+            }
+            Ok(r) if r.status == 401 || r.status == 403 => say(false, "The server did not accept the API key.".into()),
+            _ => match provider.get(&format!("{base}/health"), &conn.api_key, 15).await {
+                Ok(h) if h.status == 200 => say(true, "Connected.".into()),
+                Ok(h) => say(false, format!("The server answered with {}. The model may still be loading.", h.status)),
+                Err(_) => say(false, format!("Can\u{2019}t reach {base}. Is it running, and does it allow this page (CORS)?")),
+            },
+        }
+    }
+
+    /// `O.ping`: is the server answering? Demo mode and hosted endpoints (no `/health`) always are.
+    pub async fn ping(&self, conn: &Conn) -> Event {
+        let id = if conn.provider.is_empty() { "local" } else { conn.provider.as_str() };
+        if self.demo || conn.demo || self.demo_mode().await || (id != "local" && id != "mock") {
+            return Event::Pinged { ok: true, text: String::new() };
+        }
+        let base = conn.url.trim_end_matches('/');
+        let provider = vishion_net::Provider::for_setting(id);
+        match provider.get(&format!("{base}/health"), &conn.api_key, 10).await {
+            Ok(r) if r.status == 200 => Event::Pinged { ok: true, text: String::new() },
+            _ => Event::Pinged { ok: false, text: format!("Cannot reach OCR server at {base}. Is llama-server running with CORS enabled?") },
+        }
+    }
+
+    /// `J.remote`: ask the one model to check the transcript against the glossary. `None` when the mode is
+    /// built-in matching, there are no words, or the answer failed (the caller falls back).
+    pub async fn judge_remote(&self, conn: &Conn, raw: &str) -> Option<Vec<vishion_core::judge::Found>> {
+        if conn.judge_mode == "heuristic" || conn.judge_terms.is_empty() || raw.trim().is_empty() {
+            return None;
+        }
+        let body = serde_json::json!({
+            "model": if conn.model.is_empty() { "judge" } else { conn.model.as_str() },
+            "temperature": 0, "max_tokens": 800, "stream": false,
+            "messages": [{"role": "user", "content": [{"type": "text", "text": vishion_core::judge::remote_prompt(&conn.judge_terms, raw)}]}]
+        })
+        .to_string();
+        let url = format!("{}/v1/chat/completions", conn.url.trim_end_matches('/'));
+        let provider = vishion_net::Provider::for_setting(&conn.provider);
+        let r = provider.post_json(&url, &conn.api_key, &body, 20).await.ok()?;
+        if r.status != 200 {
+            return None;
+        }
+        let text = serde_json::from_str::<Value>(&r.body).ok()?["choices"][0]["message"]["content"].as_str()?.to_string();
+        vishion_core::judge::parse_remote(&text, &conn.judge_terms, raw, conn.judge_mode == "typesafe").ok()
+    }
+
+    /// Settings, Check which models work (`M.probe` and the button of js/ui/settings.js): list every model that
+    /// takes images, send each a tiny picture, keep those that answer. `emit` hears the progress.
+    pub async fn check_models(&self, conn: &Conn, emit: &dyn Fn(Event)) {
+        let id = if conn.provider.is_empty() { "local" } else { conn.provider.as_str() };
+        let provider = vishion_net::Provider::for_setting(id);
+        let (shows, cloud, relay) = (id == "local", id != "local", id == "ollama-cloud");
+        let done = |note: String| Event::ModelsChecked { ok: vec![], list: vec![], note };
+        let rows = match provider.list_models(&conn.url, &conn.api_key, shows, relay).await {
+            Ok(r) => r,
+            Err(m) => return emit(done(m)),
+        };
+        let all = vishion_net::models::assemble(rows, id, cloud, None, true);
+        if all.is_empty() {
+            return emit(done("The endpoint listed no models that take images.".into()));
+        }
+        let ids: Vec<String> = all.iter().map(|m| m.id.clone()).collect();
+        let (ok, failed) = provider.probe(&conn.url, &conn.api_key, &ids, &|d, n| emit(Event::ModelsProgress { done: d, total: n })).await;
+        if ok.is_empty() {
+            // usually a missing or wrong key: keep the full list rather than an empty picker
+            let refused = failed.iter().any(|(_, why)| why.contains("401") || why.contains("403"));
+            let tail = if refused { ", and the endpoint refused the key. Check the API key above." } else { ". Check the key and the connection." };
+            return emit(done(format!("None of the {} models answered{tail}", all.len())));
+        }
+        let list: Vec<(String, String, Option<bool>)> =
+            all.iter().filter(|m| ok.contains(&m.id)).map(|m| (m.id.clone(), m.label.clone(), m.vision)).collect();
+        let bad: Vec<String> = failed
+            .iter()
+            .take(4)
+            .map(|(id, why)| format!("{} ({why})", vishion_net::models::pretty(id, "")))
+            .collect();
+        let mut note = format!(
+            "{} of {} models answered with your key{}",
+            ok.len(),
+            all.len(),
+            if ok.len() == all.len() { ". All are listed." } else { ". Only those are listed." }
+        );
+        if !bad.is_empty() {
+            note.push_str(&format!(" Left out: {}", bad.join(", ")));
+            if failed.len() > 4 {
+                note.push_str(&format!(" and {} more", failed.len() - 4));
+            }
+            note.push('.');
+        }
+        emit(Event::ModelsChecked { ok, list, note });
+    }
+
+    /// Settings, Find models (`M.list`): what the server lists that can read images.
+    pub async fn find_models(&self, conn: &Conn, working: Option<Vec<String>>, all: bool) -> Event {
+        let id = if conn.provider.is_empty() { "local" } else { conn.provider.as_str() };
+        let provider = vishion_net::Provider::for_setting(id);
+        let (shows, cloud, relay) = (id == "local", id != "local", id == "ollama-cloud");
+        let result = provider.list_models(&conn.url, &conn.api_key, shows, relay).await.map(|rows| {
+            vishion_net::models::assemble(rows, id, cloud, working.as_deref(), all)
+                .into_iter()
+                .map(|m| (m.id, m.label, m.vision))
+                .collect::<Vec<_>>()
+        });
+        Event::ModelsFound(result)
+    }
+
     /// Demo mode of js/ocr.js: the sample assignment, or the `demo` setting.
     async fn demo_mode(&self) -> bool {
         if self.demo {
@@ -560,7 +732,7 @@ impl Backend {
         let r = vishion_core::demo::read(index);
         let (_, n) = vishion_core::guess::numbered(&r.text);
         let guesses = Some(vishion_core::demo::guesses(n));
-        ReadOutcome::Done { raw: r.text, tokens: r.tokens, ms: r.ms, guesses }
+        ReadOutcome::Done { raw: r.text, tokens: r.tokens, ms: r.ms, guesses, found: None }
     }
 
     /// `Q.runOne` against the server.
@@ -595,7 +767,10 @@ impl Backend {
                 } else {
                     None
                 };
-                ReadOutcome::Done { raw, tokens: d.tokens, ms: d.ms, guesses }
+                // `J.run`: the model checks the transcript against the glossary; any failure leaves the built-in
+                // matching to the screen (a failing judge never blocks a transcript)
+                let found = self.judge_remote(conn, &raw).await;
+                ReadOutcome::Done { raw, tokens: d.tokens, ms: d.ms, guesses, found }
             }
             Err(Error::Aborted) => ReadOutcome::Stopped,
             Err(Error::TimedOut) => ReadOutcome::Failed(format!(
@@ -714,6 +889,10 @@ impl Backend {
                 self.stage_files(files, &conn, read_names, preset.as_deref(), &|e| out.borrow_mut().push(e)).await;
                 Event::Many(out.into_inner())
             }
+            Cmd::RefitStaged { key, base, turn, straighten } => {
+                let (bytes, angle) = fit_picture(&base, turn, straighten);
+                Event::Refit { key, bytes, angle }
+            }
             Cmd::CommitStaged { slug, items } => self.commit_staged(&slug, items, now).await,
             Cmd::ImportZip => {
                 let Some(f) = pick_zip().await.pop() else {
@@ -752,6 +931,29 @@ impl Backend {
             // the folder card is a browser thing: the web executor answers it, a native host has no such card
             Cmd::Folder(_) => Event::Many(vec![]),
             Cmd::ImportLegacy => self.import_legacy(now).await,
+            Cmd::UnloadModel { conn, idle_mins } => {
+                // nothing of yours is loaded when the model runs elsewhere (`M.unload`)
+                let id = if conn.provider.is_empty() { "local" } else { conn.provider.as_str() };
+                let names = if id == "local" || id == "mock" {
+                    vishion_net::Provider::for_setting(id)
+                        .unload(&conn.url, &conn.api_key)
+                        .await
+                        .into_iter()
+                        .map(|m| vishion_net::models::pretty(&m, ""))
+                        .collect()
+                } else {
+                    vec![]
+                };
+                Event::Unloaded { names, idle_mins }
+            }
+            Cmd::Ping { conn } => self.ping(&conn).await,
+            Cmd::TestConnection { conn } => self.test_connection(&conn).await,
+            Cmd::CheckModels { conn } => {
+                let out = std::cell::RefCell::new(vec![]);
+                self.check_models(&conn, &|e| out.borrow_mut().push(e)).await;
+                Event::Many(out.into_inner())
+            }
+            Cmd::FindModels { conn, working, all } => self.find_models(&conn, working, all).await,
             Cmd::ListProjects => Event::Many(vec![Event::LegacyAvailable(self.legacy_available()), self.list_event(now).await]),
             Cmd::OpenProject { slug } => self.open(Some(&slug), now).await,
             Cmd::CreateProject { name } => match self.projects.create_project(&name, now).await {

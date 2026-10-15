@@ -499,6 +499,335 @@ mod tests {
         assert!(g.is_empty());
     }
 
+    /// Settings, Test connection: a server that lists models, one that refuses the key, one that is not there.
+    #[test]
+    fn test_connection_reports_models_a_refused_key_and_a_dead_port() {
+        use std::io::{Read, Write};
+        fn serve(reply: &'static str) -> String {
+            let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let url = format!("http://{}", l.local_addr().unwrap());
+            std::thread::spawn(move || {
+                for conn in l.incoming() {
+                    let Ok(mut s) = conn else { return };
+                    let mut b = [0u8; 8192];
+                    let _ = s.read(&mut b);
+                    let _ = s.write_all(reply.as_bytes());
+                }
+            });
+            url
+        }
+        let ask = |conn: vishion_ui::Conn| -> (bool, String) {
+            let be = Backend::new(AnyStore::Mem(vishion_store::mem::MemStore::default()), "Saved");
+            match block_on(be.test_connection(&conn)) {
+                Event::ConnectionTested { ok, text } => (ok, text),
+                e => panic!("{e:?}"),
+            }
+        };
+        let two = r#"{"data":[{"id":"a"},{"id":"b"}]}"#;
+        let url = serve(Box::leak(format!("HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{two}", two.len()).into_boxed_str()));
+        assert_eq!(ask(vishion_ui::Conn { url, ..Default::default() }), (true, "Connected. 2 models available.".to_string()));
+        let url = serve("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
+        assert_eq!(ask(vishion_ui::Conn { url, ..Default::default() }), (false, "The server did not accept the API key.".to_string()));
+        let (ok, text) = ask(vishion_ui::Conn { url: "http://127.0.0.1:1".into(), ..Default::default() });
+        assert!(!ok && text.starts_with("Can\u{2019}t reach http://127.0.0.1:1"), "{text}");
+        assert_eq!(ask(vishion_ui::Conn { url: String::new(), ..Default::default() }), (false, "Enter the server address first.".to_string()));
+        // the mock provider needs no server
+        let m = ask(vishion_ui::Conn { url: "http://unused".into(), provider: "mock".into(), ..Default::default() });
+        assert_eq!(m, (true, "Connected. 1 model available.".to_string()));
+        assert!(ask(vishion_ui::Conn { demo: true, ..Default::default() }).1.starts_with("Demo mode is on"));
+    }
+
+    /// Settings, Find models: a local Ollama's models, with /api/show telling which can see images; hosted ones
+    /// stay out of the local picker and text-only ones out of every picker.
+    #[test]
+    fn find_models_lists_the_vision_models_of_a_local_ollama() {
+        use std::io::{Read, Write};
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", l.local_addr().unwrap());
+        std::thread::spawn(move || {
+            for conn in l.incoming() {
+                let Ok(mut s) = conn else { return };
+                std::thread::spawn(move || {
+                    s.set_read_timeout(Some(std::time::Duration::from_millis(300))).unwrap();
+                    let mut req = Vec::new();
+                    let mut b = [0u8; 8192];
+                    while let Ok(n) = s.read(&mut b) {
+                        if n == 0 {
+                            break;
+                        }
+                        req.extend_from_slice(&b[..n]);
+                        if req.windows(4).any(|w| w == b"\r\n\r\n") && (String::from_utf8_lossy(&req).starts_with("GET ") || req.ends_with(b"}")) {
+                            break;
+                        }
+                    }
+                    let text = String::from_utf8_lossy(&req).to_string();
+                    let body = if text.starts_with("GET /v1/models") {
+                        r#"{"data":[{"id":"llava:7b"},{"id":"coder:7b"},{"id":"gemma4:31b-cloud"}]}"#.to_string()
+                    } else if text.contains("llava:7b") || text.contains("gemma4:31b-cloud") {
+                        r#"{"capabilities":["completion","vision"]}"#.to_string()
+                    } else {
+                        r#"{"capabilities":["completion"]}"#.to_string()
+                    };
+                    let _ = s.write_all(format!("HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{body}", body.len()).as_bytes());
+                });
+            }
+        });
+        let be = Backend::new(AnyStore::Mem(vishion_store::mem::MemStore::default()), "Saved");
+        let ids = |ev: Event| -> Vec<String> {
+            match ev {
+                Event::ModelsFound(Ok(v)) => v.into_iter().map(|m| m.0).collect(),
+                e => panic!("{e:?}"),
+            }
+        };
+        let local = vishion_ui::Conn { url: url.clone(), provider: "local".into(), ..Default::default() };
+        assert_eq!(ids(block_on(be.find_models(&local, None, false))), ["llava:7b"]);
+        // another provider keeps the hosted model (and has no /api/show: the listing says nothing about images)
+        let custom = vishion_ui::Conn { url, provider: "custom".into(), ..Default::default() };
+        let mut got = ids(block_on(be.find_models(&custom, None, false)));
+        got.sort();
+        assert_eq!(got, ["coder:7b", "gemma4:31b-cloud", "llava:7b"]);
+        // a working list narrows a cloud picker; asking for all ignores it
+        assert_eq!(ids(block_on(be.find_models(&custom, Some(vec!["llava:7b".into()]), false))), ["llava:7b"]);
+        assert_eq!(ids(block_on(be.find_models(&custom, Some(vec!["llava:7b".into()]), true))).len(), 3);
+        // errors are sentences
+        let dead = vishion_ui::Conn { url: "http://127.0.0.1:1".into(), provider: "custom".into(), ..Default::default() };
+        match block_on(be.find_models(&dead, None, false)) {
+            Event::ModelsFound(Err(m)) => assert!(m.starts_with("Can\u{2019}t reach"), "{m}"),
+            e => panic!("{e:?}"),
+        }
+        let empty = vishion_ui::Conn::default();
+        assert!(matches!(block_on(be.find_models(&empty, None, false)), Event::ModelsFound(Err(m)) if m == "Enter the server address first."));
+    }
+
+    /// Settings, Check which models work: a model the key cannot use is left out, progress is reported, and a
+    /// refused key says so.
+    #[test]
+    fn check_models_keeps_the_models_that_answer() {
+        use std::io::{Read, Write};
+        fn serve(refuse_all: bool) -> String {
+            let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let url = format!("http://{}", l.local_addr().unwrap());
+            std::thread::spawn(move || {
+                for conn in l.incoming() {
+                    let Ok(mut s) = conn else { return };
+                    std::thread::spawn(move || {
+                        s.set_read_timeout(Some(std::time::Duration::from_millis(250))).unwrap();
+                        let mut req = Vec::new();
+                        let mut b = [0u8; 16384];
+                        while let Ok(n) = s.read(&mut b) {
+                            if n == 0 {
+                                break;
+                            }
+                            req.extend_from_slice(&b[..n]);
+                        }
+                        let text = String::from_utf8_lossy(&req).to_string();
+                        let (status, body) = if text.starts_with("GET /v1/models") {
+                            ("200 OK", r#"{"data":[{"id":"good"},{"id":"bad"}]}"#.to_string())
+                        } else if refuse_all || text.contains("\"model\":\"bad\"") {
+                            ("403 Forbidden", "{}".to_string())
+                        } else {
+                            ("200 OK", r#"{"choices":[{"message":{"content":"OK"}}]}"#.to_string())
+                        };
+                        let _ = s.write_all(format!("HTTP/1.1 {status}\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{body}", body.len()).as_bytes());
+                    });
+                }
+            });
+            url
+        }
+        let be = Backend::new(AnyStore::Mem(vishion_store::mem::MemStore::default()), "Saved");
+        let run = |url: String| -> Vec<Event> {
+            let out = std::cell::RefCell::new(vec![]);
+            let conn = vishion_ui::Conn { url, provider: "custom".into(), ..Default::default() };
+            block_on(be.check_models(&conn, &|e| out.borrow_mut().push(e)));
+            out.into_inner()
+        };
+        let evs = run(serve(false));
+        assert_eq!(evs.iter().filter(|e| matches!(e, Event::ModelsProgress { .. })).count(), 2);
+        match evs.last().unwrap() {
+            Event::ModelsChecked { ok, list, note } => {
+                assert_eq!(ok, &vec!["good".to_string()]);
+                assert_eq!(list.len(), 1);
+                assert_eq!(note, "1 of 2 models answered with your key. Only those are listed. Left out: Bad (HTTP 403).");
+            }
+            e => panic!("{e:?}"),
+        }
+        let evs = run(serve(true));
+        match evs.last().unwrap() {
+            Event::ModelsChecked { ok, note, .. } => {
+                assert!(ok.is_empty());
+                assert_eq!(note, "None of the 2 models answered, and the endpoint refused the key. Check the API key above.");
+            }
+            e => panic!("{e:?}"),
+        }
+    }
+
+    /// The banner's Retry pings `/health`: a server that answers is fine, a dead port is not, and hosted
+    /// endpoints (no `/health`) always count as there.
+    #[test]
+    fn ping_asks_health_of_a_local_server_only() {
+        use std::io::{Read, Write};
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let up = format!("http://{}", l.local_addr().unwrap());
+        std::thread::spawn(move || {
+            for conn in l.incoming() {
+                let Ok(mut s) = conn else { return };
+                let mut b = [0u8; 2048];
+                let _ = s.read(&mut b);
+                let _ = s.write_all(b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 2\r\n\r\nok");
+            }
+        });
+        let be = Backend::new(AnyStore::Mem(vishion_store::mem::MemStore::default()), "Saved");
+        let ping = |url: &str, provider: &str| match block_on(be.ping(&vishion_ui::Conn { url: url.into(), provider: provider.into(), ..Default::default() })) {
+            Event::Pinged { ok, text } => (ok, text),
+            e => panic!("{e:?}"),
+        };
+        assert!(ping(&up, "local").0);
+        let (ok, text) = ping("http://127.0.0.1:1", "local");
+        assert!(!ok && text.starts_with("Cannot reach OCR server at http://127.0.0.1:1"), "{text}");
+        assert!(ping("http://127.0.0.1:1", "openrouter").0, "a hosted endpoint has no /health");
+    }
+
+    /// The model spelling check (`J.remote`): its suggestions are filtered like the JS (only glossary terms,
+    /// close to the written word), a strict mode rejects the whole answer on one bad entry, the built-in mode
+    /// does not ask, and a failing server gives nothing (the screen then uses the built-in matching).
+    #[test]
+    fn judge_remote_filters_and_falls_back() {
+        use std::io::{Read, Write};
+        fn serve(status: &'static str, content: &'static str) -> String {
+            let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let url = format!("http://{}", l.local_addr().unwrap());
+            std::thread::spawn(move || {
+                for conn in l.incoming() {
+                    let Ok(mut s) = conn else { return };
+                    let mut b = [0u8; 8192];
+                    let _ = s.read(&mut b);
+                    let body = serde_json::json!({"choices": [{"message": {"content": content}}]}).to_string();
+                    let _ = s.write_all(format!("HTTP/1.1 {status}\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{body}", body.len()).as_bytes());
+                }
+            });
+            url
+        }
+        let be = Backend::new(AnyStore::Mem(vishion_store::mem::MemStore::default()), "Saved");
+        let conn = |url: String, mode: &str| vishion_ui::Conn {
+            url,
+            judge_terms: vec!["confidence".into(), "interval".into()],
+            judge_mode: mode.into(),
+            ..Default::default()
+        };
+        let reply = r#"Here: [{"word":"confidance","term":"confidence","conf":0.9},{"word":"the","term":"zebra","conf":1}]"#;
+        let raw = "the confidance interval";
+        let got = block_on(be.judge_remote(&conn(serve("200 OK", reply), "auto"), raw)).unwrap();
+        assert_eq!(got.len(), 1);
+        assert_eq!((got[0].word.as_str(), got[0].term.as_str()), ("confidance", "confidence"));
+        // typesafe: one rejected entry rejects the whole answer
+        assert!(block_on(be.judge_remote(&conn(serve("200 OK", reply), "typesafe"), raw)).is_none());
+        // the built-in mode never asks, and nothing is asked without words
+        assert!(block_on(be.judge_remote(&conn("http://127.0.0.1:1".into(), "heuristic"), raw)).is_none());
+        let mut none = conn("http://127.0.0.1:1".into(), "auto");
+        none.judge_terms.clear();
+        assert!(block_on(be.judge_remote(&none, raw)).is_none());
+        // a refusing server gives nothing
+        assert!(block_on(be.judge_remote(&conn(serve("500 Internal Server Error", reply), "auto"), raw)).is_none());
+    }
+
+    /// Unload now: a llama.cpp router unloads what it lists as loaded; an Ollama is asked through /api/ps and
+    /// `keep_alive: 0`; a hosted provider is never asked.
+    #[test]
+    fn unload_frees_router_models_or_ollama_models_and_leaves_cloud_alone() {
+        use std::io::{Read, Write};
+        use std::sync::{Arc, Mutex};
+        fn serve(router: bool, log: Arc<Mutex<Vec<String>>>) -> String {
+            let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let url = format!("http://{}", l.local_addr().unwrap());
+            std::thread::spawn(move || {
+                for conn in l.incoming() {
+                    let Ok(mut s) = conn else { return };
+                    let log = log.clone();
+                    std::thread::spawn(move || {
+                        s.set_read_timeout(Some(std::time::Duration::from_millis(250))).unwrap();
+                        let mut req = Vec::new();
+                        let mut b = [0u8; 8192];
+                        while let Ok(n) = s.read(&mut b) {
+                            if n == 0 {
+                                break;
+                            }
+                            req.extend_from_slice(&b[..n]);
+                        }
+                        let text = String::from_utf8_lossy(&req).to_string();
+                        let line = text.lines().next().unwrap_or("").to_string();
+                        let body_part = text.split("\r\n\r\n").nth(1).unwrap_or("").to_string();
+                        log.lock().unwrap().push(format!("{line} {body_part}"));
+                        let body = if line.starts_with("GET /v1/models") {
+                            if router {
+                                r#"{"data":[{"id":"qwen-vl.gguf","status":{"value":"loaded"}},{"id":"other.gguf","status":{"value":"unloaded"}}]}"#
+                            } else {
+                                r#"{"data":[{"id":"qwen3-vl:8b"}]}"#
+                            }
+                        } else if line.starts_with("GET /api/ps") {
+                            r#"{"models":[{"name":"qwen3-vl:8b"}]}"#
+                        } else {
+                            "{}"
+                        };
+                        let _ = s.write_all(format!("HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{body}", body.len()).as_bytes());
+                    });
+                }
+            });
+            url
+        }
+        let be = Backend::new(AnyStore::Mem(vishion_store::mem::MemStore::default()), "Saved");
+        let ask = |url: String, provider: &str| match block_on(be.handle(Cmd::UnloadModel { conn: vishion_ui::Conn { url, provider: provider.into(), ..Default::default() }, idle_mins: None }, 0)) {
+            Event::Unloaded { names, .. } => names,
+            e => panic!("{e:?}"),
+        };
+        let log = Arc::new(Mutex::new(vec![]));
+        let names = ask(serve(true, log.clone()), "local");
+        assert_eq!(names, ["Qwen Vl.gguf"]); // (`M.pretty` of a file name, as in the JS)
+        assert!(log.lock().unwrap().iter().any(|l| l.starts_with("POST /models/unload") && l.contains("qwen-vl.gguf")), "{:?}", log.lock().unwrap());
+        let log = Arc::new(Mutex::new(vec![]));
+        let names = ask(serve(false, log.clone()), "local");
+        assert_eq!(names, ["Qwen 3 VL 8B"]);
+        assert!(log.lock().unwrap().iter().any(|l| l.starts_with("POST /api/generate") && l.contains("\"keep_alive\":0")), "{:?}", log.lock().unwrap());
+        // a hosted provider has nothing of yours loaded: it is not even asked
+        let log = Arc::new(Mutex::new(vec![]));
+        assert!(ask(serve(false, log.clone()), "openrouter").is_empty());
+        assert!(log.lock().unwrap().is_empty());
+    }
+
+    /// Keep untouched originals: with the setting on, staged and added pictures are also stored as
+    /// `originals/<id>.<ext>`; with it off nothing extra is written.
+    #[test]
+    fn originals_are_kept_when_the_setting_is_on() {
+        fn png() -> Vec<u8> {
+            let mut o = std::io::Cursor::new(Vec::new());
+            image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(60, 80, image::Rgb([240, 240, 240])))
+                .write_to(&mut o, image::ImageFormat::Png)
+                .unwrap();
+            o.into_inner()
+        }
+        let (store, slug) = block_on(seed(1)).unwrap();
+        let be = Backend::new(store, "Saved");
+        let originals = |be: &Backend| block_on(vishion_store::Store::list(&be.projects.store, &format!("{slug}/originals/"))).unwrap();
+        let stage = |be: &Backend| -> Event {
+            let out = std::cell::RefCell::new(vec![]);
+            block_on(be.stage_files(vec![crate::backend::Picked { name: "Scan 1.PNG".into(), bytes: png() }], &vishion_ui::Conn::default(), false, Some("Maya R."), &|e| out.borrow_mut().push(e)));
+            let items: Vec<vishion_ui::StagedItem> = out.into_inner().into_iter().filter_map(|e| match e {
+                Event::Staged { item, .. } => Some(item),
+                _ => None,
+            }).collect();
+            block_on(be.commit_staged(&slug, items, 1_700_000_000_000))
+        };
+        let before = originals(&be).len();
+        assert!(matches!(stage(&be), Event::PagesAdded { .. }));
+        assert_eq!(originals(&be).len(), before, "off: nothing extra");
+        let mut st = vishion_core::model::Settings::defaults();
+        st.set("keepOriginals", serde_json::json!(true));
+        block_on(be.projects.save_settings(&st)).unwrap();
+        assert!(matches!(stage(&be), Event::PagesAdded { .. }));
+        let kept = originals(&be);
+        assert_eq!(kept.len(), before + 1, "{kept:?}");
+        assert!(kept.iter().any(|k| k.ends_with(".png")), "{kept:?}");
+    }
+
     /// The native path: a real folder, written and read back through `FsStore` and the project layer.
     #[test]
     fn folder_store_round_trip_keeps_edits() {

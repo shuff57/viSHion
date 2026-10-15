@@ -101,6 +101,9 @@ pub(crate) enum Act {
     OpenAssignment,
     OpenExport,
     OpenAdd(Option<String>),
+    ServerRetry,
+    SaveRetry,
+    Reconnect,
     AddChoose,
     OpenCapture,
     CaptureShot,
@@ -109,6 +112,9 @@ pub(crate) enum Act {
     AddDropped(Vec<(String, Vec<u8>)>),
     AddRemove(u64),
     AddPick(u64),
+    AddTurn(u64),
+    AddLevel(u64, bool),
+    AddLook(u64),
     AddName(u64, String),
     AddDraft(u64, String),
     AddCommit,
@@ -139,6 +145,7 @@ struct Cx<'a> {
     storage: &'a str,
     notice: &'a Option<String>,
     narrow: bool,
+    look: Option<u64>,
     /// A window too short for a header that stays put: the header is the top of the page and scrolls with it.
     inline_header: bool,
     screen_h: f32,
@@ -245,6 +252,7 @@ pub(crate) fn show(app: &mut App, ctx: &egui::Context, t: &Tokens) {
     }
     let narrow = screen.width() < NARROW || short;
     let show_home = home.active || matches!(boot, Boot::Empty);
+    let folder_name = home.folder.as_ref().filter(|f| f.mode == "folder").map(|f| f.name.clone());
     let mut home_acts = vec![];
     if show_home {
         if home.cards.is_none() && !home.asked {
@@ -269,6 +277,7 @@ pub(crate) fn show(app: &mut App, ctx: &egui::Context, t: &Tokens) {
                 storage: &*storage,
                 notice: &*notice,
                 narrow,
+                look: s.add.look,
                 inline_header: short,
                 screen_h: screen.height(),
                 stage: &mut *stage,
@@ -307,6 +316,65 @@ pub(crate) fn show(app: &mut App, ctx: &egui::Context, t: &Tokens) {
                     });
                 let hr = hdr.response.rect;
                 ctx.layer_painter(egui::LayerId::new(egui::Order::Middle, egui::Id::new("hdr-line"))).hline(hr.x_range(), hr.bottom() - 0.5, Stroke::new(1.0, t.line));
+            }
+            // `banner.js`: storage problems first (the folder was lost, or a write failed), then the server
+            if let Some(why) = cx.save.failed.clone() {
+                let lost = why.to_ascii_lowercase().contains("notallowed") || why.to_ascii_lowercase().contains("permission");
+                let (title, body, label, act) = if lost {
+                    (
+                        "Folder access was lost.".to_string(),
+                        "Your work is kept in this tab and will be saved once you reconnect.".to_string(),
+                        "Reconnect folder",
+                        Act::Reconnect,
+                    )
+                } else {
+                    let named = match &folder_name {
+                        Some(n) => format!("Couldn\u{2019}t save to \u{201C}{n}\u{201D}."),
+                        None => "Couldn\u{2019}t save.".to_string(),
+                    };
+                    (
+                        named,
+                        "Your changes are kept in this tab for now. Check that the folder still exists, then try again.".to_string(),
+                        "Try again",
+                        Act::SaveRetry,
+                    )
+                };
+                let full = format!("{title} {body}");
+                egui::TopBottomPanel::top("save-banner")
+                    .show_separator_line(false)
+                    .frame(egui::Frame::none().fill(if lost { t.warn_bg } else { t.bad_bg }).inner_margin(Margin::symmetric(if narrow { 16.0 } else { 24.0 }, 10.0)))
+                    .show(ctx, |ui| {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.spacing_mut().item_spacing = vec2(12.0, 8.0);
+                            let r = ui.label(RichText::new(&full).font(theme::sans(14.0)).color(if lost { t.ink } else { t.bad }));
+                            cx.ctl.status("save-banner", &full, HEADER, r.rect);
+                            if widgets::button(cx.ctl, ui, t, C::new("save-banner-act", label, HEADER), label, Look::Outline, 0.0) {
+                                cx.acts.push(act);
+                            }
+                        });
+                    });
+            }
+            // `banner.js`: the transcription server could not be reached; stays until a retry gets an answer
+            if let Some(err) = s.server_error.clone() {
+                let url = s.settings.get("ocrUrl").and_then(|v| v.as_str()).unwrap_or("").trim_end_matches('/').to_string();
+                let text = if err.starts_with("Cannot reach OCR server") {
+                    format!("Can\u{2019}t reach the transcription server at {url}. Start llama-server with CORS turned on, then retry.")
+                } else {
+                    err
+                };
+                egui::TopBottomPanel::top("server-banner")
+                    .show_separator_line(false)
+                    .frame(egui::Frame::none().fill(t.bad_bg).inner_margin(Margin::symmetric(if narrow { 16.0 } else { 24.0 }, 10.0)))
+                    .show(ctx, |ui| {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.spacing_mut().item_spacing = vec2(12.0, 8.0);
+                            let r = ui.label(RichText::new(&text).font(theme::sans(14.0)).color(t.bad));
+                            cx.ctl.status("server-banner", &text, HEADER, r.rect);
+                            if widgets::button(cx.ctl, ui, t, C::new("server-retry", "Retry", HEADER), "Retry", Look::Outline, 0.0) {
+                                cx.acts.push(Act::ServerRetry);
+                            }
+                        });
+                    });
             }
             match s.view {
                 View::Inbox => inbox(ctx, &mut cx, s),
@@ -785,12 +853,28 @@ fn apply(
                 send(Cmd::Guess { slug, id: id.clone(), raw: p.raw().to_string(), conn: s.read_conn(), examples: s.reference_examples() });
             }
         }
-        Act::OpenSettings => *dialog = Some(Dialog::settings()),
+        Act::OpenSettings => {
+            s.conn_test = None;
+            s.models_note.clear();
+            s.check_note.clear();
+            s.unload_note.clear();
+            s.checking = false;
+            // a local server is cheap to ask, so the picker is filled when Settings opens (js settings.js)
+            let provider = s.settings.get("provider").and_then(|v| v.as_str()).unwrap_or("local").to_string();
+            if provider == "local" && s.settings.get("demo").and_then(|v| v.as_bool()) != Some(true) {
+                let c = s.read_conn();
+                send(Cmd::FindModels { conn: c, working: None, all: false });
+            }
+            *dialog = Some(Dialog::settings());
+        }
         Act::OpenAdd(preset) => {
             s.add = state::AddState { preset, ..Default::default() };
             s.view = View::Add;
             ctl.focus_title = Some("add-title");
         }
+        Act::ServerRetry => send(Cmd::Ping { conn: s.read_conn() }),
+        Act::SaveRetry => s.mark_all_dirty(),
+        Act::Reconnect => send(Cmd::Folder("regrant".into())),
         Act::OpenCapture => {
             s.capture = state::CaptureState { auto: s.capture.auto, ..Default::default() };
             s.view = View::Capture;
@@ -839,13 +923,30 @@ fn apply(
                 r.draft = text;
             }
         }
+        Act::AddTurn(k) => {
+            if let Some(r) = s.add.rows.iter_mut().find(|r| r.key == k) {
+                r.item.turn = (r.item.turn + 90) % 360;
+                send(Cmd::RefitStaged { key: k, base: r.item.base.clone(), turn: r.item.turn, straighten: r.item.straighten });
+            }
+        }
+        Act::AddLevel(k, on) => {
+            if let Some(r) = s.add.rows.iter_mut().find(|r| r.key == k) {
+                r.item.straighten = on;
+                send(Cmd::RefitStaged { key: k, base: r.item.base.clone(), turn: r.item.turn, straighten: on });
+            }
+        }
+        Act::AddLook(k) => s.add.look = if s.add.look == Some(k) { None } else { Some(k) },
         Act::AddSubject(v) => s.set_meta("topic", serde_json::json!(v)),
         Act::AddReadNames(on) => {
             s.settings.set("readNames", serde_json::json!(on));
             s.dirty.settings = true;
         }
         Act::AddCommit => {
-            let items: Vec<_> = s.add.rows.iter().map(|r| r.item.clone()).collect();
+            let items: Vec<_> = s.add.rows.iter().map(|r| {
+                let mut it = r.item.clone();
+                it.base = vec![]; // the shrunk copy only served Turn and Straighten
+                it
+            }).collect();
             if !items.is_empty() {
                 s.add.rows.clear();
                 s.add.skipped.clear();
@@ -1002,6 +1103,36 @@ fn apply(
                         }
                         dialog::TopicResult::Nothing => {}
                     }
+                    return;
+                }
+                dialog::Out::UnloadNow => {
+                    s.unload_note = "Unloading\u{2026}".into();
+                    send(Cmd::UnloadModel { conn: s.read_conn(), idle_mins: None });
+                    return;
+                }
+                dialog::Out::CheckModels(url, key) => {
+                    s.checking = true;
+                    s.check_note = "Listing models\u{2026}".into();
+                    send(Cmd::CheckModels { conn: find_conn(s, url, key) });
+                    return;
+                }
+                dialog::Out::ShowAllModels(url, key) => {
+                    dialog::set_working(s, None);
+                    s.check_note = "Showing every model that takes images.".into();
+                    send(Cmd::FindModels { conn: find_conn(s, url, key), working: None, all: true });
+                    return;
+                }
+                dialog::Out::FindModels(url, key) => {
+                    s.models_note = "Looking\u{2026}".into();
+                    send(Cmd::FindModels { conn: find_conn(s, url, key), working: working_models(s), all: false });
+                    return;
+                }
+                dialog::Out::TestConnection(url, key) => {
+                    s.conn_test = Some((true, "Checking\u{2026}".into()));
+                    let mut conn = s.read_conn();
+                    conn.url = url;
+                    conn.api_key = key;
+                    send(Cmd::TestConnection { conn });
                     return;
                 }
                 dialog::Out::Meta(key, v, said) => {
@@ -1401,6 +1532,25 @@ fn inbox(ctx: &egui::Context, cx: &mut Cx, s: &Session) {
     });
 }
 
+/// The connection of a Find models request: the address and key as typed in Settings.
+fn find_conn(s: &Session, url: String, key: String) -> crate::host::Conn {
+    let mut c = s.read_conn();
+    c.url = url;
+    c.api_key = key;
+    c
+}
+
+/// `profiles[provider].working`: the models a check found usable (kept per provider).
+fn working_models(s: &Session) -> Option<Vec<String>> {
+    let id = s.settings.get("provider").and_then(|v| v.as_str()).unwrap_or("local");
+    s.settings
+        .get("profiles")
+        .and_then(|p| p.get(id))
+        .and_then(|p| p.get("working"))
+        .and_then(|w| w.as_array())
+        .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+}
+
 /// The shutter: the current frame as a `CaptureShot` command, counted and named. `None` before the first frame.
 pub(crate) fn capture_shot(s: &mut Session) -> Option<Cmd> {
     let (w, h, rgba) = s.capture.frame.clone()?;
@@ -1750,11 +1900,69 @@ fn add_row(ui: &mut Ui, cx: &mut Cx, r: &state::StagedRow, known: &[String]) {
             if widgets::button(cx.ctl, ui, t, C::new(&format!("staged-change-{}", r.key), &change, TEXT), "Change", Look::Outline, 0.0) {
                 cx.acts.push(Act::AddPick(r.key));
             }
+            let turn = format!("Turn {} 90 degrees", r.item.file_name);
+            if widgets::button(cx.ctl, ui, t, C::new(&format!("staged-turn-{}", r.key), &turn, TEXT), "Turn 90\u{b0}", Look::Outline, 0.0) {
+                cx.acts.push(Act::AddTurn(r.key));
+            }
+            let level = format!("Straighten {}", r.item.file_name);
+            let on = r.item.straighten;
+            if widgets::button(cx.ctl, ui, t, C::new(&format!("staged-level-{}", r.key), &level, TEXT).pressed(on), "Straighten", if on { Look::Primary } else { Look::Outline }, 0.0) {
+                cx.acts.push(Act::AddLevel(r.key, !on));
+            }
+            let looking = cx.look == Some(r.key);
+            let look = format!("{} {} and its lines", if looking { "Hide" } else { "Look at" }, r.item.file_name);
+            if widgets::button(cx.ctl, ui, t, C::new(&format!("staged-look-{}", r.key), &look, TEXT).pressed(looking), if looking { "Hide" } else { "Look" }, Look::Outline, 0.0) {
+                cx.acts.push(Act::AddLook(r.key));
+            }
             let remove = format!("Remove {}", r.item.file_name);
             if widgets::button(cx.ctl, ui, t, C::new(&format!("staged-remove-{}", r.key), &remove, TEXT), "Remove", Look::Ghost, 0.0) {
                 cx.acts.push(Act::AddRemove(r.key));
             }
         });
+        // js add.js `preview`: the photo after straightening, each line the scan found boxed and numbered, and a
+        // sentence that says what was done
+        if cx.look == Some(r.key) {
+            ui.add_space(10.0);
+            if let Some(Slot::Ready(im)) = cx.images.get(&format!("staged-{}", r.key)) {
+                let w = ui.available_width().min(520.0);
+                let h = w * im.size.1 as f32 / im.size.0.max(1) as f32;
+                let (rect, _) = ui.allocate_exact_size(vec2(w, h.min(640.0)), Sense::hover());
+                ui.painter().image(im.full.id(), rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+                let mut strengths: Vec<f32> = im.bands.iter().map(|b| b.s).collect();
+                strengths.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                let median = strengths.get(strengths.len() / 2).copied().unwrap_or(0.0);
+                let weak = |b: &crate::bands::Band| im.bands.len() >= 4 && b.s < median * 0.3;
+                for (i, b) in im.bands.iter().enumerate() {
+                    let br = Rect::from_min_size(pos2(rect.left() + b.x * rect.width(), rect.top() + b.y * rect.height()), vec2(b.w * rect.width(), b.h * rect.height()));
+                    let col = if weak(b) { t.muted } else { t.accent };
+                    ui.painter().rect_stroke(br, 2.0, Stroke::new(if weak(b) { 1.0 } else { 1.5 }, col));
+                    let g = ui.painter().layout_no_wrap((i + 1).to_string(), theme::sans_semi(11.0), col);
+                    ui.painter().galley(br.left_top() + vec2(2.0, 1.0), g, col);
+                }
+                let n = im.bands.len();
+                let faint = im.bands.iter().filter(|b| weak(b)).count();
+                let said = if r.item.angle != 0.0 {
+                    format!("Straightened by {:.1}\u{b0}. ", r.item.angle.abs())
+                } else if r.item.straighten {
+                    "The photo is already level. ".to_string()
+                } else {
+                    "Straightening is off for this photo. ".to_string()
+                };
+                let lines = if n == 0 {
+                    "No lines were found, so line boxes will be left off for this page.".to_string()
+                } else {
+                    format!(
+                        "{} found{}. Each numbered box is a line of writing.",
+                        state::plural(n, "line", "lines"),
+                        if faint > 0 { format!(" ({faint} faint, shown thin, and probably not writing)") } else { String::new() }
+                    )
+                };
+                ui.add_space(6.0);
+                let text = format!("{said}{lines}");
+                let rr = css_text(ui, &text, theme::sans(13.0), t.muted, 13.0 * 1.4, ui.available_width(), false);
+                cx.ctl.status(&format!("staged-look-note-{}", r.key), &text, TEXT, rr);
+            }
+        }
         if r.picking {
             ui.add_space(8.0);
             // a name that is not in the list yet

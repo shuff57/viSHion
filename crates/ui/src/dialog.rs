@@ -141,6 +141,14 @@ pub enum Out {
     AskClearFixes,
     /// The provider select changed (a cloud one is confirmed first).
     Provider(String),
+    /// Test connection: the engine address and key as typed.
+    TestConnection(String, String),
+    /// Find models: the engine address and key as typed.
+    FindModels(String, String),
+    /// Check which models work (the engine address and key as typed), or show every model again.
+    CheckModels(String, String),
+    UnloadNow,
+    ShowAllModels(String, String),
     /// An assignment field changed in the open dialog (it stays open): key, value, what is said.
     Meta(&'static str, serde_json::Value, String),
     /// Make this kind of export (combined | pages | csv | json | copy | all) for the scope shown.
@@ -367,15 +375,34 @@ pub fn remember(s: &mut Session) {
     let id = setting_str(s, "provider", "local");
     let id = provider(&id).0;
     let mut profiles = s.settings.get("profiles").cloned().filter(|v| v.is_object()).unwrap_or_else(|| json!({}));
-    let entry = json!({
-        "url": shown_url(id, &setting_str(s, "ocrUrl", "")),
-        "model": setting_str(s, "model", ""),
-        "key": setting_str(s, "apiKey", ""),
-    });
+    // (`M.remember` merges: the list of models a check found usable stays)
+    let mut entry = profiles.get(id).cloned().filter(|v| v.is_object()).unwrap_or_else(|| json!({}));
+    if let Some(e) = entry.as_object_mut() {
+        e.insert("url".into(), json!(shown_url(id, &setting_str(s, "ocrUrl", ""))));
+        e.insert("model".into(), json!(setting_str(s, "model", "")));
+        e.insert("key".into(), json!(setting_str(s, "apiKey", "")));
+    }
     if let Some(m) = profiles.as_object_mut() {
         m.insert(id.to_string(), entry);
     }
     s.settings.set("profiles", profiles);
+}
+
+/// `M.setWorking`: the models a check found usable for the provider in use (`None` clears the list).
+pub fn set_working(s: &mut Session, ids: Option<&[String]>) {
+    use serde_json::json;
+    remember(s);
+    let id = setting_str(s, "provider", "local");
+    let id = provider(&id).0;
+    let mut profiles = s.settings.get("profiles").cloned().filter(|v| v.is_object()).unwrap_or_else(|| json!({}));
+    if let Some(e) = profiles.get_mut(id).and_then(|e| e.as_object_mut()) {
+        match ids {
+            Some(list) => e.insert("working".into(), json!(list)),
+            None => e.remove("working"),
+        };
+    }
+    s.settings.set("profiles", profiles);
+    s.dirty.settings = true;
 }
 
 /// `M.switchTo`: remember the values in use, then take the saved ones of `id` (or its defaults).
@@ -961,6 +988,22 @@ fn settings(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, s: &Session, drafts: &mut Dr
             text_box(ctl, ui, t, "st-ocr", "Server address", if pid.0 == "custom" { "https://example.com" } else { "" }, shown, drafts, false, iw);
             ui.add_space(6.0);
             hint_p(ctl, ui, t, iw, "st-ocr-hint", "A local llama.cpp or Ollama server, or the endpoint\u{2019}s base address.");
+            ui.add_space(10.0);
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing = vec2(12.0, 8.0);
+                if widgets::button(ctl, ui, t, C::new("st-test", "Test connection", DIALOG), "Test connection", Look::Outline, 0.0) {
+                    let shown = drafts.get("st-ocr").cloned().unwrap_or_else(|| shown_url(pid.0, &setting_str(s, "ocrUrl", pid.2)));
+                    let key = drafts.get("st-key").cloned().unwrap_or_else(|| setting_str(s, "apiKey", ""));
+                    out = Some(Out::TestConnection(engine_url(s, pid.0, &shown), key.trim().to_string()));
+                }
+            });
+            // the answer wraps under the button (a long one must not widen the dialog)
+            if let Some((ok, text)) = &s.conn_test {
+                ui.add_space(6.0);
+                let col = if *ok { t.ok } else { t.bad };
+                let r = para(ui, iw, text, theme::sans_semi(14.0), col, 19.6);
+                ctl.status("st-test-result", text, DIALOG, r);
+            }
             ui.add_space(14.0);
             field_label(ctl, ui, t, iw, "st-key-label", "API key");
             text_box(ctl, ui, t, "st-key", "API key", "", setting_str(s, "apiKey", ""), drafts, true, iw);
@@ -974,8 +1017,12 @@ fn settings(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, s: &Session, drafts: &mut Dr
             ui.add_space(14.0);
             // the model: the one in use (or the server's own choice), and another name typed
             let cur_model = setting_str(s, "model", "");
-            let mut mitems = vec![(String::new(), "Whatever the server has loaded".to_string())];
-            if !cur_model.is_empty() {
+            let found = &s.found_models;
+            let mut mitems = vec![(String::new(), if found.is_empty() { "Whatever the server has loaded" } else { "Choose a model" }.to_string())];
+            for (id, label, _) in found {
+                mitems.push((id.clone(), label.clone()));
+            }
+            if !cur_model.is_empty() && !found.iter().any(|m| m.0 == cur_model) {
                 mitems.push((cur_model.clone(), cur_model.clone()));
             }
             mitems.push(("__other".to_string(), "Another model name\u{2026}".to_string()));
@@ -991,6 +1038,45 @@ fn settings(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, s: &Session, drafts: &mut Dr
                 }
             }
             ui.add_space(6.0);
+            ui.add_space(8.0);
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing = vec2(12.0, 8.0);
+                if widgets::button(ctl, ui, t, C::new("st-find-models", "Find models", DIALOG), "Find models", Look::Outline, 0.0) {
+                    let shown = drafts.get("st-ocr").cloned().unwrap_or_else(|| shown_url(pid.0, &setting_str(s, "ocrUrl", pid.2)));
+                    let key = drafts.get("st-key").cloned().unwrap_or_else(|| setting_str(s, "apiKey", ""));
+                    out = Some(Out::FindModels(engine_url(s, pid.0, &shown), key.trim().to_string()));
+                }
+            });
+            if !s.models_note.is_empty() {
+                ui.add_space(6.0);
+                let r = para(ui, iw, &s.models_note, theme::sans(13.0), t.muted, 18.2);
+                ctl.status("st-models-note", &s.models_note, DIALOG, r);
+            }
+            // Check which models work: one tiny image to each, so a model the key cannot use is left out
+            ui.add_space(8.0);
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing = vec2(12.0, 8.0);
+                let typed = |s: &Session, drafts: &Drafts| {
+                    let shown = drafts.get("st-ocr").cloned().unwrap_or_else(|| shown_url(pid.0, &setting_str(s, "ocrUrl", pid.2)));
+                    let key = drafts.get("st-key").cloned().unwrap_or_else(|| setting_str(s, "apiKey", ""));
+                    (engine_url(s, pid.0, &shown), key.trim().to_string())
+                };
+                let busy = s.checking;
+                if widgets::button(ctl, ui, t, C::new("st-check-models", "Check which models work", DIALOG).disabled(busy), "Check which models work", Look::Outline, 0.0) {
+                    let (u, k) = typed(s, drafts);
+                    out = Some(Out::CheckModels(u, k));
+                }
+                if widgets::button(ctl, ui, t, C::new("st-show-all-models", "Show every model again", DIALOG).disabled(busy), "Show every model again", Look::Ghost, 0.0) {
+                    let (u, k) = typed(s, drafts);
+                    out = Some(Out::ShowAllModels(u, k));
+                }
+            });
+            if !s.check_note.is_empty() {
+                ui.add_space(6.0);
+                let r = para(ui, iw, &s.check_note, theme::sans(13.0), t.muted, 18.2);
+                ctl.status("st-check-note", &s.check_note, DIALOG, r);
+            }
+            ui.add_space(6.0);
             hint_p(ctl, ui, t, iw, "st-model-hint", "Choose which model reads the pages. A local server swaps it in when you pick another.");
             if *custom {
                 ui.add_space(14.0);
@@ -1003,6 +1089,15 @@ fn settings(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, s: &Session, drafts: &mut Dr
                 text_box(ctl, ui, t, "st-idle", "Unload the model after it has been idle for (minutes)", "", format!("{idle}"), drafts, false, 140.0);
                 ui.add_space(6.0);
                 hint_p(ctl, ui, t, iw, "st-idle-hint", "Frees your graphics memory when you stop. 0 keeps it loaded. This only runs while this page is open.");
+                ui.add_space(8.0);
+                if widgets::button(ctl, ui, t, C::new("st-unload", "Unload now", DIALOG), "Unload now", Look::Outline, 0.0) {
+                    out = Some(Out::UnloadNow);
+                }
+                if !s.unload_note.is_empty() {
+                    ui.add_space(6.0);
+                    let r = para(ui, iw, &s.unload_note, theme::sans(13.0), t.muted, 18.2);
+                    ctl.status("st-unload-note", &s.unload_note, DIALOG, r);
+                }
             }
             ui.add_space(14.0);
             field_label(ctl, ui, t, iw, "st-timeout-label", "Give up on a page after (seconds)");
