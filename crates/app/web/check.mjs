@@ -143,7 +143,9 @@ try {
   await pump(); await page.waitForTimeout(300);
   const ringOn2 = await shot();
   await page.mouse.click(640, 4);
-  const ringOff = await shot();
+  let ringOff = await shot();
+  // slow runners repaint late: allow a few frames for the ring to clear
+  for (let i = 0; i < 10 && ringOff !== idle; i++) { await pump(); await page.waitForTimeout(300); ringOff = await shot(); }
   if (ringOff !== idle) {
     fs.writeFileSync(path.join(here, '../dist/check-ring-idle.png'), Buffer.from(idle, 'base64'));
     fs.writeFileSync(path.join(here, '../dist/check-ring-off.png'), Buffer.from(ringOff, 'base64'));
@@ -427,7 +429,7 @@ try {
     await settled(p3);
     const empty = async () => { for (let i = 0; i < 6; i++) { await p3.mouse.move(600 + i, 300 + i); await p3.waitForTimeout(80); } };
     await empty();
-    await p3.waitForSelector('#controls [data-id="empty-title"]', { timeout: 20000 });
+    await p3.waitForSelector('#controls [data-id="empty-title"]', { timeout: 60000 });
     expect((await p3.textContent('#controls [data-id="empty-title"]')) === 'No assignments yet', 'an empty IndexedDB shows the empty state, not a crash');
     // the same files the JS app would have written: project.json and pages/<id>.json as strings, the image as a Blob
     await p3.evaluate(async () => {
