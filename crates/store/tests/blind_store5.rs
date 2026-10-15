@@ -146,7 +146,11 @@ fn import_with_windows_illegal_name_is_not_left_half_written() {
     let left = dir.exists();
     let _ = std::fs::remove_dir_all(&dir);
     match r {
-        Ok((_, skipped)) => assert!(b_present && skipped.iter().any(|s| s.contains("we?ird")), "ok but b missing / not reported: {skipped:?}"),
+        // (`?` is only illegal where the folder is on Windows; elsewhere the file is simply written)
+        Ok((_, skipped)) => assert!(
+            b_present && (!cfg!(windows) || skipped.iter().any(|s| s.contains("we?ird"))),
+            "ok but b missing / not reported: {skipped:?}"
+        ),
         Err(e) => assert!(!left, "import failed with {e} but left a partial project on disk"),
     }
 }
