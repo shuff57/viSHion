@@ -973,14 +973,14 @@ fn settings(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, s: &Session, drafts: &mut Dr
                     let key = drafts.get("st-key").cloned().unwrap_or_else(|| setting_str(s, "apiKey", ""));
                     out = Some(Out::TestConnection(engine_url(s, pid.0, &shown), key.trim().to_string()));
                 }
-                if let Some((ok, text)) = &s.conn_test {
-                    let col = if *ok { t.ok } else { t.bad };
-                    let g = ui.painter().layout_no_wrap(text.clone(), theme::sans_semi(14.0), col);
-                    let (r, _) = ui.allocate_exact_size(vec2(g.size().x, TARGET), Sense::hover());
-                    ui.painter().galley(widgets::centered(r, g.size()), g, col);
-                    ctl.status("st-test-result", text, DIALOG, r);
-                }
             });
+            // the answer wraps under the button (a long one must not widen the dialog)
+            if let Some((ok, text)) = &s.conn_test {
+                ui.add_space(6.0);
+                let col = if *ok { t.ok } else { t.bad };
+                let r = para(ui, iw, text, theme::sans_semi(14.0), col, 19.6);
+                ctl.status("st-test-result", text, DIALOG, r);
+            }
             ui.add_space(14.0);
             field_label(ctl, ui, t, iw, "st-key-label", "API key");
             text_box(ctl, ui, t, "st-key", "API key", "", setting_str(s, "apiKey", ""), drafts, true, iw);
@@ -1023,13 +1023,12 @@ fn settings(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, s: &Session, drafts: &mut Dr
                     let key = drafts.get("st-key").cloned().unwrap_or_else(|| setting_str(s, "apiKey", ""));
                     out = Some(Out::FindModels(engine_url(s, pid.0, &shown), key.trim().to_string()));
                 }
-                if !s.models_note.is_empty() {
-                    let g = ui.painter().layout_no_wrap(s.models_note.clone(), theme::sans(13.0), t.muted);
-                    let (r, _) = ui.allocate_exact_size(vec2(g.size().x, TARGET), Sense::hover());
-                    ui.painter().galley(widgets::centered(r, g.size()), g, t.muted);
-                    ctl.status("st-models-note", &s.models_note, DIALOG, r);
-                }
             });
+            if !s.models_note.is_empty() {
+                ui.add_space(6.0);
+                let r = para(ui, iw, &s.models_note, theme::sans(13.0), t.muted, 18.2);
+                ctl.status("st-models-note", &s.models_note, DIALOG, r);
+            }
             ui.add_space(6.0);
             hint_p(ctl, ui, t, iw, "st-model-hint", "Choose which model reads the pages. A local server swaps it in when you pick another.");
             if *custom {
