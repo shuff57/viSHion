@@ -730,4 +730,27 @@ mod tests {
         let label = r.app.controls().into_iter().find(|c| c.id == "save-banner-act").map(|c| c.label.clone()).unwrap();
         assert_eq!(label, "Reconnect folder");
     }
+
+    /// A transcript read with the model's own suggestions uses them (not the built-in matching) as the
+    /// page's corrections.
+    #[test]
+    fn model_suggestions_become_the_pages_corrections() {
+        use vishion_ui::{Event, ReadOutcome};
+        let mut r = Rig::demo();
+        r.inbox.push(Event::Transcribed {
+            id: "p-ben-1".into(),
+            outcome: ReadOutcome::Done {
+                raw: "The standard devation of the sample".into(),
+                tokens: 6,
+                ms: 100,
+                guesses: None,
+                found: Some(vec![vishion_core::judge::Found { word: "devation".into(), term: "deviation".into(), conf: 0.8 }]),
+            },
+        });
+        r.frames(3);
+        let p = r.page("p-ben-1");
+        let c = p.get("corrections").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+        assert_eq!(c.len(), 1, "{c:?}");
+        assert_eq!(c[0]["term"], "deviation");
+    }
 }

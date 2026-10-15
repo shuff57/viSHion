@@ -1140,7 +1140,17 @@ impl Session {
     /// transcript, its line boxes when the ink scan agrees with the line count, the glossary suggestions
     /// from the offline judge, and guesses for unreadable words when the host made them. Decisions already
     /// on the page (`resolved`, `edits`) are left as they are, exactly as the JS queue leaves them.
-    pub fn page_read(&mut self, id: &str, raw: &str, tokens: u32, ms: u32, guesses: Option<serde_json::Map<String, Value>>, bands: &[Band]) {
+    #[allow(clippy::too_many_arguments)]
+    pub fn page_read(
+        &mut self,
+        id: &str,
+        raw: &str,
+        tokens: u32,
+        ms: u32,
+        guesses: Option<serde_json::Map<String, Value>>,
+        found: Option<Vec<vishion_core::judge::Found>>,
+        bands: &[Band],
+    ) {
         let topic = self.a.meta.topic().to_string();
         let terms = self.settings.terms(&topic);
         let guess_on = self.settings.get("guessIllegible").and_then(Value::as_bool) != Some(false);
@@ -1162,7 +1172,8 @@ impl Session {
         p.set("error", json!(""));
         p.set("timings", json!({"ms": ms, "tokens": tokens}));
         if !raw.is_empty() && !terms.is_empty() {
-            let found = vishion_core::judge::heuristic(&raw, &terms);
+            // (`J.run`: the model's suggestions, or the built-in matching when it gave none)
+            let found = found.unwrap_or_else(|| vishion_core::judge::heuristic(&raw, &terms));
             vishion_core::judge::apply_found(p, &found);
         }
         if guess_on && !jsx::truthy(p.get("guessed")) && has_illegible(&raw) {
@@ -1208,6 +1219,12 @@ impl Session {
             prompt: vishion_core::words::build_prompt(st, &self.a.meta),
             demo: st.get("demo").and_then(Value::as_bool) == Some(true),
             provider: text("provider"),
+            judge_terms: st.terms(self.a.meta.topic()),
+            judge_mode: match text("judgeMode").as_str() {
+                "heuristic" => "heuristic".into(),
+                "typesafe" => "typesafe".into(),
+                _ => "auto".into(),
+            },
             guess: st.get("guessIllegible").and_then(Value::as_bool) != Some(false),
             examples: self.reference_examples(),
         }

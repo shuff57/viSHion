@@ -219,6 +219,14 @@ provider is asked when Settings opens.
 whether the key was refused. "Show every model again" clears `working`. `dialog::remember` merges into the
 profile, so `working` survives a provider switch.
 
+## Model spelling check
+
+After a live read, `Backend::judge_remote` (js/judge.js `J.remote`) sends the transcript and the subject's words to
+the same model at `settings.ocrUrl` (text only, 20 s) and keeps the suggestions that are glossary terms close to
+the written word. `settings.judgeMode` is `auto` (ask the model, fall back), `heuristic` (never ask) or
+`typesafe` (any bad entry rejects the answer). The result rides on `ReadOutcome::Done { found }`; `None` means the
+screen applies the built-in matching, as the JS does when the judge fails.
+
 ## Storage banners
 
 A failed write (`Event::SaveFailed`) shows a banner under the header: "Couldn\u2019t save to \u201Cfolder\u201D." with **Try

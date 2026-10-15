@@ -109,6 +109,15 @@ pub fn accept(x: &Value, list: &[String], text: &str) -> bool {
     lev(&w, &t) <= lim
 }
 
+/// The question `J.remote` puts to the model: the glossary, then the transcript.
+pub fn remote_prompt(list: &[String], text: &str) -> String {
+    format!(
+        "Check a handwriting transcript against a glossary. Return only a JSON array of {{\"word\",\"term\",\"conf\"}} for words in the transcript that are probably misspellings of a glossary term. Fix spelling only: never reword, never change grammar, numbers or meaning, and only use a term exactly as it appears in the glossary. conf is 0 to 1. Return [] when nothing needs fixing.\nGlossary: {}\nTranscript:\n{}",
+        list.join(", "),
+        text
+    )
+}
+
 /// Pure tail of `J.remote`: the model's reply to the accepted suggestions.
 /// Errors carry the JS error message; `strict` is typesafe mode.
 pub fn parse_remote(reply: &str, list: &[String], text: &str, strict: bool) -> Result<Vec<Found>, String> {

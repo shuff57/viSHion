@@ -16,6 +16,10 @@ pub struct Conn {
     pub demo: bool,
     /// `settings.provider`: which provider answers (`net::Provider::for_setting`).
     pub provider: String,
+    /// The course words of the open assignment's subject and `settings.judgeMode` (`auto`, `heuristic` or
+    /// `typesafe`): what the model spelling check needs after a page is read.
+    pub judge_terms: Vec<String>,
+    pub judge_mode: String,
     /// `settings.guessIllegible` (default on): ask the model for likely words after a page is read.
     pub guess: bool,
     /// The teacher's earlier resolutions for the guess prompt (`W.referenceExamples`).
@@ -217,7 +221,14 @@ pub enum Event {
 #[derive(Debug)]
 pub enum ReadOutcome {
     /// A transcript. `guesses` are present when the host also guessed the unreadable words (demo mode).
-    Done { raw: String, tokens: u32, ms: u32, guesses: Option<serde_json::Map<String, serde_json::Value>> },
+    Done {
+        raw: String,
+        tokens: u32,
+        ms: u32,
+        guesses: Option<serde_json::Map<String, serde_json::Value>>,
+        /// Glossary suggestions the model gave (`J.remote`); `None` leaves the built-in matching to the screen.
+        found: Option<Vec<vishion_core::judge::Found>>,
+    },
     /// The server could not be reached: the page keeps what it had (`queue.js` "unreachable").
     Unreachable(String),
     /// Stop was pressed: the page goes back to pending (`queue.js` abort).

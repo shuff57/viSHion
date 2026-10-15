@@ -566,6 +566,28 @@ impl Backend {
         }
     }
 
+    /// `J.remote`: ask the one model to check the transcript against the glossary. `None` when the mode is
+    /// built-in matching, there are no words, or the answer failed (the caller falls back).
+    pub async fn judge_remote(&self, conn: &Conn, raw: &str) -> Option<Vec<vishion_core::judge::Found>> {
+        if conn.judge_mode == "heuristic" || conn.judge_terms.is_empty() || raw.trim().is_empty() {
+            return None;
+        }
+        let body = serde_json::json!({
+            "model": if conn.model.is_empty() { "judge" } else { conn.model.as_str() },
+            "temperature": 0, "max_tokens": 800, "stream": false,
+            "messages": [{"role": "user", "content": [{"type": "text", "text": vishion_core::judge::remote_prompt(&conn.judge_terms, raw)}]}]
+        })
+        .to_string();
+        let url = format!("{}/v1/chat/completions", conn.url.trim_end_matches('/'));
+        let provider = vishion_net::Provider::for_setting(&conn.provider);
+        let r = provider.post_json(&url, &conn.api_key, &body, 20).await.ok()?;
+        if r.status != 200 {
+            return None;
+        }
+        let text = serde_json::from_str::<Value>(&r.body).ok()?["choices"][0]["message"]["content"].as_str()?.to_string();
+        vishion_core::judge::parse_remote(&text, &conn.judge_terms, raw, conn.judge_mode == "typesafe").ok()
+    }
+
     /// Settings, Check which models work (`M.probe` and the button of js/ui/settings.js): list every model that
     /// takes images, send each a tiny picture, keep those that answer. `emit` hears the progress.
     pub async fn check_models(&self, conn: &Conn, emit: &dyn Fn(Event)) {
@@ -660,7 +682,7 @@ impl Backend {
         let r = vishion_core::demo::read(index);
         let (_, n) = vishion_core::guess::numbered(&r.text);
         let guesses = Some(vishion_core::demo::guesses(n));
-        ReadOutcome::Done { raw: r.text, tokens: r.tokens, ms: r.ms, guesses }
+        ReadOutcome::Done { raw: r.text, tokens: r.tokens, ms: r.ms, guesses, found: None }
     }
 
     /// `Q.runOne` against the server.
@@ -695,7 +717,10 @@ impl Backend {
                 } else {
                     None
                 };
-                ReadOutcome::Done { raw, tokens: d.tokens, ms: d.ms, guesses }
+                // `J.run`: the model checks the transcript against the glossary; any failure leaves the built-in
+                // matching to the screen (a failing judge never blocks a transcript)
+                let found = self.judge_remote(conn, &raw).await;
+                ReadOutcome::Done { raw, tokens: d.tokens, ms: d.ms, guesses, found }
             }
             Err(Error::Aborted) => ReadOutcome::Stopped,
             Err(Error::TimedOut) => ReadOutcome::Failed(format!(

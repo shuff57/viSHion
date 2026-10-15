@@ -687,6 +687,49 @@ mod tests {
         assert!(ping("http://127.0.0.1:1", "openrouter").0, "a hosted endpoint has no /health");
     }
 
+    /// The model spelling check (`J.remote`): its suggestions are filtered like the JS (only glossary terms,
+    /// close to the written word), a strict mode rejects the whole answer on one bad entry, the built-in mode
+    /// does not ask, and a failing server gives nothing (the screen then uses the built-in matching).
+    #[test]
+    fn judge_remote_filters_and_falls_back() {
+        use std::io::{Read, Write};
+        fn serve(status: &'static str, content: &'static str) -> String {
+            let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let url = format!("http://{}", l.local_addr().unwrap());
+            std::thread::spawn(move || {
+                for conn in l.incoming() {
+                    let Ok(mut s) = conn else { return };
+                    let mut b = [0u8; 8192];
+                    let _ = s.read(&mut b);
+                    let body = serde_json::json!({"choices": [{"message": {"content": content}}]}).to_string();
+                    let _ = s.write_all(format!("HTTP/1.1 {status}\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{body}", body.len()).as_bytes());
+                }
+            });
+            url
+        }
+        let be = Backend::new(AnyStore::Mem(vishion_store::mem::MemStore::default()), "Saved");
+        let conn = |url: String, mode: &str| vishion_ui::Conn {
+            url,
+            judge_terms: vec!["confidence".into(), "interval".into()],
+            judge_mode: mode.into(),
+            ..Default::default()
+        };
+        let reply = r#"Here: [{"word":"confidance","term":"confidence","conf":0.9},{"word":"the","term":"zebra","conf":1}]"#;
+        let raw = "the confidance interval";
+        let got = block_on(be.judge_remote(&conn(serve("200 OK", reply), "auto"), raw)).unwrap();
+        assert_eq!(got.len(), 1);
+        assert_eq!((got[0].word.as_str(), got[0].term.as_str()), ("confidance", "confidence"));
+        // typesafe: one rejected entry rejects the whole answer
+        assert!(block_on(be.judge_remote(&conn(serve("200 OK", reply), "typesafe"), raw)).is_none());
+        // the built-in mode never asks, and nothing is asked without words
+        assert!(block_on(be.judge_remote(&conn("http://127.0.0.1:1".into(), "heuristic"), raw)).is_none());
+        let mut none = conn("http://127.0.0.1:1".into(), "auto");
+        none.judge_terms.clear();
+        assert!(block_on(be.judge_remote(&none, raw)).is_none());
+        // a refusing server gives nothing
+        assert!(block_on(be.judge_remote(&conn(serve("500 Internal Server Error", reply), "auto"), raw)).is_none());
+    }
+
     /// The native path: a real folder, written and read back through `FsStore` and the project layer.
     #[test]
     fn folder_store_round_trip_keeps_edits() {

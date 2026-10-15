@@ -1344,14 +1344,14 @@ impl App {
                             self.ctl.toast_serial += 1;
                             self.status_err = false;
                         }
-                        Done { raw, tokens, ms, guesses } => {
+                        Done { raw, tokens, ms, guesses, found } => {
                             let bands: Vec<bands::Band> = match self.images.get(&id) {
                                 Some(Slot::Ready(im)) => im.bands.clone(),
                                 _ => vec![],
                             };
                             if let Some(s) = &mut self.session {
                                 s.server_error = None;
-                                s.page_read(&id, &raw, tokens, ms, guesses, &bands);
+                                s.page_read(&id, &raw, tokens, ms, guesses, found, &bands);
                             }
                         }
                         Unreachable(m) => {
