@@ -141,6 +141,8 @@ pub enum Out {
     AskClearFixes,
     /// The provider select changed (a cloud one is confirmed first).
     Provider(String),
+    /// Test connection: the engine address and key as typed.
+    TestConnection(String, String),
     /// An assignment field changed in the open dialog (it stays open): key, value, what is said.
     Meta(&'static str, serde_json::Value, String),
     /// Make this kind of export (combined | pages | csv | json | copy | all) for the scope shown.
@@ -961,6 +963,22 @@ fn settings(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, s: &Session, drafts: &mut Dr
             text_box(ctl, ui, t, "st-ocr", "Server address", if pid.0 == "custom" { "https://example.com" } else { "" }, shown, drafts, false, iw);
             ui.add_space(6.0);
             hint_p(ctl, ui, t, iw, "st-ocr-hint", "A local llama.cpp or Ollama server, or the endpoint\u{2019}s base address.");
+            ui.add_space(10.0);
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing = vec2(12.0, 8.0);
+                if widgets::button(ctl, ui, t, C::new("st-test", "Test connection", DIALOG), "Test connection", Look::Outline, 0.0) {
+                    let shown = drafts.get("st-ocr").cloned().unwrap_or_else(|| shown_url(pid.0, &setting_str(s, "ocrUrl", pid.2)));
+                    let key = drafts.get("st-key").cloned().unwrap_or_else(|| setting_str(s, "apiKey", ""));
+                    out = Some(Out::TestConnection(engine_url(s, pid.0, &shown), key.trim().to_string()));
+                }
+                if let Some((ok, text)) = &s.conn_test {
+                    let col = if *ok { t.ok } else { t.bad };
+                    let g = ui.painter().layout_no_wrap(text.clone(), theme::sans_semi(14.0), col);
+                    let (r, _) = ui.allocate_exact_size(vec2(g.size().x, TARGET), Sense::hover());
+                    ui.painter().galley(widgets::centered(r, g.size()), g, col);
+                    ctl.status("st-test-result", text, DIALOG, r);
+                }
+            });
             ui.add_space(14.0);
             field_label(ctl, ui, t, iw, "st-key-label", "API key");
             text_box(ctl, ui, t, "st-key", "API key", "", setting_str(s, "apiKey", ""), drafts, true, iw);

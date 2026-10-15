@@ -785,7 +785,10 @@ fn apply(
                 send(Cmd::Guess { slug, id: id.clone(), raw: p.raw().to_string(), conn: s.read_conn(), examples: s.reference_examples() });
             }
         }
-        Act::OpenSettings => *dialog = Some(Dialog::settings()),
+        Act::OpenSettings => {
+            s.conn_test = None;
+            *dialog = Some(Dialog::settings());
+        }
         Act::OpenAdd(preset) => {
             s.add = state::AddState { preset, ..Default::default() };
             s.view = View::Add;
@@ -1002,6 +1005,14 @@ fn apply(
                         }
                         dialog::TopicResult::Nothing => {}
                     }
+                    return;
+                }
+                dialog::Out::TestConnection(url, key) => {
+                    s.conn_test = Some((true, "Checking\u{2026}".into()));
+                    let mut conn = s.read_conn();
+                    conn.url = url;
+                    conn.api_key = key;
+                    send(Cmd::TestConnection { conn });
                     return;
                 }
                 dialog::Out::Meta(key, v, said) => {

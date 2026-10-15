@@ -526,6 +526,32 @@ impl Backend {
         }
     }
 
+    /// Settings, Test connection (js/ui/settings.js `test`): the model list says "Connected. N models
+    /// available"; a server with no list but a `/health` is still "Connected".
+    pub async fn test_connection(&self, conn: &Conn) -> Event {
+        let say = |ok: bool, text: String| Event::ConnectionTested { ok, text };
+        if self.demo || conn.demo || self.demo_mode().await {
+            return say(true, "Demo mode is on, so no server is needed.".into());
+        }
+        let base = conn.url.trim_end_matches('/').to_string();
+        if base.is_empty() {
+            return say(false, "Enter the server address first.".into());
+        }
+        let provider = vishion_net::Provider::for_setting(&conn.provider);
+        match provider.get(&format!("{base}/v1/models"), &conn.api_key, 15).await {
+            Ok(r) if r.status == 200 => {
+                let n = vishion_net::models::parse_rows(&r.body).len();
+                say(true, format!("Connected. {} available.", vishion_ui::state::plural(n, "model", "models")))
+            }
+            Ok(r) if r.status == 401 || r.status == 403 => say(false, "The server did not accept the API key.".into()),
+            _ => match provider.get(&format!("{base}/health"), &conn.api_key, 15).await {
+                Ok(h) if h.status == 200 => say(true, "Connected.".into()),
+                Ok(h) => say(false, format!("The server answered with {}. The model may still be loading.", h.status)),
+                Err(_) => say(false, format!("Can\u{2019}t reach {base}. Is it running, and does it allow this page (CORS)?")),
+            },
+        }
+    }
+
     /// Demo mode of js/ocr.js: the sample assignment, or the `demo` setting.
     async fn demo_mode(&self) -> bool {
         if self.demo {
@@ -752,6 +778,7 @@ impl Backend {
             // the folder card is a browser thing: the web executor answers it, a native host has no such card
             Cmd::Folder(_) => Event::Many(vec![]),
             Cmd::ImportLegacy => self.import_legacy(now).await,
+            Cmd::TestConnection { conn } => self.test_connection(&conn).await,
             Cmd::ListProjects => Event::Many(vec![Event::LegacyAvailable(self.legacy_available()), self.list_event(now).await]),
             Cmd::OpenProject { slug } => self.open(Some(&slug), now).await,
             Cmd::CreateProject { name } => match self.projects.create_project(&name, now).await {

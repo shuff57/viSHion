@@ -58,6 +58,8 @@ pub struct Card {
 pub enum Cmd {
     /// The home screen's list: `Event::Projects`.
     ListProjects,
+    /// Settings, Test connection: ask the server (the address and key as typed) what it serves.
+    TestConnection { conn: Conn },
     /// Web: `choose` a folder to save in, `browser` storage instead, or `reconnect` the remembered folder.
     Folder(String),
     /// Ask for pictures and get each one ready for staging (`Event::Staged` one by one, `Event::Skipped` for
@@ -146,6 +148,8 @@ pub enum Event {
     },
     /// Whether Home offers "Import old sessions".
     LegacyAvailable(bool),
+    /// The answer to `TestConnection`: a line for the Settings dialog, and whether it is good news.
+    ConnectionTested { ok: bool, text: String },
     /// Where assignments are saved (web): `mode` is `none` | `folder` | `idb`, `permission` `granted` | `prompt`.
     Folder(FolderInfo),
     /// A frame of the camera (RGBA).

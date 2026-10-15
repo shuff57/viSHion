@@ -1118,6 +1118,11 @@ impl App {
                 }
                 Event::Folder(f) => self.home.folder = Some(f),
                 Event::LegacyAvailable(on) => self.home.legacy = on,
+                Event::ConnectionTested { ok, text } => {
+                    if let Some(s) = &mut self.session {
+                        s.conn_test = Some((ok, text));
+                    }
+                }
                 Event::Projects(cards) => {
                     self.home.cards = Some(cards);
                     self.home.asked = false;

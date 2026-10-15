@@ -86,6 +86,30 @@ fn poll(url: String, stop: Arc<AtomicBool>, tx: mpsc::Sender<Msg>) {
     }
 }
 
+/// `GET url` with the API key as a bearer token. Any HTTP status is a `Reply`; only a connection that could not
+/// be made is an error. Blocks the calling thread for at most `timeout_secs`.
+pub async fn get(url: &str, api_key: &str, timeout_secs: u64) -> Result<crate::Reply, Error> {
+    let agent = ureq::AgentBuilder::new().timeout(Duration::from_secs(timeout_secs.max(1))).build();
+    let mut r = agent.get(url);
+    if !api_key.is_empty() {
+        r = r.set("Authorization", &format!("Bearer {api_key}"));
+    }
+    match r.call() {
+        Ok(res) => {
+            let status = res.status();
+            let mut s = String::new();
+            let _ = res.into_reader().take(1 << 20).read_to_string(&mut s);
+            Ok(crate::Reply { status, body: s })
+        }
+        Err(ureq::Error::Status(status, res)) => {
+            let mut s = String::new();
+            let _ = res.into_reader().take(1 << 16).read_to_string(&mut s);
+            Ok(crate::Reply { status, body: s })
+        }
+        Err(_) => Err(Error::Network(format!("Can\u{2019}t reach {url}."))),
+    }
+}
+
 /// One non-streamed answer (`W.guess`): the model's text. Blocks the calling thread (the host's worker),
 /// for at most `timeout_secs`.
 pub async fn complete(req: Request<'_>) -> Result<String, Error> {

@@ -218,6 +218,8 @@ pub struct Session {
     pub now: i64,
     pub view: View,
     pub add: AddState,
+    /// The result line under Settings' Test connection.
+    pub conn_test: Option<(bool, String)>,
     pub capture: CaptureState,
     /// `S.d.textView === 'raw'`: the transcript as plain monospace text.
     pub text_raw: bool,
@@ -287,6 +289,7 @@ impl Session {
             now,
             view: View::Review,
             add: AddState::default(),
+            conn_test: None,
             capture: CaptureState { auto: true, ..Default::default() },
             text_raw: false,
             zoom: 1.0,

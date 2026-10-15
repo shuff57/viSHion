@@ -631,4 +631,19 @@ mod tests {
         r.frames(80);
         assert!(!bar(&r), "the wordmark is at rest after the scan");
     }
+
+    /// Settings shows a Test connection button and the answer under it (demo mode needs no server).
+    #[test]
+    fn settings_test_connection_button_shows_its_answer() {
+        let mut r = Rig::demo();
+        r.act("crumb");
+        r.act("settings");
+        assert!(r.has("st-test"));
+        r.act("st-test");
+        let said: Vec<String> = r.app.nodes().iter().filter_map(|n| match n {
+            vishion_ui::Node::Status { text, .. } => Some(text.clone()),
+            _ => None,
+        }).collect();
+        assert!(said.iter().any(|t| t.starts_with("Demo mode is on")), "{said:?}");
+    }
 }

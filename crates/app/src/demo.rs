@@ -499,6 +499,44 @@ mod tests {
         assert!(g.is_empty());
     }
 
+    /// Settings, Test connection: a server that lists models, one that refuses the key, one that is not there.
+    #[test]
+    fn test_connection_reports_models_a_refused_key_and_a_dead_port() {
+        use std::io::{Read, Write};
+        fn serve(reply: &'static str) -> String {
+            let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let url = format!("http://{}", l.local_addr().unwrap());
+            std::thread::spawn(move || {
+                for conn in l.incoming() {
+                    let Ok(mut s) = conn else { return };
+                    let mut b = [0u8; 8192];
+                    let _ = s.read(&mut b);
+                    let _ = s.write_all(reply.as_bytes());
+                }
+            });
+            url
+        }
+        let ask = |conn: vishion_ui::Conn| -> (bool, String) {
+            let be = Backend::new(AnyStore::Mem(vishion_store::mem::MemStore::default()), "Saved");
+            match block_on(be.test_connection(&conn)) {
+                Event::ConnectionTested { ok, text } => (ok, text),
+                e => panic!("{e:?}"),
+            }
+        };
+        let two = r#"{"data":[{"id":"a"},{"id":"b"}]}"#;
+        let url = serve(Box::leak(format!("HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{two}", two.len()).into_boxed_str()));
+        assert_eq!(ask(vishion_ui::Conn { url, ..Default::default() }), (true, "Connected. 2 models available.".to_string()));
+        let url = serve("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
+        assert_eq!(ask(vishion_ui::Conn { url, ..Default::default() }), (false, "The server did not accept the API key.".to_string()));
+        let (ok, text) = ask(vishion_ui::Conn { url: "http://127.0.0.1:1".into(), ..Default::default() });
+        assert!(!ok && text.starts_with("Can\u{2019}t reach http://127.0.0.1:1"), "{text}");
+        assert_eq!(ask(vishion_ui::Conn { url: String::new(), ..Default::default() }), (false, "Enter the server address first.".to_string()));
+        // the mock provider needs no server
+        let m = ask(vishion_ui::Conn { url: "http://unused".into(), provider: "mock".into(), ..Default::default() });
+        assert_eq!(m, (true, "Connected. 1 model available.".to_string()));
+        assert!(ask(vishion_ui::Conn { demo: true, ..Default::default() }).1.starts_with("Demo mode is on"));
+    }
+
     /// The native path: a real folder, written and read back through `FsStore` and the project layer.
     #[test]
     fn folder_store_round_trip_keeps_edits() {

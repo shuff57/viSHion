@@ -92,7 +92,7 @@ against a real model server.
 
 | # | Slice | JS source (oracle) | Done when |
 |---|---|---|---|
-| 11.1 | Settings: **Test connection** | `js/ui/settings.js` `test`, `js/ocr.js` `ping`, `models.js` `list` | A button under the server address says "Connected. N models available" or why not; demo mode says no server is needed. |
+| 11.1 | Settings: **Test connection** | `js/ui/settings.js` `test`, `js/ocr.js` `ping`, `models.js` `list` | A button under the server address says "Connected. N models available" or why not; demo mode says no server is needed. **Done**: `net::get`/`Reply`, `Provider::get`, `net::models::parse_rows`, `Cmd::TestConnection`, a button and result line in Settings. Tested against mock servers (models, 401, dead port) and the mock provider; not run against a live llama-server or Ollama. |
 | 11.2 | Settings: **Find models** and the vision flag | `models.js` `list`, `pretty`, `shownUrl`; `settings.js` `findModels` | Lists `/v1/models` (and Ollama `/api/tags` capabilities), fills the picker, "N found, M that can see images", picks the only one. |
 | 11.3 | Settings: **Check which models work** and Show every model again | `models.js` `probe`, `setWorking`; `settings.js` `checkBtn`, `showAll` | Tiny test image per vision model with progress; only those that answer stay listed; stored in `profiles`. |
 | 11.4 | **Server-down banner** with a health ping and Retry | `js/ui/banner.js`, `U.resumeAll`, `ocr.js` `ping` | An unreachable run shows a banner under the header with the address; Retry pings, then resumes every page without a transcript. |

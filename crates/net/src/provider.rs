@@ -72,6 +72,18 @@ impl Provider {
         }
     }
 
+    /// A plain `GET` (the model list, the health check).
+    pub async fn get(&self, url: &str, api_key: &str, timeout_secs: u64) -> Result<crate::Reply, Error> {
+        match self {
+            Provider::OpenAiCompatible => crate::get(url, api_key, timeout_secs).await,
+            Provider::Mock(m) => match &m.fail {
+                Some(msg) => Err(Error::Network(msg.clone())),
+                None if url.ends_with("/health") => Ok(crate::Reply { status: 200, body: "ok".into() }),
+                None => Ok(crate::Reply { status: 200, body: "{\"data\":[{\"id\":\"mock-vision\"}]}".into() }),
+            },
+        }
+    }
+
     /// One answer that is not streamed (name reading, guesses).
     pub async fn complete(&self, req: Request<'_>, temperature: f64, max_tokens: u32) -> Result<String, Error> {
         match self {

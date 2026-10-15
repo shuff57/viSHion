@@ -195,6 +195,13 @@ closing it returns focus to what opened it. The line being read is `data-reading
 Cloud, OpenRouter, custom) is `OpenAiCompatible`; `mock` answers from memory (tests, trying the seam). The
 backend reads, reads names and guesses only through it, so another API is one more variant.
 
+## Settings: connection
+
+"Test connection" (`Cmd::TestConnection`, `Backend::test_connection`) asks `GET <address>/v1/models` with the key as
+typed and says "Connected. N models available", that the key was refused (401/403), or, when there is no
+list, falls back to `/health` ("Connected.") and then "Can’t reach ...". Demo mode says no server is
+needed. `net::models::parse_rows` reads the listing (OpenAI shape, OpenRouter modalities, llama.cpp router).
+
 ## Demo mode and reading pages
 
 `--demo`, `?demo=1` and the `demo` setting answer Retry, Transcribe, Transcribe again and the inbox's Resume
