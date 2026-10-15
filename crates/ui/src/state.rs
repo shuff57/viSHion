@@ -196,6 +196,8 @@ pub struct AddState {
     /// A student chosen beforehand ("Add pages for Maya").
     pub preset: Option<String>,
     pub seq: u64,
+    /// The row whose picture is shown large, with the lines the scan found.
+    pub look: Option<u64>,
     /// The pages just committed are to be read when the host answers.
     pub starting: bool,
 }

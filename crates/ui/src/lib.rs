@@ -1330,6 +1330,16 @@ impl App {
                         s.capture.error = Some(m);
                     }
                 }
+                Event::Refit { key, bytes, angle } => {
+                    let slot = decode_image(&self.ctx, &format!("staged-{key}"), &bytes).map_or(Slot::Missing, Slot::Ready);
+                    self.images.insert(format!("staged-{key}"), slot);
+                    if let Some(s) = &mut self.session {
+                        if let Some(r) = s.add.rows.iter_mut().find(|r| r.key == key) {
+                            r.item.bytes = bytes;
+                            r.item.angle = angle;
+                        }
+                    }
+                }
                 Event::Skipped(list) => {
                     if let Some(s) = &mut self.session {
                         s.add.skipped.extend(list);

@@ -46,6 +46,24 @@ pub fn uid(now: i64, salt: u64) -> String {
     format!("{}{:0>5}", b36(now as u64), tail)
 }
 
+/// `fit` of add.js: the shrunk picture turned `turn` degrees and, when asked, levelled. Returns the picture and the
+/// tilt that was removed (0 when it was level or nothing could be done).
+pub fn fit_picture(base: &[u8], turn: u32, straighten: bool) -> (Vec<u8>, f64) {
+    let mut b = base.to_vec();
+    for _ in 0..((turn / 90) % 4) {
+        match pictures::rotate90(&b) {
+            Ok(r) => b = r,
+            Err(_) => break,
+        }
+    }
+    if straighten {
+        if let Ok((Some(level), angle)) = pictures::deskew(&b) {
+            return (level, angle);
+        }
+    }
+    (b, 0.0)
+}
+
 /// The extension of a picked file, lower case (`img` when it has none), as `upload.js` names an original.
 fn file_ext(name: &str) -> String {
     match name.rsplit_once('.') {
@@ -402,13 +420,16 @@ impl Backend {
                 skipped.push((f.name, why.to_string()));
                 continue;
             }
-            let jpg = match self.prepare_picture(&f.bytes).await {
+            // shrunk only; Turn and Straighten start from this (`s.orig` of add.js), levelled by the setting
+            let base = match pictures::prepare(&f.bytes) {
                 Ok(j) => j,
                 Err(_) => {
                     skipped.push((f.name, "Could not read this image.".into()));
                     continue;
                 }
             };
+            let straighten = self.straighten_on().await;
+            let (jpg, angle) = fit_picture(&base, 0, straighten);
             let (name, source) = if let Some(p) = preset {
                 (Some(p.to_string()), "chosen")
             } else if !read_names {
@@ -427,7 +448,10 @@ impl Backend {
                 }
             };
             let original = keep.then(|| (file_ext(&f.name), f.bytes.clone()));
-            emit(Event::Staged { item: vishion_ui::StagedItem { file_name: f.name, bytes: jpg, name, source: source.into(), original }, names_down: down });
+            emit(Event::Staged {
+                item: vishion_ui::StagedItem { file_name: f.name, bytes: jpg, name, source: source.into(), original, base, turn: 0, straighten, angle },
+                names_down: down,
+            });
         }
         // always sent: it ends the staging (the screen stops saying it is working)
         emit(Event::Skipped(skipped));
@@ -864,6 +888,10 @@ impl Backend {
                 let files = files.into_iter().map(|(name, bytes)| Picked { name, bytes }).collect();
                 self.stage_files(files, &conn, read_names, preset.as_deref(), &|e| out.borrow_mut().push(e)).await;
                 Event::Many(out.into_inner())
+            }
+            Cmd::RefitStaged { key, base, turn, straighten } => {
+                let (bytes, angle) = fit_picture(&base, turn, straighten);
+                Event::Refit { key, bytes, angle }
             }
             Cmd::CommitStaged { slug, items } => self.commit_staged(&slug, items, now).await,
             Cmd::ImportZip => {

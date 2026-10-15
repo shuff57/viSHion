@@ -753,4 +753,40 @@ mod tests {
         assert_eq!(c.len(), 1, "{c:?}");
         assert_eq!(c[0]["term"], "deviation");
     }
+
+    /// Add screen: a staged photo can be turned and un-levelled, and shown large with what the scan found.
+    #[test]
+    fn staged_photo_turns_levels_and_shows_its_lines() {
+        use crate::backend::Picked;
+        let mut r = Rig::demo();
+        r.act("crumb");
+        r.act("add-pages");
+        let conn = vishion_ui::Conn { demo: true, ..Default::default() };
+        let inbox = r.inbox.clone();
+        block_on(r.be.stage_files(vec![Picked { name: "p.png".into(), bytes: png(200, 300) }], &conn, false, Some("Maya R."), &|e| inbox.push(e)));
+        r.frames(4);
+        let k = r.app.session().unwrap().add.rows[0].key;
+        let size = |r: &Rig| {
+            let b = r.app.session().unwrap().add.rows[0].item.bytes.clone();
+            let im = image::load_from_memory(&b).unwrap();
+            (im.width(), im.height())
+        };
+        assert_eq!(size(&r), (200, 300));
+        assert!(r.app.session().unwrap().add.rows[0].item.straighten, "the setting's default");
+        r.act(&format!("staged-turn-{k}"));
+        assert_eq!(size(&r), (300, 200), "a quarter turn swaps the sides");
+        assert_eq!(r.app.session().unwrap().add.rows[0].item.turn, 90);
+        r.act(&format!("staged-level-{k}"));
+        assert!(!r.app.session().unwrap().add.rows[0].item.straighten);
+        r.act(&format!("staged-look-{k}"));
+        assert_eq!(r.app.session().unwrap().add.look, Some(k));
+        let said: Vec<String> = r.app.nodes().iter().filter_map(|n| match n {
+            vishion_ui::Node::Status { text, .. } => Some(text.clone()),
+            _ => None,
+        }).collect();
+        assert!(said.iter().any(|t| t.starts_with("Straightening is off for this photo.")), "{said:?}");
+        // committing keeps the turned picture, not the shrunk copy it started from
+        r.act("add-commit");
+        assert_eq!(r.app.session().unwrap().view, vishion_ui::state::View::Inbox);
+    }
 }

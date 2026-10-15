@@ -112,6 +112,9 @@ pub(crate) enum Act {
     AddDropped(Vec<(String, Vec<u8>)>),
     AddRemove(u64),
     AddPick(u64),
+    AddTurn(u64),
+    AddLevel(u64, bool),
+    AddLook(u64),
     AddName(u64, String),
     AddDraft(u64, String),
     AddCommit,
@@ -142,6 +145,7 @@ struct Cx<'a> {
     storage: &'a str,
     notice: &'a Option<String>,
     narrow: bool,
+    look: Option<u64>,
     /// A window too short for a header that stays put: the header is the top of the page and scrolls with it.
     inline_header: bool,
     screen_h: f32,
@@ -273,6 +277,7 @@ pub(crate) fn show(app: &mut App, ctx: &egui::Context, t: &Tokens) {
                 storage: &*storage,
                 notice: &*notice,
                 narrow,
+                look: s.add.look,
                 inline_header: short,
                 screen_h: screen.height(),
                 stage: &mut *stage,
@@ -918,13 +923,30 @@ fn apply(
                 r.draft = text;
             }
         }
+        Act::AddTurn(k) => {
+            if let Some(r) = s.add.rows.iter_mut().find(|r| r.key == k) {
+                r.item.turn = (r.item.turn + 90) % 360;
+                send(Cmd::RefitStaged { key: k, base: r.item.base.clone(), turn: r.item.turn, straighten: r.item.straighten });
+            }
+        }
+        Act::AddLevel(k, on) => {
+            if let Some(r) = s.add.rows.iter_mut().find(|r| r.key == k) {
+                r.item.straighten = on;
+                send(Cmd::RefitStaged { key: k, base: r.item.base.clone(), turn: r.item.turn, straighten: on });
+            }
+        }
+        Act::AddLook(k) => s.add.look = if s.add.look == Some(k) { None } else { Some(k) },
         Act::AddSubject(v) => s.set_meta("topic", serde_json::json!(v)),
         Act::AddReadNames(on) => {
             s.settings.set("readNames", serde_json::json!(on));
             s.dirty.settings = true;
         }
         Act::AddCommit => {
-            let items: Vec<_> = s.add.rows.iter().map(|r| r.item.clone()).collect();
+            let items: Vec<_> = s.add.rows.iter().map(|r| {
+                let mut it = r.item.clone();
+                it.base = vec![]; // the shrunk copy only served Turn and Straighten
+                it
+            }).collect();
             if !items.is_empty() {
                 s.add.rows.clear();
                 s.add.skipped.clear();
@@ -1878,11 +1900,69 @@ fn add_row(ui: &mut Ui, cx: &mut Cx, r: &state::StagedRow, known: &[String]) {
             if widgets::button(cx.ctl, ui, t, C::new(&format!("staged-change-{}", r.key), &change, TEXT), "Change", Look::Outline, 0.0) {
                 cx.acts.push(Act::AddPick(r.key));
             }
+            let turn = format!("Turn {} 90 degrees", r.item.file_name);
+            if widgets::button(cx.ctl, ui, t, C::new(&format!("staged-turn-{}", r.key), &turn, TEXT), "Turn 90\u{b0}", Look::Outline, 0.0) {
+                cx.acts.push(Act::AddTurn(r.key));
+            }
+            let level = format!("Straighten {}", r.item.file_name);
+            let on = r.item.straighten;
+            if widgets::button(cx.ctl, ui, t, C::new(&format!("staged-level-{}", r.key), &level, TEXT).pressed(on), "Straighten", if on { Look::Primary } else { Look::Outline }, 0.0) {
+                cx.acts.push(Act::AddLevel(r.key, !on));
+            }
+            let looking = cx.look == Some(r.key);
+            let look = format!("{} {} and its lines", if looking { "Hide" } else { "Look at" }, r.item.file_name);
+            if widgets::button(cx.ctl, ui, t, C::new(&format!("staged-look-{}", r.key), &look, TEXT).pressed(looking), if looking { "Hide" } else { "Look" }, Look::Outline, 0.0) {
+                cx.acts.push(Act::AddLook(r.key));
+            }
             let remove = format!("Remove {}", r.item.file_name);
             if widgets::button(cx.ctl, ui, t, C::new(&format!("staged-remove-{}", r.key), &remove, TEXT), "Remove", Look::Ghost, 0.0) {
                 cx.acts.push(Act::AddRemove(r.key));
             }
         });
+        // js add.js `preview`: the photo after straightening, each line the scan found boxed and numbered, and a
+        // sentence that says what was done
+        if cx.look == Some(r.key) {
+            ui.add_space(10.0);
+            if let Some(Slot::Ready(im)) = cx.images.get(&format!("staged-{}", r.key)) {
+                let w = ui.available_width().min(520.0);
+                let h = w * im.size.1 as f32 / im.size.0.max(1) as f32;
+                let (rect, _) = ui.allocate_exact_size(vec2(w, h.min(640.0)), Sense::hover());
+                ui.painter().image(im.full.id(), rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+                let mut strengths: Vec<f32> = im.bands.iter().map(|b| b.s).collect();
+                strengths.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                let median = strengths.get(strengths.len() / 2).copied().unwrap_or(0.0);
+                let weak = |b: &crate::bands::Band| im.bands.len() >= 4 && b.s < median * 0.3;
+                for (i, b) in im.bands.iter().enumerate() {
+                    let br = Rect::from_min_size(pos2(rect.left() + b.x * rect.width(), rect.top() + b.y * rect.height()), vec2(b.w * rect.width(), b.h * rect.height()));
+                    let col = if weak(b) { t.muted } else { t.accent };
+                    ui.painter().rect_stroke(br, 2.0, Stroke::new(if weak(b) { 1.0 } else { 1.5 }, col));
+                    let g = ui.painter().layout_no_wrap((i + 1).to_string(), theme::sans_semi(11.0), col);
+                    ui.painter().galley(br.left_top() + vec2(2.0, 1.0), g, col);
+                }
+                let n = im.bands.len();
+                let faint = im.bands.iter().filter(|b| weak(b)).count();
+                let said = if r.item.angle != 0.0 {
+                    format!("Straightened by {:.1}\u{b0}. ", r.item.angle.abs())
+                } else if r.item.straighten {
+                    "The photo is already level. ".to_string()
+                } else {
+                    "Straightening is off for this photo. ".to_string()
+                };
+                let lines = if n == 0 {
+                    "No lines were found, so line boxes will be left off for this page.".to_string()
+                } else {
+                    format!(
+                        "{} found{}. Each numbered box is a line of writing.",
+                        state::plural(n, "line", "lines"),
+                        if faint > 0 { format!(" ({faint} faint, shown thin, and probably not writing)") } else { String::new() }
+                    )
+                };
+                ui.add_space(6.0);
+                let text = format!("{said}{lines}");
+                let rr = css_text(ui, &text, theme::sans(13.0), t.muted, 13.0 * 1.4, ui.available_width(), false);
+                cx.ctl.status(&format!("staged-look-note-{}", r.key), &text, TEXT, rr);
+            }
+        }
         if r.picking {
             ui.add_space(8.0);
             // a name that is not in the list yet

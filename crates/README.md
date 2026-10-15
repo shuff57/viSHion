@@ -219,6 +219,14 @@ provider is asked when Settings opens.
 whether the key was refused. "Show every model again" clears `working`. `dialog::remember` merges into the
 profile, so `working` survives a provider switch.
 
+## Add screen: Turn, Straighten and Look
+
+A staged row keeps the shrunk picture (`StagedItem::base`); `fit_picture` (turn by quarter turns, then deskew when
+asked) makes the one shown and committed. **Turn 90\u00b0** and **Straighten** send `Cmd::RefitStaged` and the
+answer (`Event::Refit`) replaces the row's picture and texture; **Look** shows the photo large with the ink-scan
+lines (`Img::bands`) boxed and numbered, the faint ones (under 30% of the median strength, with four or more
+lines) thin, and the sentence of add.js `preview`. `base` is dropped from `CommitStaged`.
+
 ## Keeping originals
 
 `settings.keepOriginals` (default off) stores each added picture as it came, next to the resized copy, as

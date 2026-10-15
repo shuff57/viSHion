@@ -36,6 +36,13 @@ pub struct StagedItem {
     pub source: String,
     /// The file as it came (`settings.keepOriginals`), with its extension, to be stored next to the resized copy.
     pub original: Option<(String, Vec<u8>)>,
+    /// The picture after shrinking only (`s.orig` of add.js): what Turn and Straighten start from. Left out of
+    /// the commit.
+    pub base: Vec<u8>,
+    /// Quarter turns asked for, in degrees (0, 90, 180, 270), whether to level it, and the tilt that was removed.
+    pub turn: u32,
+    pub straighten: bool,
+    pub angle: f64,
 }
 
 /// The storage card of the home screen (`S.d.folder`).
@@ -90,6 +97,8 @@ pub enum Cmd {
     /// The shutter: keep this frame (RGBA, `w` x `h`) as a staged picture named `name`; answered by
     /// `Event::Staged` like a picked file.
     CaptureShot { name: String, w: u32, h: u32, rgba: Vec<u8>, conn: Conn, read_names: bool, preset: Option<String> },
+    /// Turn and Straighten on a staged picture: redo it from `base`; answered by `Event::Refit`.
+    RefitStaged { key: u64, base: Vec<u8>, turn: u32, straighten: bool },
     /// Save the staged pictures as new pages: `Event::PagesAdded`.
     CommitStaged { slug: String, items: Vec<StagedItem> },
     /// Ask for a project zip and import it as a new assignment: `Event::Opened`.
@@ -185,6 +194,8 @@ pub enum Event {
     CameraFrame { w: u32, h: u32, rgba: Vec<u8> },
     /// The camera could not be opened (the person said no, or there is none).
     CameraError(String),
+    /// The answer to `RefitStaged`: the picture to show and keep, and the tilt removed (degrees).
+    Refit { key: u64, bytes: Vec<u8>, angle: f64 },
     /// One picture is ready to stage. `names_down`: the name reader could not reach the server.
     Staged { item: StagedItem, names_down: bool },
     /// Files that cannot be added, with the reason each.
