@@ -98,6 +98,47 @@ impl Provider {
         }
     }
 
+    /// `M.unload`: free the model from memory. llama.cpp in router mode: `POST /models/unload` for each loaded
+    /// model; otherwise Ollama: `POST /api/generate { keep_alive: 0 }` for each model `/api/ps` lists. Returns the
+    /// ids that were unloaded (nothing is an empty list, not an error).
+    pub async fn unload(&self, base: &str, api_key: &str) -> Vec<String> {
+        let base = base.trim_end_matches('/');
+        let mut names = vec![];
+        if base.is_empty() {
+            return names;
+        }
+        if let Ok(r) = self.get(&format!("{base}/v1/models"), api_key, 10).await {
+            if r.status == 200 {
+                for m in crate::models::parse_rows(&r.body).into_iter().filter(|m| m.loaded) {
+                    let body = serde_json::json!({ "model": m.id }).to_string();
+                    if let Ok(u) = self.post_json(&format!("{base}/models/unload"), api_key, &body, 30).await {
+                        if (200..300).contains(&u.status) {
+                            names.push(m.id);
+                        }
+                    }
+                }
+                if !names.is_empty() {
+                    return names;
+                }
+            }
+        }
+        if let Ok(r) = self.get(&format!("{base}/api/ps"), api_key, 10).await {
+            if r.status == 200 {
+                let models = serde_json::from_str::<serde_json::Value>(&r.body).ok().and_then(|v| v.get("models").and_then(|m| m.as_array().cloned())).unwrap_or_default();
+                for m in models {
+                    let Some(id) = m.get("name").or_else(|| m.get("model")).and_then(|v| v.as_str()).map(String::from) else { continue };
+                    let body = serde_json::json!({ "model": id, "keep_alive": 0 }).to_string();
+                    if let Ok(u) = self.post_json(&format!("{base}/api/generate"), api_key, &body, 30).await {
+                        if (200..300).contains(&u.status) {
+                            names.push(id);
+                        }
+                    }
+                }
+            }
+        }
+        names
+    }
+
     /// `M.probe`: one tiny picture and a one-word question to each model, with the key. A model that answers
     /// accepts images with this key; one that is refused is left out. `progress(done, total)` after each.
     pub async fn probe(&self, base: &str, api_key: &str, ids: &[String], progress: &dyn Fn(usize, usize)) -> (Vec<String>, Vec<(String, String)>) {

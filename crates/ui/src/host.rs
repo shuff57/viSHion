@@ -65,6 +65,8 @@ pub enum Cmd {
     /// Settings, Find models: the models the server lists that can read images (`working` narrows a cloud
     /// picker to the models a check found usable; `all` ignores it).
     FindModels { conn: Conn, working: Option<Vec<String>>, all: bool },
+    /// Settings, Unload now, or the idle timer (`idle_mins`): free the local model from memory: `Event::Unloaded`.
+    UnloadModel { conn: Conn, idle_mins: Option<f64> },
     /// The banner's Retry: is the transcription server answering? `Event::Pinged`.
     Ping { conn: Conn },
     /// Settings, Check which models work: one tiny image to every model that takes images, `Event::ModelsProgress`
@@ -162,6 +164,8 @@ pub enum Event {
     LegacyAvailable(bool),
     /// The browser allowed the remembered folder again (the banner's Reconnect): save everything once more.
     Reconnected,
+    /// The answer to `UnloadModel`: readable names of what was freed (empty: nothing was loaded).
+    Unloaded { names: Vec<String>, idle_mins: Option<f64> },
     /// The answer to `Ping`.
     Pinged { ok: bool, text: String },
     /// How far Check which models work has got.

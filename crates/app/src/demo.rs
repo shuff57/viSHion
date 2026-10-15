@@ -730,6 +730,69 @@ mod tests {
         assert!(block_on(be.judge_remote(&conn(serve("500 Internal Server Error", reply), "auto"), raw)).is_none());
     }
 
+    /// Unload now: a llama.cpp router unloads what it lists as loaded; an Ollama is asked through /api/ps and
+    /// `keep_alive: 0`; a hosted provider is never asked.
+    #[test]
+    fn unload_frees_router_models_or_ollama_models_and_leaves_cloud_alone() {
+        use std::io::{Read, Write};
+        use std::sync::{Arc, Mutex};
+        fn serve(router: bool, log: Arc<Mutex<Vec<String>>>) -> String {
+            let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let url = format!("http://{}", l.local_addr().unwrap());
+            std::thread::spawn(move || {
+                for conn in l.incoming() {
+                    let Ok(mut s) = conn else { return };
+                    let log = log.clone();
+                    std::thread::spawn(move || {
+                        s.set_read_timeout(Some(std::time::Duration::from_millis(250))).unwrap();
+                        let mut req = Vec::new();
+                        let mut b = [0u8; 8192];
+                        while let Ok(n) = s.read(&mut b) {
+                            if n == 0 {
+                                break;
+                            }
+                            req.extend_from_slice(&b[..n]);
+                        }
+                        let text = String::from_utf8_lossy(&req).to_string();
+                        let line = text.lines().next().unwrap_or("").to_string();
+                        let body_part = text.split("\r\n\r\n").nth(1).unwrap_or("").to_string();
+                        log.lock().unwrap().push(format!("{line} {body_part}"));
+                        let body = if line.starts_with("GET /v1/models") {
+                            if router {
+                                r#"{"data":[{"id":"qwen-vl.gguf","status":{"value":"loaded"}},{"id":"other.gguf","status":{"value":"unloaded"}}]}"#
+                            } else {
+                                r#"{"data":[{"id":"qwen3-vl:8b"}]}"#
+                            }
+                        } else if line.starts_with("GET /api/ps") {
+                            r#"{"models":[{"name":"qwen3-vl:8b"}]}"#
+                        } else {
+                            "{}"
+                        };
+                        let _ = s.write_all(format!("HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{body}", body.len()).as_bytes());
+                    });
+                }
+            });
+            url
+        }
+        let be = Backend::new(AnyStore::Mem(vishion_store::mem::MemStore::default()), "Saved");
+        let ask = |url: String, provider: &str| match block_on(be.handle(Cmd::UnloadModel { conn: vishion_ui::Conn { url, provider: provider.into(), ..Default::default() }, idle_mins: None }, 0)) {
+            Event::Unloaded { names, .. } => names,
+            e => panic!("{e:?}"),
+        };
+        let log = Arc::new(Mutex::new(vec![]));
+        let names = ask(serve(true, log.clone()), "local");
+        assert_eq!(names, ["Qwen Vl.gguf"]); // (`M.pretty` of a file name, as in the JS)
+        assert!(log.lock().unwrap().iter().any(|l| l.starts_with("POST /models/unload") && l.contains("qwen-vl.gguf")), "{:?}", log.lock().unwrap());
+        let log = Arc::new(Mutex::new(vec![]));
+        let names = ask(serve(false, log.clone()), "local");
+        assert_eq!(names, ["Qwen 3 VL 8B"]);
+        assert!(log.lock().unwrap().iter().any(|l| l.starts_with("POST /api/generate") && l.contains("\"keep_alive\":0")), "{:?}", log.lock().unwrap());
+        // a hosted provider has nothing of yours loaded: it is not even asked
+        let log = Arc::new(Mutex::new(vec![]));
+        assert!(ask(serve(false, log.clone()), "openrouter").is_empty());
+        assert!(log.lock().unwrap().is_empty());
+    }
+
     /// The native path: a real folder, written and read back through `FsStore` and the project layer.
     #[test]
     fn folder_store_round_trip_keeps_edits() {

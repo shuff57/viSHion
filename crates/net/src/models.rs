@@ -13,6 +13,8 @@ pub struct ModelRow {
     pub vision: Option<bool>,
     /// A llama.cpp router row (it has a `status` and no `/api/show`).
     pub router: bool,
+    /// A router row that is loaded now (`status.value == "loaded"`).
+    pub loaded: bool,
 }
 
 /// `(await r.json()).data`, each row with an `id`.
@@ -35,6 +37,7 @@ pub fn parse_rows(body: &str) -> Vec<ModelRow> {
                 api_name: m.get("name").and_then(Value::as_str).unwrap_or("").to_string(),
                 vision,
                 router: m.get("status").is_some_and(|s| !s.is_null()),
+                loaded: m.get("status").and_then(|s| s.get("value")).and_then(Value::as_str) == Some("loaded"),
             })
         })
         .collect()
@@ -251,7 +254,7 @@ mod pretty_tests {
 
     #[test]
     fn the_picker_drops_hosted_local_models_and_text_only_ones_and_puts_vision_first() {
-        let row = |id: &str, vision: Option<bool>| ModelRow { id: id.into(), api_name: String::new(), vision, router: false };
+        let row = |id: &str, vision: Option<bool>| ModelRow { id: id.into(), api_name: String::new(), vision, router: false, loaded: false };
         let rows = vec![
             (row("zeta", None), None),
             (row("alpha-vl", None), Some(true)),

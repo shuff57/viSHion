@@ -877,6 +877,21 @@ impl Backend {
             // the folder card is a browser thing: the web executor answers it, a native host has no such card
             Cmd::Folder(_) => Event::Many(vec![]),
             Cmd::ImportLegacy => self.import_legacy(now).await,
+            Cmd::UnloadModel { conn, idle_mins } => {
+                // nothing of yours is loaded when the model runs elsewhere (`M.unload`)
+                let id = if conn.provider.is_empty() { "local" } else { conn.provider.as_str() };
+                let names = if id == "local" || id == "mock" {
+                    vishion_net::Provider::for_setting(id)
+                        .unload(&conn.url, &conn.api_key)
+                        .await
+                        .into_iter()
+                        .map(|m| vishion_net::models::pretty(&m, ""))
+                        .collect()
+                } else {
+                    vec![]
+                };
+                Event::Unloaded { names, idle_mins }
+            }
             Cmd::Ping { conn } => self.ping(&conn).await,
             Cmd::TestConnection { conn } => self.test_connection(&conn).await,
             Cmd::CheckModels { conn } => {

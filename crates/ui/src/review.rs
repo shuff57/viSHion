@@ -852,6 +852,7 @@ fn apply(
             s.conn_test = None;
             s.models_note.clear();
             s.check_note.clear();
+            s.unload_note.clear();
             s.checking = false;
             // a local server is cheap to ask, so the picker is filled when Settings opens (js settings.js)
             let provider = s.settings.get("provider").and_then(|v| v.as_str()).unwrap_or("local").to_string();
@@ -1080,6 +1081,11 @@ fn apply(
                         }
                         dialog::TopicResult::Nothing => {}
                     }
+                    return;
+                }
+                dialog::Out::UnloadNow => {
+                    s.unload_note = "Unloading\u{2026}".into();
+                    send(Cmd::UnloadModel { conn: s.read_conn(), idle_mins: None });
                     return;
                 }
                 dialog::Out::CheckModels(url, key) => {

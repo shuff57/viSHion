@@ -269,6 +269,23 @@ fn home_storage_card_has_the_four_states_of_the_js_app() {
     }
 }
 
+#[test]
+fn an_idle_model_is_unloaded_after_the_minutes_in_settings() {
+    let mut h = H::new("m1");
+    // a tiny interval (about 30 ms of the real clock) so the test does not wait minutes
+    h.app.session.as_mut().unwrap().settings.set("idleUnloadMin", serde_json::json!(0.0005));
+    std::thread::sleep(std::time::Duration::from_millis(60));
+    h.frames(260); // 26 s of egui time: past the 20 s check
+    let asked = h.sent.borrow().iter().filter(|c| matches!(c, Cmd::UnloadModel { idle_mins: Some(_), .. })).count();
+    assert_eq!(asked, 1, "asked once, then it sleeps until the model is used again");
+    // 0 keeps the model loaded
+    let mut h = H::new("m1");
+    h.app.session.as_mut().unwrap().settings.set("idleUnloadMin", serde_json::json!(0));
+    std::thread::sleep(std::time::Duration::from_millis(60));
+    h.frames(260);
+    assert!(!h.sent.borrow().iter().any(|c| matches!(c, Cmd::UnloadModel { .. })));
+}
+
 // ---------------------------------------------------------------------------------------------------------
 // Blind critic (phase 4 review screen): behaviour of js/ui/review.js + header.js that the screen lacks.
 // Each test names the JS behaviour it is checked against and is expected to FAIL until fixed.

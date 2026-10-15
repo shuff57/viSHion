@@ -219,6 +219,14 @@ provider is asked when Settings opens.
 whether the key was refused. "Show every model again" clears `working`. `dialog::remember` merges into the
 profile, so `working` survives a provider switch.
 
+## Unloading the model
+
+`Provider::unload` frees a local model: llama.cpp in router mode gets `POST /models/unload` for each row whose
+`status.value` is `loaded`; otherwise Ollama's `/api/ps` is read and each model gets
+`POST /api/generate { keep_alive: 0 }`. Settings' **Unload now** sends `Cmd::UnloadModel`. The idle timer
+(`App::idle_tick`) uses `core::idle::Idle`: any model-touching event marks use, a page being read counts as
+busy, and every 20 s `idleUnloadMin` minutes of quiet sends the same command (local provider, not demo).
+
 ## Model spelling check
 
 After a live read, `Backend::judge_remote` (js/judge.js `J.remote`) sends the transcript and the subject's words to

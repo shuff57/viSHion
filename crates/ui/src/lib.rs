@@ -810,6 +810,9 @@ pub struct App {
     emoji: emoji::EmojiCache,
     /// The camera's latest frame as a texture (the Capture view).
     cam_tex: Option<egui::TextureHandle>,
+    /// `M.idleCheck`: when the model was last used, and when to look again (egui seconds).
+    idle: vishion_core::idle::Idle,
+    idle_next: f64,
     emoji_requested: bool,
     /// Bumped when a picture or a font arrives: the page may have moved under the selected word.
     layout_epoch: u32,
@@ -908,6 +911,8 @@ impl App {
             stage: review::Stage::default(),
             want: vec![],
             cam_tex: None,
+            idle: vishion_core::idle::Idle::new(now_ms()),
+            idle_next: 0.0,
             emoji: {
                 let mut c = emoji::EmojiCache::default();
                 if let Some(b) = theme::bundled_emoji() {
@@ -1071,6 +1076,14 @@ impl App {
         let mut evs = vec![];
         drained.into_iter().for_each(|e| flatten(e, &mut evs));
         for e in evs {
+            if matches!(
+                e,
+                Event::Reading { .. } | Event::Transcribed { .. } | Event::Guessed { .. } | Event::Staged { .. } | Event::ModelsFound(_) | Event::ModelsChecked { .. } | Event::ConnectionTested { .. } | Event::Pinged { .. }
+            ) {
+                let n = now_ms();
+                self.idle.request_started(n);
+                self.idle.request_finished(n);
+            }
             match e {
                 Event::Opened { slug, assignment, settings, storage, unreadable, notice } => {
                     self.storage = storage;
@@ -1118,6 +1131,25 @@ impl App {
                 }
                 Event::Folder(f) => self.home.folder = Some(f),
                 Event::LegacyAvailable(on) => self.home.legacy = on,
+                Event::Unloaded { names, idle_mins } => {
+                    let said = match (names.is_empty(), idle_mins) {
+                        (false, Some(m)) => Some(format!("Unloaded {} after {} idle.", names.join(", "), state::plural(m as usize, "minute", "minutes"))),
+                        (false, None) => Some(format!("Unloaded {}.", names.join(", "))),
+                        (true, None) => Some("Nothing was loaded.".to_string()),
+                        (true, Some(_)) => None,
+                    };
+                    if let Some(s) = &mut self.session {
+                        s.unload_note = said.clone().unwrap_or_default();
+                    }
+                    // the idle unload tells the person (a toast); the button's answer is in Settings
+                    if idle_mins.is_some() {
+                        if let Some(t) = said {
+                            self.status_msg = Some(t);
+                            self.ctl.toast_serial += 1;
+                            self.status_err = false;
+                        }
+                    }
+                }
                 Event::Reconnected => {
                     if let Some(s) = &mut self.session {
                         s.mark_all_dirty();
@@ -1434,6 +1466,37 @@ impl App {
         }
     }
 
+    /// `M.idleCheck`, every 20 seconds: after `idleUnloadMin` minutes with no request to the model and no page
+    /// being read, ask the host to free it (a local server only; it works while this page is open).
+    fn idle_tick(&mut self, ctx: &egui::Context) {
+        let Some(s) = &self.session else { return };
+        let mins = vishion_core::idle::Idle::minutes(s.settings.get("idleUnloadMin").or(Some(&serde_json::json!(10))));
+        if !(mins > 0.0) {
+            return;
+        }
+        let now_t = ctx.input(|i| i.time);
+        let busy = s.a.pages.values().any(|p| p.status() == "transcribing");
+        if busy {
+            let n = now_ms();
+            self.idle.request_started(n);
+            self.idle.request_finished(n);
+        }
+        ctx.request_repaint_after(Duration::from_secs(20));
+        if now_t < self.idle_next {
+            return;
+        }
+        self.idle_next = now_t + 20.0;
+        let local = s.settings.get("provider").and_then(|v| v.as_str()).unwrap_or("local") == "local";
+        let demo = s.settings.get("demo").and_then(|v| v.as_bool()) == Some(true);
+        if !local || demo {
+            return;
+        }
+        if self.idle.check(now_ms(), mins, busy, false) {
+            let conn = s.read_conn();
+            self.send(Cmd::UnloadModel { conn, idle_mins: Some(mins) });
+        }
+    }
+
     fn flush_dirty(&mut self) {
         let Some(s) = &mut self.session else { return };
         if !s.dirty.any() {
@@ -1730,6 +1793,7 @@ impl App {
 
         self.want_images();
         self.flush_dirty();
+        self.idle_tick(ctx);
         #[cfg(target_arch = "wasm32")]
         web::set_unsaved(self.save.failed.is_some());
 

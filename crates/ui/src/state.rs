@@ -228,6 +228,8 @@ pub struct Session {
     /// "Check which models work" is running, and what it said.
     pub checking: bool,
     pub check_note: String,
+    /// What Unload now said.
+    pub unload_note: String,
     pub capture: CaptureState,
     /// `S.d.textView === 'raw'`: the transcript as plain monospace text.
     pub text_raw: bool,
@@ -303,6 +305,7 @@ impl Session {
             server_error: None,
             checking: false,
             check_note: String::new(),
+            unload_note: String::new(),
             capture: CaptureState { auto: true, ..Default::default() },
             text_raw: false,
             zoom: 1.0,
