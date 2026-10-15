@@ -34,6 +34,8 @@ pub struct StagedItem {
     /// The student's name (read from the page, or chosen) and where it came from: `read` | `chosen` | `file`.
     pub name: Option<String>,
     pub source: String,
+    /// The file as it came (`settings.keepOriginals`), with its extension, to be stored next to the resized copy.
+    pub original: Option<(String, Vec<u8>)>,
 }
 
 /// The storage card of the home screen (`S.d.folder`).

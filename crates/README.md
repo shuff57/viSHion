@@ -219,6 +219,13 @@ provider is asked when Settings opens.
 whether the key was refused. "Show every model again" clears `working`. `dialog::remember` merges into the
 profile, so `working` survives a provider switch.
 
+## Keeping originals
+
+`settings.keepOriginals` (default off) stores each added picture as it came, next to the resized copy, as
+`originals/<id>.<ext>`: pictures staged on the Add screen (`StagedItem::original`, carried only while the setting
+is on, so nothing large waits in memory otherwise) and pictures added from the strip's Add page. Replace page does
+not keep one, as in js/ui/upload.js. Deleting a page deletes its originals (`Projects::delete_page`).
+
 ## Unloading the model
 
 `Provider::unload` frees a local model: llama.cpp in router mode gets `POST /models/unload` for each row whose

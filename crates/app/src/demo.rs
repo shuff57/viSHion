@@ -793,6 +793,41 @@ mod tests {
         assert!(log.lock().unwrap().is_empty());
     }
 
+    /// Keep untouched originals: with the setting on, staged and added pictures are also stored as
+    /// `originals/<id>.<ext>`; with it off nothing extra is written.
+    #[test]
+    fn originals_are_kept_when_the_setting_is_on() {
+        fn png() -> Vec<u8> {
+            let mut o = std::io::Cursor::new(Vec::new());
+            image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(60, 80, image::Rgb([240, 240, 240])))
+                .write_to(&mut o, image::ImageFormat::Png)
+                .unwrap();
+            o.into_inner()
+        }
+        let (store, slug) = block_on(seed(1)).unwrap();
+        let be = Backend::new(store, "Saved");
+        let originals = |be: &Backend| block_on(vishion_store::Store::list(&be.projects.store, &format!("{slug}/originals/"))).unwrap();
+        let stage = |be: &Backend| -> Event {
+            let out = std::cell::RefCell::new(vec![]);
+            block_on(be.stage_files(vec![crate::backend::Picked { name: "Scan 1.PNG".into(), bytes: png() }], &vishion_ui::Conn::default(), false, Some("Maya R."), &|e| out.borrow_mut().push(e)));
+            let items: Vec<vishion_ui::StagedItem> = out.into_inner().into_iter().filter_map(|e| match e {
+                Event::Staged { item, .. } => Some(item),
+                _ => None,
+            }).collect();
+            block_on(be.commit_staged(&slug, items, 1_700_000_000_000))
+        };
+        let before = originals(&be).len();
+        assert!(matches!(stage(&be), Event::PagesAdded { .. }));
+        assert_eq!(originals(&be).len(), before, "off: nothing extra");
+        let mut st = vishion_core::model::Settings::defaults();
+        st.set("keepOriginals", serde_json::json!(true));
+        block_on(be.projects.save_settings(&st)).unwrap();
+        assert!(matches!(stage(&be), Event::PagesAdded { .. }));
+        let kept = originals(&be);
+        assert_eq!(kept.len(), before + 1, "{kept:?}");
+        assert!(kept.iter().any(|k| k.ends_with(".png")), "{kept:?}");
+    }
+
     /// The native path: a real folder, written and read back through `FsStore` and the project layer.
     #[test]
     fn folder_store_round_trip_keeps_edits() {

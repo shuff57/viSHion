@@ -46,6 +46,14 @@ pub fn uid(now: i64, salt: u64) -> String {
     format!("{}{:0>5}", b36(now as u64), tail)
 }
 
+/// The extension of a picked file, lower case (`img` when it has none), as `upload.js` names an original.
+fn file_ext(name: &str) -> String {
+    match name.rsplit_once('.') {
+        Some((stem, ext)) if !stem.is_empty() && !ext.is_empty() && ext.len() <= 8 && ext.bytes().all(|b| b.is_ascii_alphanumeric()) => ext.to_ascii_lowercase(),
+        _ => "img".to_string(),
+    }
+}
+
 /// The file dialog (native). The worker thread blocks on it, which is what it is for.
 #[cfg(not(target_arch = "wasm32"))]
 pub async fn pick_pictures(multiple: bool) -> Vec<Picked> {
@@ -294,6 +302,14 @@ impl Backend {
         }
     }
 
+    /// `settings.keepOriginals`: store each upload as it came, next to the resized copy.
+    async fn keep_originals(&self) -> bool {
+        match self.projects.load_settings().await {
+            Ok(Some(m)) => Settings::load(&Value::Object(m)).get("keepOriginals").and_then(Value::as_bool) == Some(true),
+            _ => false,
+        }
+    }
+
     /// `prepare`, then `deskew` when the setting asks for it (upload.js `doReplace`, add.js).
     async fn prepare_picture(&self, bytes: &[u8]) -> std::result::Result<Vec<u8>, String> {
         let jpg = pictures::prepare(bytes)?;
@@ -322,6 +338,7 @@ impl Backend {
     pub async fn add_with(&self, slug: &str, student: &str, files: Vec<Picked>, now: i64) -> Event {
         let mut pages: Vec<(Page, Vec<u8>)> = vec![];
         let mut skipped: Vec<String> = vec![];
+        let keep = self.keep_originals().await;
         for (n, f) in files.into_iter().enumerate() {
             match self.prepare_picture(&f.bytes).await {
                 Ok(jpg) => {
@@ -329,6 +346,9 @@ impl Backend {
                     if self.projects.save_image(slug, &id, &jpg).await.is_err() {
                         skipped.push(f.name);
                         continue;
+                    }
+                    if keep {
+                        let _ = self.projects.save_original(slug, &id, &file_ext(&f.name), &f.bytes).await;
                     }
                     let mut p = Assignment::new_page(&id, &f.name);
                     p.set("student", serde_json::json!({"name": student, "source": "chosen", "confirmed": true}));
@@ -376,6 +396,7 @@ impl Backend {
         // `page2` before `page10`
         files.sort_by(|a, b| vishion_core::jsx::nat_compare(&a.name, &b.name));
         let mut down = false;
+        let keep = self.keep_originals().await;
         for f in files {
             if let Some(why) = vishion_core::student::check_file(&f.name, f.bytes.len()) {
                 skipped.push((f.name, why.to_string()));
@@ -405,7 +426,8 @@ impl Backend {
                     }
                 }
             };
-            emit(Event::Staged { item: vishion_ui::StagedItem { file_name: f.name, bytes: jpg, name, source: source.into() }, names_down: down });
+            let original = keep.then(|| (file_ext(&f.name), f.bytes.clone()));
+            emit(Event::Staged { item: vishion_ui::StagedItem { file_name: f.name, bytes: jpg, name, source: source.into(), original }, names_down: down });
         }
         // always sent: it ends the staging (the screen stops saying it is working)
         emit(Event::Skipped(skipped));
@@ -425,6 +447,10 @@ impl Backend {
             let id = uid(now, n as u64);
             if self.projects.save_image(slug, &id, &it.bytes).await.is_err() {
                 return Event::Notice { text: format!("Could not save {}.", it.file_name), error: true };
+            }
+            if let Some((ext, bytes)) = &it.original {
+                // (a failure to keep the original never loses the page)
+                let _ = self.projects.save_original(slug, &id, ext, bytes).await;
             }
             let mut p = Assignment::new_page(&id, &it.file_name);
             let student = match &it.name {
