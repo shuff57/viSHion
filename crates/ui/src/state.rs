@@ -1280,6 +1280,14 @@ impl Session {
         t.chars().filter(|c| !('\u{E000}'..='\u{E002}').contains(c)).collect()
     }
 
+    /// Everything is written again (`fs.retry`, and after a folder is reconnected): the pages, the project and the
+    /// settings. A failed write is not remembered one by one, and writing a file twice is harmless.
+    pub fn mark_all_dirty(&mut self) {
+        self.dirty.pages.extend(self.a.pages.keys().cloned());
+        self.dirty.meta = true;
+        self.dirty.settings = true;
+    }
+
     pub fn take_dirty(&mut self) -> Dirty {
         std::mem::take(&mut self.dirty)
     }

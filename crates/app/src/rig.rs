@@ -709,4 +709,25 @@ mod tests {
         assert!(!r.has("server-retry"));
         assert_eq!(r.page("p-ben-1").status(), "done");
     }
+
+    /// A failed save shows a banner with Try again (everything is written once more and the banner goes when it
+    /// works); a lost folder permission offers Reconnect instead.
+    #[test]
+    fn save_failure_banners_offer_try_again_or_reconnect() {
+        use vishion_ui::Event;
+        let mut r = Rig::demo();
+        r.inbox.push(Event::SaveFailed("disk is full".into()));
+        r.frames(3);
+        assert!(r.has("save-banner-act"));
+        let label = r.app.controls().into_iter().find(|c| c.id == "save-banner-act").map(|c| c.label.clone()).unwrap();
+        assert_eq!(label, "Try again");
+        r.act("save-banner-act");
+        r.frames(6);
+        assert!(!r.has("save-banner-act"), "the retry saved, so the banner is gone");
+        // a permission that was taken back
+        r.inbox.push(Event::SaveFailed("storage: NotAllowedError: The request is not allowed".into()));
+        r.frames(3);
+        let label = r.app.controls().into_iter().find(|c| c.id == "save-banner-act").map(|c| c.label.clone()).unwrap();
+        assert_eq!(label, "Reconnect folder");
+    }
 }

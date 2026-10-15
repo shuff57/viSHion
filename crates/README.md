@@ -219,6 +219,14 @@ provider is asked when Settings opens.
 whether the key was refused. "Show every model again" clears `working`. `dialog::remember` merges into the
 profile, so `working` survives a provider switch.
 
+## Storage banners
+
+A failed write (`Event::SaveFailed`) shows a banner under the header: "Couldn\u2019t save to \u201Cfolder\u201D." with **Try
+again** (`Session::mark_all_dirty`, then the usual flush), or, when the message says the permission was refused,
+"Folder access was lost." with **Reconnect folder** (`Cmd::Folder("regrant")`: `requestPermission` on the stored
+handle, then `Event::Reconnected` saves everything again; no reload, so unsaved work stays). While a save has
+failed the web build asks before the tab closes (`ui::web::set_unsaved`).
+
 ## Server-down banner
 
 A read that cannot reach the server (`ReadOutcome::Unreachable`) sets `Session::server_error`: a banner under the

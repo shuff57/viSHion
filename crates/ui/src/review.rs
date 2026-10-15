@@ -102,6 +102,8 @@ pub(crate) enum Act {
     OpenExport,
     OpenAdd(Option<String>),
     ServerRetry,
+    SaveRetry,
+    Reconnect,
     AddChoose,
     OpenCapture,
     CaptureShot,
@@ -246,6 +248,7 @@ pub(crate) fn show(app: &mut App, ctx: &egui::Context, t: &Tokens) {
     }
     let narrow = screen.width() < NARROW || short;
     let show_home = home.active || matches!(boot, Boot::Empty);
+    let folder_name = home.folder.as_ref().filter(|f| f.mode == "folder").map(|f| f.name.clone());
     let mut home_acts = vec![];
     if show_home {
         if home.cards.is_none() && !home.asked {
@@ -308,6 +311,43 @@ pub(crate) fn show(app: &mut App, ctx: &egui::Context, t: &Tokens) {
                     });
                 let hr = hdr.response.rect;
                 ctx.layer_painter(egui::LayerId::new(egui::Order::Middle, egui::Id::new("hdr-line"))).hline(hr.x_range(), hr.bottom() - 0.5, Stroke::new(1.0, t.line));
+            }
+            // `banner.js`: storage problems first (the folder was lost, or a write failed), then the server
+            if let Some(why) = cx.save.failed.clone() {
+                let lost = why.to_ascii_lowercase().contains("notallowed") || why.to_ascii_lowercase().contains("permission");
+                let (title, body, label, act) = if lost {
+                    (
+                        "Folder access was lost.".to_string(),
+                        "Your work is kept in this tab and will be saved once you reconnect.".to_string(),
+                        "Reconnect folder",
+                        Act::Reconnect,
+                    )
+                } else {
+                    let named = match &folder_name {
+                        Some(n) => format!("Couldn\u{2019}t save to \u{201C}{n}\u{201D}."),
+                        None => "Couldn\u{2019}t save.".to_string(),
+                    };
+                    (
+                        named,
+                        "Your changes are kept in this tab for now. Check that the folder still exists, then try again.".to_string(),
+                        "Try again",
+                        Act::SaveRetry,
+                    )
+                };
+                let full = format!("{title} {body}");
+                egui::TopBottomPanel::top("save-banner")
+                    .show_separator_line(false)
+                    .frame(egui::Frame::none().fill(if lost { t.warn_bg } else { t.bad_bg }).inner_margin(Margin::symmetric(if narrow { 16.0 } else { 24.0 }, 10.0)))
+                    .show(ctx, |ui| {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.spacing_mut().item_spacing = vec2(12.0, 8.0);
+                            let r = ui.label(RichText::new(&full).font(theme::sans(14.0)).color(if lost { t.ink } else { t.bad }));
+                            cx.ctl.status("save-banner", &full, HEADER, r.rect);
+                            if widgets::button(cx.ctl, ui, t, C::new("save-banner-act", label, HEADER), label, Look::Outline, 0.0) {
+                                cx.acts.push(act);
+                            }
+                        });
+                    });
             }
             // `banner.js`: the transcription server could not be reached; stays until a retry gets an answer
             if let Some(err) = s.server_error.clone() {
@@ -827,6 +867,8 @@ fn apply(
             ctl.focus_title = Some("add-title");
         }
         Act::ServerRetry => send(Cmd::Ping { conn: s.read_conn() }),
+        Act::SaveRetry => s.mark_all_dirty(),
+        Act::Reconnect => send(Cmd::Folder("regrant".into())),
         Act::OpenCapture => {
             s.capture = state::CaptureState { auto: s.capture.auto, ..Default::default() };
             s.view = View::Capture;

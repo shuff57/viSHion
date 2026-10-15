@@ -1603,6 +1603,30 @@ pub fn forced_tokens(base: &crate::theme::Tokens) -> Option<crate::theme::Tokens
     Some(crate::theme::forced(base, canvas, text, gray, link))
 }
 
+thread_local! {
+    /// Work that exists only in this tab (a save failed): closing the tab asks first (`fs.js` `beforeunload`).
+    static UNSAVED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static GUARD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Keep the page from closing silently while work is only in memory. The listener is installed once.
+pub fn set_unsaved(on: bool) {
+    UNSAVED.with(|u| u.set(on));
+    if GUARD.with(|g| g.replace(true)) {
+        return;
+    }
+    let Some(w) = web_sys::window() else { return };
+    let cb = wasm_bindgen::closure::Closure::<dyn FnMut(web_sys::Event)>::new(|e: web_sys::Event| {
+        if UNSAVED.with(|u| u.get()) {
+            e.prevent_default();
+            // (`returnValue = ''` is what makes Chrome ask)
+            let _ = js_sys::Reflect::set(&e, &"returnValue".into(), &"".into());
+        }
+    });
+    let _ = w.add_event_listener_with_callback("beforeunload", cb.as_ref().unchecked_ref());
+    cb.forget();
+}
+
 /// Record the user's display preferences on the twin, where tests (and curious people) can see them.
 pub fn mark_preferences(reduced_motion: bool, high_contrast: bool) {
     if let Some(h) = host() {

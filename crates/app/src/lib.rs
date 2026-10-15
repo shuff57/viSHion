@@ -118,7 +118,7 @@ mod web {
     }
 
     /// The Home card's three actions. Each ends by reloading the page, so the app starts on the new store.
-    async fn folder_command(what: &str) -> Option<String> {
+    async fn folder_command(what: &str, inbox: &Inbox) -> Option<String> {
         use vishion_store::fsa::{pick_directory, FsaStore};
         let idb = IdbStore::open().await.ok()?;
         match what {
@@ -137,6 +137,18 @@ mod web {
                 local_settings::set_str("storage", "idb");
                 reload();
                 None
+            }
+            // the banner's Reconnect: the permission comes back on the handle the store already holds, so the
+            // page is not reloaded (what was not saved is still in this tab)
+            "regrant" => {
+                let f = FsaStore::from_ocr_fs(&idb).await.ok().flatten()?;
+                match f.request_permission().await {
+                    Ok(p) if p == "granted" => {
+                        inbox.push(Event::Reconnected);
+                        None
+                    }
+                    _ => Some("The folder was not reconnected. Choose it again, or use browser storage.".into()),
+                }
             }
             "reconnect" => {
                 let f = FsaStore::from_ocr_fs(&idb).await.ok().flatten()?;
@@ -235,7 +247,7 @@ mod web {
                                     return;
                                 }
                                 if let Cmd::Folder(what) = &cmd {
-                                    if let Some(msg) = folder_command(what).await {
+                                    if let Some(msg) = folder_command(what, &inbox).await {
                                         inbox.push(Event::Notice { text: msg, error: true });
                                     }
                                     return;

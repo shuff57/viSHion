@@ -156,6 +156,8 @@ pub enum Event {
     },
     /// Whether Home offers "Import old sessions".
     LegacyAvailable(bool),
+    /// The browser allowed the remembered folder again (the banner's Reconnect): save everything once more.
+    Reconnected,
     /// The answer to `Ping`.
     Pinged { ok: bool, text: String },
     /// How far Check which models work has got.

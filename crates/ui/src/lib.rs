@@ -1118,6 +1118,11 @@ impl App {
                 }
                 Event::Folder(f) => self.home.folder = Some(f),
                 Event::LegacyAvailable(on) => self.home.legacy = on,
+                Event::Reconnected => {
+                    if let Some(s) = &mut self.session {
+                        s.mark_all_dirty();
+                    }
+                }
                 Event::Pinged { ok, text } => {
                     let mut start = None;
                     if let Some(s) = &mut self.session {
@@ -1725,6 +1730,8 @@ impl App {
 
         self.want_images();
         self.flush_dirty();
+        #[cfg(target_arch = "wasm32")]
+        web::set_unsaved(self.save.failed.is_some());
 
         let t = ctx.input(|i| i.time);
         #[cfg(not(target_arch = "wasm32"))]
