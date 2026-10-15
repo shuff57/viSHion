@@ -4,6 +4,8 @@
 //! UI's commands against it.
 
 pub mod backend;
+#[cfg(target_arch = "wasm32")]
+mod camera;
 pub mod demo;
 pub mod pictures;
 #[cfg(all(test, not(target_arch = "wasm32")))]
@@ -62,10 +64,97 @@ mod web {
             settings.set("defaultPrompt", serde_json::Value::String(vishion_core::model::DEFAULT_PROMPT.into()));
         }
 
+        /// One key of the saved settings (the JS app keeps `storage: "idb"` here when the person chose the browser).
+        pub fn get_str(key: &str) -> Option<String> {
+            let text = storage()?.get_item(KEY).ok().flatten()?;
+            let v: serde_json::Value = serde_json::from_str(&text).ok()?;
+            v.get(key)?.as_str().map(String::from)
+        }
+
+        pub fn set_str(key: &str, value: &str) {
+            let Some(st) = storage() else { return };
+            let mut v: serde_json::Value = st
+                .get_item(KEY)
+                .ok()
+                .flatten()
+                .and_then(|t| serde_json::from_str(&t).ok())
+                .unwrap_or_else(|| serde_json::json!({}));
+            if let Some(o) = v.as_object_mut() {
+                o.insert(key.into(), serde_json::json!(value));
+            }
+            if let Ok(t) = serde_json::to_string(&v) {
+                let _ = st.set_item(KEY, &t);
+            }
+        }
+
         pub fn store(settings: &Settings) {
             if let (Some(st), Ok(text)) = (storage(), serde_json::to_string(&settings.0)) {
                 let _ = st.set_item(KEY, &text);
             }
+        }
+    }
+
+    /// What the storage card of Home says (js/fs.js `S.d.folder`): the remembered folder and whether the
+    /// browser lets us use it without asking again.
+    pub async fn folder_info() -> vishion_ui::FolderInfo {
+        use vishion_store::fsa::{supported, FsaStore};
+        let supported = supported();
+        let idb = IdbStore::open().await.ok();
+        let fsa = match &idb {
+            Some(i) => FsaStore::from_ocr_fs(i).await.ok().flatten(),
+            None => None,
+        };
+        match fsa {
+            Some(f) => {
+                let permission = f.permission().await.unwrap_or_else(|_| "prompt".into());
+                vishion_ui::FolderInfo { mode: "folder".into(), name: f.name(), permission: if permission == "granted" { "granted".into() } else { "prompt".into() }, supported }
+            }
+            None => {
+                let chose_browser = local_settings::get_str("storage").as_deref() == Some("idb");
+                let mode = if supported && !chose_browser { "none" } else { "idb" };
+                vishion_ui::FolderInfo { mode: mode.into(), name: String::new(), permission: "granted".into(), supported }
+            }
+        }
+    }
+
+    /// The Home card's three actions. Each ends by reloading the page, so the app starts on the new store.
+    async fn folder_command(what: &str) -> Option<String> {
+        use vishion_store::fsa::{pick_directory, FsaStore};
+        let idb = IdbStore::open().await.ok()?;
+        match what {
+            "choose" => match pick_directory().await {
+                Ok(Some(h)) => {
+                    idb.kv_set("root", &h).await.ok()?;
+                    local_settings::set_str("storage", "auto");
+                    reload();
+                    None
+                }
+                Ok(None) => None,
+                Err(e) => Some(format!("Could not use that folder: {e}")),
+            },
+            "browser" => {
+                idb.kv_delete("root").await.ok()?;
+                local_settings::set_str("storage", "idb");
+                reload();
+                None
+            }
+            "reconnect" => {
+                let f = FsaStore::from_ocr_fs(&idb).await.ok().flatten()?;
+                match f.request_permission().await {
+                    Ok(p) if p == "granted" => {
+                        reload();
+                        None
+                    }
+                    _ => Some("The folder was not reconnected. Choose it again, or use browser storage.".into()),
+                }
+            }
+            _ => None,
+        }
+    }
+
+    fn reload() {
+        if let Some(w) = web_sys::window() {
+            let _ = w.location().reload();
         }
     }
 
@@ -92,7 +181,11 @@ mod web {
             Backend::new_demo(store, "Demo assignment (not saved)")
         } else {
             let idb = IdbStore::open().await.map_err(|e| JsValue::from_str(&e.to_string()))?;
-            Backend::new(AnyStore::Idb(idb), "Saved in this browser")
+            // a remembered folder with permission still granted is the store; otherwise the browser's own
+            match vishion_store::fsa::FsaStore::from_ocr_fs(&idb).await {
+                Ok(Some(f)) if f.permission().await.ok().as_deref() == Some("granted") => Backend::new(AnyStore::Fsa(f), "Saved to your folder"),
+                _ => Backend::new(AnyStore::Idb(idb), "Saved in this browser"),
+            }
         });
 
         eframe::WebRunner::new()
@@ -130,11 +223,40 @@ mod web {
                                 }
                                 // js/state.js `saveSettings`: the whole settings object, API key included, is kept in this
                                 // browser as `ocr_settings_v1`; `settings.json` (secrets stripped) is the backend's part
+                                if matches!(cmd, Cmd::CameraStop) {
+                                    crate::camera::stop();
+                                    return;
+                                }
+                                if matches!(cmd, Cmd::CameraStart) {
+                                    let frames = inbox.clone();
+                                    if let Err(m) = crate::camera::start(move |e| frames.push(e)).await {
+                                        inbox.push(Event::CameraError(m));
+                                    }
+                                    return;
+                                }
+                                if let Cmd::Folder(what) = &cmd {
+                                    if let Some(msg) = folder_command(what).await {
+                                        inbox.push(Event::Notice { text: msg, error: true });
+                                    }
+                                    return;
+                                }
+                                if matches!(cmd, Cmd::ListProjects) {
+                                    inbox.push(Event::Folder(folder_info().await));
+                                }
                                 if let Cmd::SaveSettings { settings } = &cmd {
                                     local_settings::store(settings);
                                 }
                                 if let Cmd::Transcribe { slug, ids, conn } = cmd {
                                     b.read_pages(&slug, ids, conn, &|e| inbox.push(e)).await;
+                                    return;
+                                }
+                                if let Cmd::StageFiles { files, conn, read_names, preset } = cmd {
+                                    let files = files.into_iter().map(|(name, bytes)| crate::backend::Picked { name, bytes }).collect();
+                                    b.stage_files(files, &conn, read_names, preset.as_deref(), &|e| inbox.push(e)).await;
+                                    return;
+                                }
+                                if let Cmd::StagePictures { conn, read_names, preset } = cmd {
+                                    b.stage_pictures(&conn, read_names, preset.as_deref(), &|e| inbox.push(e)).await;
                                     return;
                                 }
                                 let e: Event = b.handle(cmd, js_sys::Date::now() as i64).await;

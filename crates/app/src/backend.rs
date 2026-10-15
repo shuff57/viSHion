@@ -49,7 +49,49 @@ pub fn uid(now: i64, salt: u64) -> String {
 /// The file dialog (native). The worker thread blocks on it, which is what it is for.
 #[cfg(not(target_arch = "wasm32"))]
 pub async fn pick_pictures(multiple: bool) -> Vec<Picked> {
-    let d = rfd::FileDialog::new().add_filter("Pictures", &["jpg", "jpeg", "png", "gif", "bmp", "webp"]);
+    pick_with("Pictures", &["jpg", "jpeg", "png", "gif", "bmp", "webp"], "image/*", multiple).await
+}
+
+/// A project folder (`Import folder`): every file under it, named by its path from the folder's parent, so the
+/// folder's own name is the first part (as `webkitRelativePath` is in a browser).
+#[cfg(not(target_arch = "wasm32"))]
+pub async fn pick_folder() -> Vec<Picked> {
+    match rfd::FileDialog::new().pick_folder() {
+        Some(dir) => read_folder(&dir),
+        None => vec![],
+    }
+}
+
+/// Every file under `dir`, named `<folder name>/<path>`.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn read_folder(dir: &std::path::Path) -> Vec<Picked> {
+    fn walk(dir: &std::path::Path, rel: &str, out: &mut Vec<Picked>) {
+        let Ok(rd) = std::fs::read_dir(dir) else { return };
+        for e in rd.flatten() {
+            let name = e.file_name().to_string_lossy().to_string();
+            let path = e.path();
+            let rel = format!("{rel}/{name}");
+            if path.is_dir() {
+                walk(&path, &rel, out);
+            } else if let Ok(bytes) = std::fs::read(&path) {
+                out.push(Picked { name: rel, bytes });
+            }
+        }
+    }
+    let root = dir.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "folder".into());
+    let mut out = vec![];
+    walk(dir, &root, &mut out);
+    out
+}
+
+/// A project zip (`Import zip`).
+pub async fn pick_zip() -> Vec<Picked> {
+    pick_with("Zip", &["zip"], ".zip,application/zip", false).await
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+async fn pick_with(label: &str, exts: &[&str], _accept: &str, multiple: bool) -> Vec<Picked> {
+    let d = rfd::FileDialog::new().add_filter(label, exts);
     let files = if multiple { d.pick_files().unwrap_or_default() } else { d.pick_file().into_iter().collect() };
     files
         .into_iter()
@@ -63,13 +105,32 @@ pub async fn pick_pictures(multiple: bool) -> Vec<Picked> {
 /// `<input type=file>` (web). The click happens right after the user's own click, so the browser allows it.
 #[cfg(target_arch = "wasm32")]
 pub async fn pick_pictures(multiple: bool) -> Vec<Picked> {
+    pick_with("Pictures", &[], "image/*", multiple).await
+}
+
+/// A project folder (`Import folder`): `<input type=file webkitdirectory>`; names are `webkitRelativePath`.
+#[cfg(target_arch = "wasm32")]
+pub async fn pick_folder() -> Vec<Picked> {
+    pick_inner("", true, true).await
+}
+
+#[cfg(target_arch = "wasm32")]
+async fn pick_with(_label: &str, _exts: &[&str], accept: &str, multiple: bool) -> Vec<Picked> {
+    pick_inner(accept, multiple, false).await
+}
+
+#[cfg(target_arch = "wasm32")]
+async fn pick_inner(accept: &str, multiple: bool, folder: bool) -> Vec<Picked> {
     use wasm_bindgen::closure::Closure;
     use wasm_bindgen::JsCast;
     let Some(doc) = web_sys::window().and_then(|w| w.document()) else { return vec![] };
     let Ok(el) = doc.create_element("input") else { return vec![] };
     let Ok(input) = el.dyn_into::<web_sys::HtmlInputElement>() else { return vec![] };
     input.set_type("file");
-    input.set_accept("image/*");
+    input.set_accept(accept);
+    if folder {
+        let _ = input.set_attribute("webkitdirectory", "");
+    }
     input.set_multiple(multiple);
     let inp = input.clone();
     let p = js_sys::Promise::new(&mut |res, _| {
@@ -90,7 +151,8 @@ pub async fn pick_pictures(multiple: bool) -> Vec<Picked> {
     if let Some(list) = inp.files() {
         for i in 0..list.length() {
             let Some(f) = list.item(i) else { continue };
-            let name = f.name();
+            let rel = js_sys::Reflect::get(&f, &"webkitRelativePath".into()).ok().and_then(|v| v.as_string()).filter(|s| !s.is_empty());
+            let name = rel.unwrap_or_else(|| f.name());
             if let Ok(buf) = wasm_bindgen_futures::JsFuture::from(f.array_buffer()).await {
                 out.push(Picked { name, bytes: js_sys::Uint8Array::new(&buf).to_vec() });
             }
@@ -106,6 +168,9 @@ pub enum AnyStore {
     Fs(vishion_store::fs::FsStore),
     #[cfg(target_arch = "wasm32")]
     Idb(vishion_store::idb::IdbStore),
+    /// A folder the person chose with the browser's folder picker.
+    #[cfg(target_arch = "wasm32")]
+    Fsa(vishion_store::fsa::FsaStore),
 }
 
 impl Store for AnyStore {
@@ -117,6 +182,8 @@ impl Store for AnyStore {
                 AnyStore::Fs(s) => s.get(key).await,
                 #[cfg(target_arch = "wasm32")]
                 AnyStore::Idb(s) => s.get(key).await,
+                #[cfg(target_arch = "wasm32")]
+                AnyStore::Fsa(s) => s.get(key).await,
             }
         }
     }
@@ -128,6 +195,8 @@ impl Store for AnyStore {
                 AnyStore::Fs(s) => s.put(key, value).await,
                 #[cfg(target_arch = "wasm32")]
                 AnyStore::Idb(s) => s.put(key, value).await,
+                #[cfg(target_arch = "wasm32")]
+                AnyStore::Fsa(s) => s.put(key, value).await,
             }
         }
     }
@@ -139,6 +208,8 @@ impl Store for AnyStore {
                 AnyStore::Fs(s) => s.list(prefix).await,
                 #[cfg(target_arch = "wasm32")]
                 AnyStore::Idb(s) => s.list(prefix).await,
+                #[cfg(target_arch = "wasm32")]
+                AnyStore::Fsa(s) => s.list(prefix).await,
             }
         }
     }
@@ -150,6 +221,8 @@ impl Store for AnyStore {
                 AnyStore::Fs(s) => s.delete(key).await,
                 #[cfg(target_arch = "wasm32")]
                 AnyStore::Idb(s) => s.delete(key).await,
+                #[cfg(target_arch = "wasm32")]
+                AnyStore::Fsa(s) => s.delete(key).await,
             }
         }
     }
@@ -275,6 +348,184 @@ impl Backend {
         Event::PagesAdded { pages }
     }
 
+    /// The name at the top of a prepared page (js/student.js `read`): a separate short request to the same
+    /// server. `Ok(None)` is "no name found"; `Err` is a server that did not answer.
+    async fn read_name(&self, jpg: &[u8], conn: &Conn) -> std::result::Result<Option<String>, ()> {
+        let strip = pictures::crop_top(jpg, vishion_core::student::STRIP).map_err(|_| ())?;
+        let req = vishion_net::Request {
+            endpoint: vishion_net::Endpoint::new(conn.url.clone()),
+            api_key: &conn.api_key,
+            model: &conn.model,
+            prompt: vishion_core::student::ASK,
+            image: &strip,
+            timeout_secs: 45,
+            poll_slots: false,
+        };
+        match vishion_net::Provider::for_setting(&conn.provider).complete(req, 0.1, 60).await {
+            Ok(t) => Ok(vishion_core::student::parse_reply(&t)),
+            Err(vishion_net::Error::Http(_)) => Err(()),
+            Err(_) => Err(()),
+        }
+    }
+
+    /// The staging step of js/ui/add.js `addFiles` + `process`: each file is checked, shrunk (and levelled when
+    /// the setting asks), and given a student name. Results go to `emit` one by one so the screen fills up.
+    pub async fn stage_files(&self, mut files: Vec<Picked>, conn: &Conn, read_names: bool, preset: Option<&str>, emit: &dyn Fn(Event)) {
+        let demo = self.demo || conn.demo || self.demo_mode().await;
+        let mut skipped: Vec<(String, String)> = vec![];
+        // `page2` before `page10`
+        files.sort_by(|a, b| vishion_core::jsx::nat_compare(&a.name, &b.name));
+        let mut down = false;
+        for f in files {
+            if let Some(why) = vishion_core::student::check_file(&f.name, f.bytes.len()) {
+                skipped.push((f.name, why.to_string()));
+                continue;
+            }
+            let jpg = match self.prepare_picture(&f.bytes).await {
+                Ok(j) => j,
+                Err(_) => {
+                    skipped.push((f.name, "Could not read this image.".into()));
+                    continue;
+                }
+            };
+            let (name, source) = if let Some(p) = preset {
+                (Some(p.to_string()), "chosen")
+            } else if !read_names {
+                (None, "file")
+            } else if demo {
+                (vishion_core::student::demo_name(&f.name).map(String::from), "read")
+            } else if down {
+                (None, "file")
+            } else {
+                match self.read_name(&jpg, conn).await {
+                    Ok(n) => (n, "read"),
+                    Err(()) => {
+                        down = true;
+                        (None, "file")
+                    }
+                }
+            };
+            emit(Event::Staged { item: vishion_ui::StagedItem { file_name: f.name, bytes: jpg, name, source: source.into() }, names_down: down });
+        }
+        // always sent: it ends the staging (the screen stops saying it is working)
+        emit(Event::Skipped(skipped));
+    }
+
+    /// Ask for pictures, then stage them one by one (`emit` per picture).
+    pub async fn stage_pictures(&self, conn: &Conn, read_names: bool, preset: Option<&str>, emit: &dyn Fn(Event)) {
+        let files = pick_pictures(true).await;
+        self.stage_files(files, conn, read_names, preset, emit).await;
+    }
+
+    /// Save staged pictures as pages (js/ui/add.js `commit`): the student comes from the staging step, or is the
+    /// file name when none was found.
+    pub async fn commit_staged(&self, slug: &str, items: Vec<vishion_ui::StagedItem>, now: i64) -> Event {
+        let mut pages: Vec<(Page, Vec<u8>)> = vec![];
+        for (n, it) in items.into_iter().enumerate() {
+            let id = uid(now, n as u64);
+            if self.projects.save_image(slug, &id, &it.bytes).await.is_err() {
+                return Event::Notice { text: format!("Could not save {}.", it.file_name), error: true };
+            }
+            let mut p = Assignment::new_page(&id, &it.file_name);
+            let student = match &it.name {
+                Some(n) => serde_json::json!({"name": n, "source": it.source, "confirmed": it.source != "read"}),
+                None => {
+                    let stem = match it.file_name.rfind('.') {
+                        Some(d) if d > 0 => &it.file_name[..d],
+                        _ => &it.file_name,
+                    };
+                    serde_json::json!({"name": stem, "source": "file", "confirmed": false})
+                }
+            };
+            p.set("student", student);
+            pages.push((p, it.bytes));
+        }
+        if pages.is_empty() {
+            return Event::Notice { text: "No picture was added.".into(), error: false };
+        }
+        Event::PagesAdded { pages }
+    }
+
+    /// Sessions of the old single-file app and their pictures (`data:` URLs by session id). On the web they are
+    /// read in place from this browser's storage; natively the person picks an exported JSON file
+    /// (`[sessions]` or `{ sessions, images }`).
+    async fn legacy_input(&self) -> Option<(Vec<Value>, std::collections::BTreeMap<String, String>)> {
+        #[cfg(target_arch = "wasm32")]
+        {
+            let sessions = vishion_core::import::parse_sessions(vishion_store::legacy_web::sessions_json().as_deref());
+            if sessions.is_empty() {
+                return None;
+            }
+            Some((sessions, vishion_store::legacy_web::images().await))
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let f = pick_with("Old sessions", &["json"], ".json,application/json", false).await.pop()?;
+            Some(vishion_core::import::parse_export(&String::from_utf8_lossy(&f.bytes)))
+        }
+    }
+
+    /// Whether Home offers "Import old sessions": sessions are waiting in this browser, or (native) a file can
+    /// be picked.
+    fn legacy_available(&self) -> bool {
+        #[cfg(target_arch = "wasm32")]
+        {
+            vishion_core::import::available(vishion_store::legacy_web::sessions_json().as_deref())
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            true
+        }
+    }
+
+    async fn import_legacy(&self, now: i64) -> Event {
+        let Some((sessions, images)) = self.legacy_input().await else {
+            return Event::Notice { text: "No sessions from the old app were found.".into(), error: false };
+        };
+        self.import_legacy_from(&sessions, &images, now).await
+    }
+
+    /// The conversion and the write of [`Backend::import_legacy`], with the sessions already in hand.
+    pub async fn import_legacy_from(&self, sessions: &[Value], images: &std::collections::BTreeMap<String, String>, now: i64) -> Event {
+        let settings = match self.projects.load_settings().await {
+            Ok(Some(m)) => Settings::load(&Value::Object(m)),
+            _ => Settings::defaults(),
+        };
+        let topics = settings.get("topics").and_then(Value::as_object).cloned().unwrap_or_default();
+        let opt = vishion_core::import::Options { name: None, topics: &topics, now };
+        let mut n = 0u64;
+        let mut new_id = || {
+            n += 1;
+            uid(now, 1000 + n)
+        };
+        let plan = vishion_core::import::plan(
+            sessions,
+            images,
+            &opt,
+            &mut new_id,
+            &mut |url, _name| {
+                let (_, bytes) = vishion_core::import::decode_data_url(url)?;
+                pictures::prepare(&bytes).ok()
+            },
+            &mut |_img, _raw| vec![],
+        );
+        match plan {
+            Err(m) => Event::Notice { text: m, error: true },
+            Ok(plan) => match self.projects.apply_legacy(&plan, now).await {
+                Ok(done) => {
+                    let skipped = done.pages - done.with_image;
+                    let text = format!(
+                        "Imported {}{}.",
+                        vishion_ui::state::plural(done.pages, "page", "pages"),
+                        if skipped > 0 { format!(" ({skipped} without an image)") } else { String::new() }
+                    );
+                    Event::Many(vec![Event::Notice { text, error: false }, self.open(Some(&done.slug), now).await])
+                }
+                Err(e) => Event::Notice { text: format!("Import failed: {e}"), error: true },
+            },
+        }
+    }
+
     /// Demo mode of js/ocr.js: the sample assignment, or the `demo` setting.
     async fn demo_mode(&self) -> bool {
         if self.demo {
@@ -327,14 +578,25 @@ impl Backend {
             prompt: &conn.prompt,
             image: &image,
             timeout_secs: conn.timeout_secs,
+            poll_slots: vishion_net::Provider::for_setting(&conn.provider).polls_slots(),
         };
         let mut on = |p: Progress| {
             if let Progress::Text { full, .. } = p {
                 emit(Event::Reading { id: id.into(), text: full.to_string() });
             }
         };
-        match vishion_net::transcribe(req, &self.cancel, &mut on).await {
-            Ok(d) => ReadOutcome::Done { raw: vishion_core::clean::clean(&d.text), tokens: d.tokens, ms: d.ms, guesses: None },
+        match vishion_net::Provider::for_setting(&conn.provider).transcribe(req, &self.cancel, &mut on).await {
+            Ok(d) => {
+                let raw = vishion_core::clean::clean(&d.text);
+                // `autoGuess`: when a page finishes with unreadable words, look again (a failure leaves none)
+                let (numbered, n) = vishion_core::guess::numbered(&raw);
+                let guesses = if conn.guess && n > 0 {
+                    self.guess_live(slug, id, &numbered, n, conn, &conn.examples).await.ok()
+                } else {
+                    None
+                };
+                ReadOutcome::Done { raw, tokens: d.tokens, ms: d.ms, guesses }
+            }
             Err(Error::Aborted) => ReadOutcome::Stopped,
             Err(Error::TimedOut) => ReadOutcome::Failed(format!(
                 "Timed out after {} seconds. Retry, or raise the timeout in Settings.",
@@ -343,6 +605,49 @@ impl Backend {
             Err(Error::Network(m)) | Err(Error::Unavailable(m)) => ReadOutcome::Unreachable(m),
             Err(Error::Http(m)) => ReadOutcome::Failed(m),
             Err(Error::Stream { message, .. }) => ReadOutcome::Failed(message),
+        }
+    }
+
+    /// `W.guess` against the server: the page picture and the numbered transcript, one answer back.
+    async fn guess_live(&self, slug: &str, id: &str, numbered: &str, count: usize, conn: &Conn, examples: &[String]) -> std::result::Result<serde_json::Map<String, Value>, String> {
+        let image = match self.projects.load_image(slug, id).await {
+            Ok(Some(b)) => b,
+            _ => return Err("The image is missing.".into()),
+        };
+        let prompt = vishion_core::guess::prompt(numbered, examples);
+        let req = vishion_net::Request {
+            endpoint: vishion_net::Endpoint::new(conn.url.clone()),
+            api_key: &conn.api_key,
+            model: &conn.model,
+            prompt: &prompt,
+            image: &image,
+            timeout_secs: conn.timeout_secs,
+            poll_slots: false,
+        };
+        match vishion_net::Provider::for_setting(&conn.provider).complete(req, 0.2, 500).await {
+            Ok(t) => Ok(vishion_core::guess::parse_guesses(&t, count)),
+            Err(vishion_net::Error::Http(m)) | Err(vishion_net::Error::Network(m)) | Err(vishion_net::Error::Unavailable(m)) => Err(m),
+            Err(_) => Err(NEEDS_OCR.into()),
+        }
+    }
+
+    /// `fs.listProjects` as the home screen's cards.
+    async fn list_event(&self, now: i64) -> Event {
+        match self.projects.list_projects(now).await {
+            Ok(list) => Event::Projects(
+                list.into_iter()
+                    .map(|s| vishion_ui::Card { slug: s.slug, name: s.name, pages: s.pages.max(0) as usize, done: s.done.max(0) as usize, updated: s.updated })
+                    .collect(),
+            ),
+            Err(e) => Event::Notice { text: format!("Could not list the assignments: {e}"), error: true },
+        }
+    }
+
+    /// The list again after a change, or the toast saying why not.
+    async fn changed(&self, r: std::result::Result<(), impl std::fmt::Display>, what: &str, now: i64) -> Event {
+        match r {
+            Ok(()) => self.list_event(now).await,
+            Err(e) => Event::Notice { text: format!("{what}: {e}"), error: true },
         }
     }
 
@@ -387,16 +692,96 @@ impl Backend {
                 self.read_pages(&slug, ids, conn, &|e| out.borrow_mut().push(e)).await;
                 Event::Many(out.into_inner())
             }
+            Cmd::StagePictures { conn, read_names, preset } => {
+                let out = std::cell::RefCell::new(vec![]);
+                self.stage_pictures(&conn, read_names, preset.as_deref(), &|e| out.borrow_mut().push(e)).await;
+                Event::Many(out.into_inner())
+            }
+            // the camera is the browser's: the web executor answers, a native host says so
+            Cmd::CameraStart => Event::CameraError("The camera is available in the browser build.".into()),
+            Cmd::CameraStop => Event::Many(vec![]),
+            Cmd::CaptureShot { name, w, h, rgba, conn, read_names, preset } => match pictures::from_rgba(w, h, &rgba) {
+                Ok(jpg) => {
+                    let out = std::cell::RefCell::new(vec![]);
+                    self.stage_files(vec![Picked { name, bytes: jpg }], &conn, read_names, preset.as_deref(), &|e| out.borrow_mut().push(e)).await;
+                    Event::Many(out.into_inner())
+                }
+                Err(m) => Event::Notice { text: m, error: true },
+            },
+            Cmd::StageFiles { files, conn, read_names, preset } => {
+                let out = std::cell::RefCell::new(vec![]);
+                let files = files.into_iter().map(|(name, bytes)| Picked { name, bytes }).collect();
+                self.stage_files(files, &conn, read_names, preset.as_deref(), &|e| out.borrow_mut().push(e)).await;
+                Event::Many(out.into_inner())
+            }
+            Cmd::CommitStaged { slug, items } => self.commit_staged(&slug, items, now).await,
+            Cmd::ImportZip => {
+                let Some(f) = pick_zip().await.pop() else {
+                    return Event::Notice { text: "No file chosen.".into(), error: false };
+                };
+                match vishion_core::export::read_zip(&f.bytes) {
+                    Err(m) => Event::Notice { text: m, error: true },
+                    Ok(entries) => match self.projects.import_files(&entries).await {
+                        Ok(slug) => Event::Many(vec![Event::Notice { text: "Assignment imported.".into(), error: false }, self.open(Some(&slug), now).await]),
+                        Err(e) => Event::Notice { text: format!("Import failed: {e}"), error: true },
+                    },
+                }
+            }
+            Cmd::ImportFolder => {
+                let files = pick_folder().await;
+                if files.is_empty() {
+                    return Event::Notice { text: "No folder chosen.".into(), error: false };
+                }
+                let entries: Vec<(String, Vec<u8>)> = files.into_iter().map(|f| (f.name, f.bytes)).collect();
+                match self.projects.import_files(&entries).await {
+                    Ok(slug) => Event::Many(vec![Event::Notice { text: "Assignment imported.".into(), error: false }, self.open(Some(&slug), now).await]),
+                    Err(e) => Event::Notice { text: format!("Import failed: {e}"), error: true },
+                }
+            }
+            Cmd::DownloadZip { slug } => match self.projects.project_files(&slug).await {
+                Ok(files) => {
+                    let name = format!("{slug}.zip");
+                    let bytes = vishion_core::export::store_zip(&files);
+                    match self.projects.write_export(&slug, &name, &bytes).await {
+                        Ok(()) => Event::Notice { text: format!("Saved exports/{name}."), error: false },
+                        Err(e) => Event::Notice { text: format!("Could not build the zip: {e}"), error: true },
+                    }
+                }
+                Err(e) => Event::Notice { text: format!("Could not build the zip: {e}"), error: true },
+            },
+            // the folder card is a browser thing: the web executor answers it, a native host has no such card
+            Cmd::Folder(_) => Event::Many(vec![]),
+            Cmd::ImportLegacy => self.import_legacy(now).await,
+            Cmd::ListProjects => Event::Many(vec![Event::LegacyAvailable(self.legacy_available()), self.list_event(now).await]),
+            Cmd::OpenProject { slug } => self.open(Some(&slug), now).await,
+            Cmd::CreateProject { name } => match self.projects.create_project(&name, now).await {
+                Ok(slug) => self.open(Some(&slug), now).await,
+                Err(e) => Event::Notice { text: format!("Could not create the assignment: {e}"), error: true },
+            },
+            Cmd::RenameProject { slug, name } => {
+                let r = self.projects.rename_project(&slug, &name, now).await;
+                self.changed(r.map(|_| ()), "Could not rename the assignment", now).await
+            }
+            Cmd::DuplicateProject { slug } => match self.projects.duplicate_project(&slug, now).await {
+                Ok(_) => Event::Many(vec![Event::Notice { text: "Assignment duplicated.".into(), error: false }, self.list_event(now).await]),
+                Err(e) => Event::Notice { text: format!("Could not duplicate: {e}"), error: true },
+            },
+            Cmd::DeleteProject { slug } => {
+                let r = self.projects.delete_project(&slug).await;
+                self.changed(r, "Could not delete the assignment", now).await
+            }
             Cmd::Stop => {
                 self.cancel.stop();
                 Event::Many(vec![])
             }
-            Cmd::Guess { id, raw, .. } => {
+            Cmd::Guess { slug, id, raw, conn, examples } => {
+                let (numbered, n) = vishion_core::guess::numbered(&raw);
                 if self.demo_mode().await {
-                    let (_, n) = vishion_core::guess::numbered(&raw);
                     Event::Guessed { id, result: Ok(vishion_core::demo::guesses(n)) }
+                } else if n == 0 {
+                    Event::Guessed { id, result: Ok(Default::default()) }
                 } else {
-                    Event::Guessed { id, result: Err(NEEDS_OCR.into()) }
+                    Event::Guessed { id: id.clone(), result: self.guess_live(&slug, &id, &numbered, n, &conn, &examples).await }
                 }
             }
             Cmd::Export { slug, name, bytes } => match self.projects.write_export(&slug, &name, &bytes).await {

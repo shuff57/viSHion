@@ -21,6 +21,7 @@ mod bands;
 mod dialog;
 pub mod emoji;
 mod flow;
+mod home;
 pub mod host;
 pub mod math;
 mod review;
@@ -41,7 +42,7 @@ mod app_tests;
 #[cfg(test)]
 mod a11y_critic_tests;
 
-pub use host::{Cmd, Conn, Dispatch, Event, Inbox, ReadOutcome};
+pub use host::{Card, FolderInfo, StagedItem, Cmd, Conn, Dispatch, Event, Inbox, ReadOutcome};
 pub use twin::{Node, Part, Reg};
 
 /// Web only: call once after eframe started; makes the canvas a non-tabbable, AT-hidden surface and names
@@ -138,6 +139,10 @@ pub struct Ctl {
     pub(crate) dom_focus: Option<String>,
     /// A dialog was open at the end of the last frame, and where focus goes back to when it closes.
     pub(crate) dialog_was: bool,
+    /// The person asked for the home screen (the wordmark); the app shell takes it after the frame.
+    pub(crate) want_home: bool,
+    /// This host has a camera to offer (the web build; tests switch it on).
+    pub(crate) camera_ok: bool,
     /// The dialog a confirmation is stacked on (Settings under "Clear remembered fixes", as modal.js stacks
     /// them) and the control that gets focus back when the confirmation closes.
     pub(crate) under: Option<(crate::dialog::Dialog, &'static str)>,
@@ -750,6 +755,7 @@ pub struct App {
     last_screen: (f32, f32),
     host: Option<(Dispatch, Inbox)>,
     boot: Boot,
+    home: home::Home,
     session: Option<state::Session>,
     storage: String,
     notice: Option<String>,
@@ -802,6 +808,8 @@ pub struct App {
     want: Vec<String>,
     /// Colour emoji: the face (linked in natively, fetched on the web) and the pictures drawn from it.
     emoji: emoji::EmojiCache,
+    /// The camera's latest frame as a texture (the Capture view).
+    cam_tex: Option<egui::TextureHandle>,
     emoji_requested: bool,
     /// Bumped when a picture or a font arrives: the page may have moved under the selected word.
     layout_epoch: u32,
@@ -846,6 +854,7 @@ impl App {
             let reduced = web::media("(prefers-reduced-motion: reduce)");
             if reduced {
                 ctx.style_mut(|s| s.animation_time = 0.0);
+                widgets::set_reduced_motion(&ctx, true);
             }
             let hc = web::media("(forced-colors: active)") || web::media("(prefers-contrast: more)");
             web::mark_preferences(reduced, hc);
@@ -856,12 +865,13 @@ impl App {
         let mut app = App {
             ctx,
             queue,
-            ctl: Ctl { dom_text: cfg!(target_arch = "wasm32"), ..Ctl::default() },
+            ctl: Ctl { dom_text: cfg!(target_arch = "wasm32"), camera_ok: cfg!(target_arch = "wasm32"), ..Ctl::default() },
             last_nodes: vec![],
             last_chrome: HashMap::new(),
             last_screen: (0.0, 0.0),
             host: None,
             boot: Boot::Loading,
+            home: Default::default(),
             session: None,
             storage: String::new(),
             notice: None,
@@ -897,6 +907,7 @@ impl App {
             dialog: None,
             stage: review::Stage::default(),
             want: vec![],
+            cam_tex: None,
             emoji: {
                 let mut c = emoji::EmojiCache::default();
                 if let Some(b) = theme::bundled_emoji() {
@@ -1021,6 +1032,18 @@ impl App {
         self.queue.lock().unwrap().push(format!("act:{id}"));
     }
 
+    /// Offer (or hide) the camera on the Add screen.
+    #[doc(hidden)]
+    pub fn camera(mut self, on: bool) -> Self {
+        self.ctl.camera_ok = on;
+        self
+    }
+
+    #[doc(hidden)]
+    pub fn twin_text(&self, id: &str, value: &str) {
+        self.queue.lock().unwrap().push(format!("text:{id}\u{1}{value}"));
+    }
+
     /// Hand a session to the app directly (tests; the host path is `Event::Opened`).
     pub fn open_session(&mut self, s: state::Session, storage: &str) {
         self.session = Some(s);
@@ -1075,12 +1098,14 @@ impl App {
                         settings.set("noticeSeen", serde_json::json!(true));
                         notice_seen_now = true;
                     }
+                    self.home = Default::default();
                     self.images.clear();
                     let mut sess = state::Session::new(slug, *assignment, *settings, now_ms());
                     if let Some(id) = &self.start_page {
                         sess.select(id);
                     }
-                    if self.start_inbox {
+                    // an assignment with no pages has nothing to review: it opens on the overview, where "Add pages" is
+                    if self.start_inbox || sess.a.pages.is_empty() {
                         sess.view = state::View::Inbox;
                     }
                     if self.start_no_tray {
@@ -1090,6 +1115,12 @@ impl App {
                     sess.dirty.settings |= notice_seen_now;
                     self.session = Some(sess);
                     self.boot = Boot::Ready;
+                }
+                Event::Folder(f) => self.home.folder = Some(f),
+                Event::LegacyAvailable(on) => self.home.legacy = on,
+                Event::Projects(cards) => {
+                    self.home.cards = Some(cards);
+                    self.home.asked = false;
                 }
                 Event::Empty { storage } => {
                     self.storage = storage;
@@ -1142,16 +1173,77 @@ impl App {
                         first.get_or_insert(id);
                         list.push(p);
                     }
+                    let mut start = None;
                     if let Some(s) = &mut self.session {
+                        let ids: Vec<String> = list.iter().map(|p| p.id().to_string()).collect();
                         s.pages_added(list);
-                        if let Some(f) = first {
+                        if s.add.starting {
+                            // the Add screen's "Transcribe N pages": back to the inbox, and the run begins
+                            s.add.starting = false;
+                            s.view = state::View::Inbox;
+                            start = Some((s.slug.clone(), ids, s.read_conn()));
+                        } else if let Some(f) = first {
                             s.select(&f);
                         }
+                    }
+                    if let Some((slug, ids, conn)) = start {
+                        self.send(Cmd::Transcribe { slug, ids, conn });
                     }
                     if n > 0 {
                         self.status_msg = Some(format!("Added {}.", state::plural(n, "page", "pages")));
                         self.ctl.toast_serial += 1;
                         self.status_err = false;
+                    }
+                }
+                Event::Staged { item, names_down } => {
+                    if let Some(s) = &mut self.session {
+                        s.add.seq += 1;
+                        let key = s.add.seq;
+                        let slot = decode_image(&self.ctx, &format!("staged-{key}"), &item.bytes).map_or(Slot::Missing, Slot::Ready);
+                        self.images.insert(format!("staged-{key}"), slot);
+                        s.add.names_down |= names_down;
+                        s.add.rows.push(state::StagedRow { key, item, picking: false, draft: String::new() });
+                    }
+                }
+                Event::CameraFrame { w, h, rgba } => {
+                    if rgba.len() == (w * h * 4) as usize {
+                        let ci = egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], &rgba);
+                        self.cam_tex = Some(self.ctx.load_texture("camera", ci, egui::TextureOptions::LINEAR));
+                    }
+                    let mut shot = None;
+                    if let Some(s) = &mut self.session {
+                        if s.view == state::View::Capture && rgba.len() == (w * h * 4) as usize {
+                            let found = vishion_core::capture::detect_page(&rgba, w as usize, h as usize);
+                            let c = &mut s.capture;
+                            c.error = None;
+                            c.found = found;
+                            c.frame = Some((w, h, rgba));
+                            if c.cooldown > 0 {
+                                // just after a shot: the same page must not be taken twice, and counting starts over
+                                c.cooldown -= 1;
+                                c.steady.reset();
+                            } else if c.steady.feed(found) && c.auto {
+                                shot = Some(());
+                            }
+                        }
+                    }
+                    if shot.is_some() {
+                        if let Some(s) = &mut self.session {
+                            if let Some(cmd) = review::capture_shot(s) {
+                                self.send(cmd);
+                            }
+                        }
+                    }
+                }
+                Event::CameraError(m) => {
+                    if let Some(s) = &mut self.session {
+                        s.capture.error = Some(m);
+                    }
+                }
+                Event::Skipped(list) => {
+                    if let Some(s) = &mut self.session {
+                        s.add.skipped.extend(list);
+                        s.add.working = false;
                     }
                 }
                 Event::Many(_) => {}

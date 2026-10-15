@@ -18,6 +18,12 @@ fn encode(im: &DynamicImage) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
+/// A camera frame (RGBA, `w` x `h`) as a full-size JPEG: what the shutter keeps.
+pub fn from_rgba(w: u32, h: u32, rgba: &[u8]) -> Result<Vec<u8>, String> {
+    let im = image::RgbaImage::from_raw(w, h, rgba.to_vec()).ok_or_else(|| "The camera frame is the wrong size.".to_string())?;
+    encode(&DynamicImage::ImageRgba8(im))
+}
+
 /// Decode a picked file and re-encode it as the JPEG the assignment stores.
 pub fn prepare(bytes: &[u8]) -> Result<Vec<u8>, String> {
     if bytes.len() > MAX_BYTES {
@@ -26,6 +32,13 @@ pub fn prepare(bytes: &[u8]) -> Result<Vec<u8>, String> {
     let im = image::load_from_memory(bytes).map_err(|_| "That is not a picture this app can read.".to_string())?;
     let im = if im.width().max(im.height()) > MAX_SIDE { im.resize(MAX_SIDE, MAX_SIDE, FilterType::Triangle) } else { im };
     encode(&im)
+}
+
+/// The top `frac` of a picture as a JPEG (js/student.js `strip`): where a name is written.
+pub fn crop_top(bytes: &[u8], frac: f64) -> Result<Vec<u8>, String> {
+    let im = image::load_from_memory(bytes).map_err(|e| e.to_string())?;
+    let h = ((im.height() as f64 * frac).round() as u32).clamp(1, im.height().max(1));
+    encode(&im.crop_imm(0, 0, im.width(), h))
 }
 
 /// A quarter turn clockwise (js `OCR.image.rotate(blob, 90)`).

@@ -16,6 +16,23 @@ pub enum After {
     TranscribeAgain(String),
     ReviewAgain(Vec<String>),
     UseProvider(String),
+    /// Export anyway: the kind of file and the scope it was asked for.
+    ExportRun(String, &'static str),
+    /// Replace every subject with the built-in set.
+    RestoreTopics,
+    /// Delete this subject.
+    DeleteTopic(String),
+}
+
+/// What the subjects editor asks for.
+#[derive(Debug, PartialEq)]
+pub enum TopicAct {
+    Pick(String),
+    New(String),
+    /// Show or hide the new-subject row.
+    AskNew(bool),
+    Delete,
+    Restore,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -39,6 +56,23 @@ pub enum Dialog {
         /// The list of students under the select is shown (the `<select>` popup).
         open: bool,
     },
+    /// `U.openAssignmentSettings`: the name, subject and instructions of the open assignment.
+    Assignment {
+        drafts: std::collections::BTreeMap<&'static str, String>,
+        open: Option<&'static str>,
+    },
+    /// `U.openExport`: who to include (`all` | `ready` | `selected`), what to make.
+    Export {
+        scope: &'static str,
+        open: Option<&'static str>,
+    },
+    /// `U.openTopics`: the subjects and the words of the one being edited.
+    Topics {
+        cur: String,
+        drafts: std::collections::BTreeMap<&'static str, String>,
+        open: Option<&'static str>,
+        new_name: Option<String>,
+    },
     Confirm {
         title: String,
         text: String,
@@ -51,6 +85,18 @@ pub enum Dialog {
 impl Dialog {
     pub fn settings() -> Dialog {
         Dialog::Settings { drafts: Default::default(), open: None, custom: false }
+    }
+
+    pub fn topics(cur: &str) -> Dialog {
+        Dialog::Topics { cur: cur.to_string(), drafts: Default::default(), open: None, new_name: None }
+    }
+
+    pub fn export(scope: &'static str) -> Dialog {
+        Dialog::Export { scope, open: None }
+    }
+
+    pub fn assignment() -> Dialog {
+        Dialog::Assignment { drafts: Default::default(), open: None }
     }
 
     pub fn change_student() -> Dialog {
@@ -70,6 +116,9 @@ impl Dialog {
                 Some("dark") => "theme-dark".into(),
                 _ => "theme-auto".into(),
             },
+            Dialog::Assignment { .. } => "as-name".into(),
+            Dialog::Export { .. } => "ex-scope-all".into(),
+            Dialog::Topics { .. } => "tp-topic".into(),
             Dialog::Confirm { .. } => "dialog-cancel".into(),
             Dialog::ChangeStudent { .. } => {
                 // js: the first thing in the body, the select
@@ -92,10 +141,59 @@ pub enum Out {
     AskClearFixes,
     /// The provider select changed (a cloud one is confirmed first).
     Provider(String),
+    /// An assignment field changed in the open dialog (it stays open): key, value, what is said.
+    Meta(&'static str, serde_json::Value, String),
+    /// Make this kind of export (combined | pages | csv | json | copy | all) for the scope shown.
+    Export(&'static str, &'static str),
+    /// The scope radio changed.
+    Scope(&'static str),
+    /// The subjects editor: pick, add, delete or restore.
+    Topic(TopicAct),
+    /// Open the subjects editor over the assignment settings.
+    OpenTopics,
 }
 
 /// Save what was typed in the settings boxes (the JS inputs save on `change`).
 pub fn commit(s: &mut Session, d: &Dialog) {
+    if let Dialog::Topics { cur, drafts, .. } = d {
+        let mut topics = s.settings.get("topics").cloned().unwrap_or_else(|| serde_json::json!({}));
+        let mut changed = false;
+        if let Some(e) = topics.as_object_mut().and_then(|o| o.get_mut(cur)).and_then(|e| e.as_object_mut()) {
+            if let Some(v) = drafts.get("tp-desc") {
+                if e.get("description").and_then(|d| d.as_str()) != Some(v.as_str()) {
+                    e.insert("description".into(), serde_json::json!(v));
+                    changed = true;
+                }
+            }
+            if let Some(v) = drafts.get("tp-terms") {
+                let terms: Vec<String> = v.split(['\n', ',']).map(|w| w.trim().to_string()).filter(|w| !w.is_empty()).collect();
+                if e.get("terms") != Some(&serde_json::json!(terms)) {
+                    e.insert("terms".into(), serde_json::json!(terms));
+                    changed = true;
+                }
+            }
+        }
+        if changed {
+            s.settings.set("topics", topics);
+            s.dirty.settings = true;
+        }
+        // a deleted subject leaves the assignment on General
+        let missing = s.settings.get("topics").and_then(|t| t.get(s.a.meta.topic())).is_none();
+        if missing && !s.a.meta.topic().is_empty() {
+            s.set_meta("topic", serde_json::json!("General"));
+        }
+        return;
+    }
+    if let Dialog::Assignment { drafts, .. } = d {
+        // the name keeps its old value when emptied (`S.updateMeta` is skipped), the prompt is stored as typed
+        if let Some(n) = drafts.get("as-name").map(|v| v.trim().to_string()).filter(|v| !v.is_empty() && v != s.a.meta.name()) {
+            s.set_meta("name", serde_json::json!(n));
+        }
+        if let Some(p) = drafts.get("as-prompt").filter(|p| p.as_str() != s.a.meta.prompt()) {
+            s.set_meta("prompt", serde_json::json!(p));
+        }
+        return;
+    }
     let Dialog::Settings { drafts, .. } = d else { return };
     let mut changed = false;
     for (id, v) in drafts {
@@ -152,8 +250,8 @@ pub fn show(ctx: &egui::Context, ctl: &mut Ctl, t: &Tokens, s: &Session, d: &mut
         ui.painter().rect_filled(r, 0.0, if t.dark { egui::Color32::from_black_alpha(158) } else { egui::Color32::from_rgba_unmultiplied(20, 27, 45, 128) });
     });
     // `.modal.narrow { width: 440px }` for Change student; the others keep their width
-    let narrow = matches!(d, Dialog::ChangeStudent { .. } | Dialog::Settings { .. });
-    let width = (screen.width() - 32.0).clamp(280.0, if matches!(d, Dialog::Settings { .. }) { 600.0 } else if narrow { 440.0 } else { 480.0 });
+    let narrow = matches!(d, Dialog::ChangeStudent { .. } | Dialog::Settings { .. } | Dialog::Assignment { .. } | Dialog::Export { .. } | Dialog::Topics { .. });
+    let width = (screen.width() - 32.0).clamp(280.0, if matches!(d, Dialog::Settings { .. } | Dialog::Assignment { .. } | Dialog::Export { .. } | Dialog::Topics { .. }) { 600.0 } else if narrow { 440.0 } else { 480.0 });
     let margin = if narrow { 0.0 } else { 20.0 };
     // `.backdrop { align-items: flex-start; padding: 48px 16px }`
     let anchor = if narrow { (Align2::CENTER_TOP, vec2(0.0, 48.0)) } else { (Align2::CENTER_CENTER, vec2(0.0, 0.0)) };
@@ -171,6 +269,9 @@ pub fn show(ctx: &egui::Context, ctl: &mut Ctl, t: &Tokens, s: &Session, d: &mut
                 ui.spacing_mut().item_spacing = vec2(8.0, 10.0);
                 match d {
                     Dialog::Settings { drafts, open, custom } => out = settings(ctl, ui, t, s, drafts, open, custom),
+                    Dialog::Assignment { drafts, open } => out = assignment(ctl, ui, t, s, drafts, open),
+                    Dialog::Export { scope, open } => out = export(ctl, ui, t, s, scope, open),
+                    Dialog::Topics { cur, drafts, open, new_name } => out = topics(ctl, ui, t, s, cur, drafts, open, new_name),
                     Dialog::ChangeStudent { pick, new_student, name, all, error, open } => {
                         out = change_student(ctl, ui, t, s, pick, new_student, name, all, error, open)
                     }
@@ -198,10 +299,10 @@ pub fn show(ctx: &egui::Context, ctl: &mut Ctl, t: &Tokens, s: &Session, d: &mut
 
 type Drafts = std::collections::BTreeMap<&'static str, String>;
 
-fn text_box(ctl: &mut Ctl, ui: &mut Ui, id: &'static str, name: &str, hint: &str, cur: String, drafts: &mut Drafts, secret: bool, w: f32) {
+fn text_box(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, id: &'static str, name: &str, hint: &str, cur: String, drafts: &mut Drafts, secret: bool, w: f32) {
     let buf = drafts.entry(id).or_insert(cur);
     let (slot, _) = ui.allocate_exact_size(vec2(w, TARGET), Sense::hover());
-    let edit = egui::TextEdit::singleline(buf).hint_text(hint).password(secret).font(theme::sans(14.0)).margin(vec2(12.0, 13.0)).desired_width(slot.width() - 24.0);
+    let edit = egui::TextEdit::singleline(buf).hint_text(egui::RichText::new(hint).font(theme::sans(14.0)).color(t.placeholder())).password(secret).font(theme::sans(14.0)).margin(vec2(12.0, 13.0)).desired_width(slot.width() - 24.0);
     let mut r = ui.put(slot, edit);
     r.rect = slot;
     if let Some(v) = ctl.reg_text(ui, &r, C::new(id, name, DIALOG), buf) {
@@ -467,6 +568,339 @@ fn section_end(ui: &mut Ui, t: &Tokens, w: f32) {
     ui.add_space(21.0);
 }
 
+/// `U.openTopics`: the subjects and the words of the one being edited.
+#[allow(clippy::too_many_arguments)]
+fn topics(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, s: &Session, cur: &str, drafts: &mut Drafts, open: &mut Option<&'static str>, new_name: &mut Option<String>) -> Option<Out> {
+    let mut out: Option<Out> = None;
+    ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
+    let w = ui.available_width();
+    if modal_head(ctl, ui, t, w, "Subjects and their words") {
+        out = Some(Out::Close);
+    }
+    let all = s.settings.get("topics").and_then(|v| v.as_object()).cloned().unwrap_or_default();
+    let items: Vec<(String, String)> = all.keys().map(|k| (k.clone(), k.clone())).collect();
+    let desc = all.get(cur).and_then(|e| e.get("description")).and_then(|d| d.as_str()).unwrap_or("").to_string();
+    let terms = s.settings.terms(cur).join("\n");
+    let max_body = (ui.ctx().screen_rect().height() - 96.0 - 69.0 - 73.0).max(120.0);
+    let from = ctl.node_count();
+    let mut clip = ui.clip_rect();
+    egui::ScrollArea::vertical().max_height(max_body).max_width(w).auto_shrink([false, true]).show(ui, |ui| {
+        clip = ui.clip_rect();
+        ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
+        egui::Frame::none().inner_margin(Margin::symmetric(28.0, 24.0)).show(ui, |ui| {
+            ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
+            let iw = w - 56.0;
+            ui.set_width(iw);
+            if let Some(v) = select_field(ctl, ui, t, iw, open, "tp-topic", "tp-topic-label", "Subject", &items, cur, "tp-topic-") {
+                if v != cur {
+                    out = Some(Out::Topic(TopicAct::Pick(v)));
+                }
+            }
+            ui.add_space(14.0);
+            field_label(ctl, ui, t, iw, "tp-desc-label", "Description");
+            text_box(ctl, ui, t, "tp-desc", "Description", "", desc, drafts, false, iw);
+            ui.add_space(14.0);
+            field_label(ctl, ui, t, iw, "tp-terms-label", "Words students use in this subject");
+            text_area(ctl, ui, t, "tp-terms", "Words students use in this subject", "", terms, drafts, 9, iw);
+            ui.add_space(6.0);
+            hint_p(ctl, ui, t, iw, "tp-terms-hint", "One word or phrase per line, or separated by commas. These are added to the model\u{2019}s instructions, and used to suggest corrections after a page is read.");
+            if let Some(name) = new_name.as_mut() {
+                ui.add_space(14.0);
+                field_label(ctl, ui, t, iw, "tp-new-label", "New subject name");
+                let (slot, _) = ui.allocate_exact_size(vec2(iw, TARGET), Sense::hover());
+                let edit = egui::TextEdit::singleline(name).font(theme::sans(14.0)).margin(vec2(12.0, 13.0)).desired_width(slot.width() - 24.0);
+                let mut r = ui.put(slot, edit);
+                r.rect = slot;
+                if let Some(v) = ctl.reg_text(ui, &r, C::new("tp-new", "New subject name", DIALOG), name) {
+                    *name = v;
+                }
+                let entered = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 8.0;
+                    let add = widgets::button(ctl, ui, t, C::new("tp-add", "Add subject", DIALOG), "Add subject", Look::Primary, 0.0);
+                    let no = widgets::button(ctl, ui, t, C::new("tp-add-cancel", "Cancel", DIALOG), "Cancel", Look::Outline, 0.0);
+                    if (add || entered) && !name.trim().is_empty() {
+                        out = Some(Out::Topic(TopicAct::New(name.trim().to_string())));
+                    } else if no {
+                        out = Some(Out::Topic(TopicAct::AskNew(false)));
+                    }
+                });
+            }
+            ctl.flush_scroll(ui, &[DIALOG]);
+        });
+    });
+    ctl.clip_since(from, clip);
+    let y = ui.cursor().top();
+    ui.painter().hline(ui.max_rect().x_range(), y + 0.5, Stroke::new(1.0, t.line));
+    ui.add_space(15.0);
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = vec2(8.0, 8.0);
+        ui.add_space(28.0);
+        if widgets::button(ctl, ui, t, C::new("tp-restore", "Restore defaults", DIALOG), "Restore defaults", Look::Ghost, 0.0) {
+            out = Some(Out::Topic(TopicAct::Restore));
+        }
+        if widgets::button(ctl, ui, t, C::new("tp-delete", "Delete subject", DIALOG), "Delete subject", Look::Outline, 0.0) {
+            out = Some(Out::Topic(TopicAct::Delete));
+        }
+        if widgets::button(ctl, ui, t, C::new("tp-new-btn", "New subject", DIALOG), "New subject", Look::Outline, 0.0) {
+            out = Some(Out::Topic(TopicAct::AskNew(true)));
+        }
+        if widgets::button(ctl, ui, t, C::new("dialog-close", "Done", DIALOG), "Done", Look::Primary, 0.0) {
+            out = Some(Out::Close);
+        }
+    });
+    ui.add_space(14.0);
+    out
+}
+
+/// Apply a subjects-editor action: the typed text is saved first, then the list changes. Returns a line for
+/// the live region, or a confirmation to ask.
+pub enum TopicResult {
+    Said(String),
+    Warn(String),
+    Ask(After, &'static str, String, String),
+    Nothing,
+}
+
+pub fn topic_act(s: &mut Session, d: &mut Dialog, act: TopicAct) -> TopicResult {
+    use serde_json::json;
+    commit(s, d);
+    let Dialog::Topics { cur, drafts, new_name, open, .. } = d else { return TopicResult::Nothing };
+    drafts.clear();
+    *open = None;
+    match act {
+        TopicAct::Pick(v) => {
+            *cur = v.clone();
+            TopicResult::Said(format!("Subject: {v}."))
+        }
+        TopicAct::AskNew(on) => {
+            *new_name = on.then(String::new);
+            TopicResult::Nothing
+        }
+        TopicAct::New(name) => {
+            let mut topics = s.settings.get("topics").cloned().unwrap_or_else(|| json!({}));
+            let o = topics.as_object_mut().expect("topics is an object");
+            if o.contains_key(&name) {
+                return TopicResult::Warn("A subject with that name already exists.".into());
+            }
+            o.insert(name.clone(), json!({"description": "", "terms": []}));
+            s.settings.set("topics", topics);
+            s.dirty.settings = true;
+            *cur = name.clone();
+            *new_name = None;
+            TopicResult::Said(format!("Added the subject {name}."))
+        }
+        TopicAct::Delete => {
+            if cur == "General" {
+                return TopicResult::Warn("The General subject stays.".into());
+            }
+            TopicResult::Ask(After::DeleteTopic(cur.clone()), "tp-delete", "Delete subject".into(), format!("Delete the subject \u{201C}{cur}\u{201D}?"))
+        }
+        TopicAct::Restore => TopicResult::Ask(
+            After::RestoreTopics,
+            "tp-restore",
+            "Restore defaults".into(),
+            "Replace all subjects with the built-in set? Your edits will be lost.".into(),
+        ),
+    }
+}
+
+/// `U.openExport`.
+fn export(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, s: &Session, scope: &'static str, open: &mut Option<&'static str>) -> Option<Out> {
+    use serde_json::json;
+    let mut out: Option<Out> = None;
+    ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
+    let w = ui.available_width();
+    if modal_head(ctl, ui, t, w, "Export transcripts") {
+        out = Some(Out::Close);
+    }
+    let groups = s.groups();
+    let ready = groups.iter().filter(|g| g.status == vishion_core::groups::Status::Ready).count();
+    let n_pages: usize = groups.iter().map(|g| g.pages.len()).sum();
+    let chosen = s.multi.len();
+    let list = s.export_pages(scope);
+    let gaps = list.iter().filter(|p| p.status() != "done").count();
+    let summary = if list.is_empty() {
+        "No students are ready to read yet.".to_string()
+    } else if gaps > 0 {
+        format!("{gaps} of {} {} no transcript yet. They will be empty in the export.", list.len(), if list.len() == 1 { "page has" } else { "pages have" })
+    } else {
+        format!("All {} transcribed.", crate::state::plural(list.len(), "page is", "pages are"))
+    };
+    let max_body = (ui.ctx().screen_rect().height() - 96.0 - 69.0 - 73.0).max(120.0);
+    let from = ctl.node_count();
+    let mut clip = ui.clip_rect();
+    egui::ScrollArea::vertical().max_height(max_body).max_width(w).auto_shrink([false, true]).show(ui, |ui| {
+        clip = ui.clip_rect();
+        ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
+        egui::Frame::none().inner_margin(Margin::symmetric(28.0, 24.0)).show(ui, |ui| {
+            ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
+            let iw = w - 56.0;
+            ui.set_width(iw);
+            field_label(ctl, ui, t, iw, "ex-scope-label", "Who to include");
+            let rows: [(&'static str, &'static str, String, bool); 3] = [
+                ("all", "ex-scope-all", format!("Everyone ({}, {})", crate::state::plural(groups.len(), "student", "students"), crate::state::plural(n_pages, "page", "pages")), true),
+                ("ready", "ex-scope-ready", format!("Only students who are ready to read ({ready})"), ready > 0),
+                ("selected", "ex-scope-selected", format!("Only the pages I selected ({chosen})"), chosen > 0),
+            ];
+            for (i, (v, id, label, enabled)) in rows.iter().enumerate() {
+                if i > 0 {
+                    ui.add_space(4.0);
+                }
+                if option_row(ctl, ui, t, id, label, scope == *v) && *enabled {
+                    out = Some(Out::Scope(v));
+                }
+            }
+            ui.add_space(14.0);
+            let opt = |v: &[(&str, &str)]| -> Vec<(String, String)> { v.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect() };
+            let cur = setting_str(s, "exportText", "corrected");
+            if let Some(v) = select_field(ctl, ui, t, iw, open, "ex-mode", "ex-mode-label", "Text", &opt(TXTS), &cur, "ex-mode-") {
+                out = Some(Out::Setting("exportText", json!(v), format!("Text: {}.", opt_label(TXTS, &v))));
+            }
+            ui.add_space(14.0);
+            let cur = setting_str(s, "exportSeparator", "label");
+            if let Some(v) = select_field(ctl, ui, t, iw, open, "ex-sep", "ex-sep-label", "Between pages", &opt(SEPS), &cur, "ex-sep-") {
+                out = Some(Out::Setting("exportSeparator", json!(v), format!("Between pages: {}.", opt_label(SEPS, &v))));
+            }
+            ui.add_space(14.0);
+            let cur = setting_str(s, "exportFormat", "md");
+            if let Some(v) = select_field(ctl, ui, t, iw, open, "ex-fmt", "ex-fmt-label", "Combined file", &opt(FMTS), &cur, "ex-fmt-") {
+                out = Some(Out::Setting("exportFormat", json!(v), format!("Combined file: {}.", opt_label(FMTS, &v))));
+            }
+            ui.add_space(14.0);
+            let r = para(ui, iw, &summary, theme::sans(14.0), if gaps > 0 { t.bad } else { t.muted }, 19.6);
+            ctl.status("ex-summary", &summary, DIALOG, r);
+            ui.add_space(18.0);
+
+            field_label(ctl, ui, t, iw, "ex-kinds-label", "Or export just one kind of file");
+            let kinds: [(&'static str, &'static str, &str, &str); 5] = [
+                ("combined", "ex-combined", "Combined file", "Every student in one document"),
+                ("pages", "ex-pages", "One file per page (.zip)", "A separate file for each page, named by student"),
+                ("csv", "ex-csv", "CSV index", "A spreadsheet of every page and its status"),
+                ("json", "ex-json", "JSON", "All the data, for other tools"),
+                ("copy", "ex-copy", "Copy all text", "Puts the text on your clipboard"),
+            ];
+            for (k, id, title, sub) in kinds {
+                let label = format!("{title}. {sub}");
+                if widgets::button(ctl, ui, t, C::new(id, &label, DIALOG), title, Look::Outline, iw) {
+                    out = Some(Out::Export(k, scope));
+                }
+                ui.add_space(2.0);
+                let r = para(ui, iw, sub, theme::sans(13.0), t.muted, 18.2);
+                ctl.text(&format!("{id}-sub"), sub, DIALOG, r);
+                ui.add_space(8.0);
+            }
+            hint_p(ctl, ui, t, iw, "ex-hint", "Each export is also saved in the assignment\u{2019}s exports folder.");
+            ctl.flush_scroll(ui, &[DIALOG]);
+        });
+    });
+    ctl.clip_since(from, clip);
+    let y = ui.cursor().top();
+    ui.painter().hline(ui.max_rect().x_range(), y + 0.5, Stroke::new(1.0, t.line));
+    ui.add_space(15.0);
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 8.0;
+        ui.add_space(28.0);
+        if widgets::button(ctl, ui, t, C::new("ex-cancel", "Cancel", DIALOG), "Cancel", Look::Outline, 0.0) {
+            out = Some(Out::Close);
+        }
+        if widgets::button(ctl, ui, t, C::new("ex-all", "Download all (.zip)", DIALOG), "Download all (.zip)", Look::Primary, 0.0) {
+            out = Some(Out::Export("all", scope));
+        }
+    });
+    ui.add_space(14.0);
+    out
+}
+
+/// A `<textarea rows=N>`.
+fn text_area(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, id: &'static str, name: &str, hint: &str, cur: String, drafts: &mut Drafts, rows: usize, w: f32) {
+    let buf = drafts.entry(id).or_insert(cur);
+    let h = rows as f32 * 22.0 + 26.0;
+    let (slot, _) = ui.allocate_exact_size(vec2(w, h), Sense::hover());
+    let edit = egui::TextEdit::multiline(buf).hint_text(egui::RichText::new(hint).font(theme::sans(14.0)).color(t.placeholder())).font(theme::sans(14.0)).margin(vec2(12.0, 13.0)).desired_width(slot.width() - 24.0).desired_rows(rows);
+    let mut r = ui.put(slot, edit);
+    r.rect = slot;
+    if let Some(v) = ctl.reg_text(ui, &r, C::new(id, name, DIALOG), buf) {
+        *buf = v;
+    }
+}
+
+/// `U.openAssignmentSettings`.
+fn assignment(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, s: &Session, drafts: &mut Drafts, open: &mut Option<&'static str>) -> Option<Out> {
+    use serde_json::json;
+    let mut out: Option<Out> = None;
+    ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
+    let w = ui.available_width();
+    if modal_head(ctl, ui, t, w, "Assignment settings") {
+        out = Some(Out::Close);
+    }
+    let max_body = (ui.ctx().screen_rect().height() - 96.0 - 69.0 - 73.0).max(120.0);
+    let from = ctl.node_count();
+    let mut clip = ui.clip_rect();
+    egui::ScrollArea::vertical().max_height(max_body).max_width(w).auto_shrink([false, true]).show(ui, |ui| {
+        clip = ui.clip_rect();
+        ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
+        egui::Frame::none().inner_margin(Margin::symmetric(28.0, 24.0)).show(ui, |ui| {
+            ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
+            let iw = w - 56.0;
+            ui.set_width(iw);
+            field_label(ctl, ui, t, iw, "as-name-label", "Assignment name");
+            text_box(ctl, ui, t, "as-name", "Assignment name", "", s.a.meta.name().to_string(), drafts, false, iw);
+            ui.add_space(14.0);
+
+            let topics: Vec<(String, String)> = s
+                .settings
+                .get("topics")
+                .and_then(|v| v.as_object())
+                .map(|o| o.keys().map(|k| (k.clone(), k.clone())).collect())
+                .unwrap_or_default();
+            let cur = s.a.meta.topic().to_string();
+            if let Some(v) = select_field(ctl, ui, t, iw, open, "as-topic", "as-topic-label", "Subject", &topics, &cur, "as-topic-") {
+                out = Some(Out::Meta("topic", json!(v), format!("Subject: {v}.")));
+            }
+            ui.add_space(8.0);
+            if widgets::button(ctl, ui, t, C::new("as-edit-topics", "Edit subjects and their words", DIALOG), "Edit subjects and their words", Look::Outline, 0.0) {
+                out = Some(Out::OpenTopics);
+            }
+            ui.add_space(6.0);
+            hint_p(ctl, ui, t, iw, "as-topic-hint", "The subject\u{2019}s words are added to the instructions, and used to suggest corrections after a page is read.");
+            ui.add_space(14.0);
+
+            field_label(ctl, ui, t, iw, "as-prompt-label", "Instructions for the model");
+            text_area(ctl, ui, t, "as-prompt", "Instructions for the model", "Leave this empty to use the standard instructions.", s.a.meta.prompt().to_string(), drafts, 9, iw);
+            ui.add_space(6.0);
+            let typed = drafts.get("as-prompt").cloned().unwrap_or_else(|| s.a.meta.prompt().to_string());
+            let state = if typed.trim().is_empty() { "Using the standard instructions." } else { "Using your instructions." };
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing = vec2(12.0, 8.0);
+                let g = ui.painter().layout_no_wrap(state.to_string(), theme::sans(13.0), t.muted);
+                let (r, _) = ui.allocate_exact_size(vec2(g.size().x, TARGET), Sense::hover());
+                ui.painter().galley(widgets::centered(r, g.size()), g, t.muted);
+                ctl.status("as-prompt-state", state, DIALOG, r);
+                if widgets::button(ctl, ui, t, C::new("as-reset", "Reset to standard", DIALOG), "Reset to standard", Look::Ghost, 0.0) {
+                    drafts.insert("as-prompt", String::new());
+                    out = Some(Out::Meta("prompt", json!(""), "Using the standard instructions.".into()));
+                }
+            });
+            ctl.flush_scroll(ui, &[DIALOG]);
+        });
+    });
+    ctl.clip_since(from, clip);
+    let y = ui.cursor().top();
+    ui.painter().hline(ui.max_rect().x_range(), y + 0.5, Stroke::new(1.0, t.line));
+    ui.add_space(15.0);
+    let dw = ui.painter().layout_no_wrap("Done".to_string(), theme::sans_semi(14.0), t.ink).size().x + widgets::BTN_PAD;
+    ui.horizontal(|ui| {
+        ui.add_space((w - 28.0 - dw - 28.0).max(0.0) + 28.0);
+        if widgets::button(ctl, ui, t, C::new("dialog-close", "Done", DIALOG), "Done", Look::Primary, 0.0) {
+            out = Some(Out::Close);
+        }
+    });
+    ui.add_space(14.0);
+    out
+}
+
 fn settings(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, s: &Session, drafts: &mut Drafts, open: &mut Option<&'static str>, custom: &mut bool) -> Option<Out> {
     use serde_json::json;
     let mut out: Option<Out> = None;
@@ -524,12 +958,12 @@ fn settings(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, s: &Session, drafts: &mut Dr
             ui.add_space(14.0);
             field_label(ctl, ui, t, iw, "st-ocr-label", "Server address");
             let shown = shown_url(pid.0, &setting_str(s, "ocrUrl", ""));
-            text_box(ctl, ui, "st-ocr", "Server address", if pid.0 == "custom" { "https://example.com" } else { "" }, shown, drafts, false, iw);
+            text_box(ctl, ui, t, "st-ocr", "Server address", if pid.0 == "custom" { "https://example.com" } else { "" }, shown, drafts, false, iw);
             ui.add_space(6.0);
             hint_p(ctl, ui, t, iw, "st-ocr-hint", "A local llama.cpp or Ollama server, or the endpoint\u{2019}s base address.");
             ui.add_space(14.0);
             field_label(ctl, ui, t, iw, "st-key-label", "API key");
-            text_box(ctl, ui, "st-key", "API key", "", setting_str(s, "apiKey", ""), drafts, true, iw);
+            text_box(ctl, ui, t, "st-key", "API key", "", setting_str(s, "apiKey", ""), drafts, true, iw);
             ui.add_space(14.0);
             let key_hint = match pid.0 {
                 "ollama-cloud" => "Create one at ollama.com/settings/keys. Requests go through tools/relay.js on this computer (run it once: node tools/relay.js). Kept in this browser only.",
@@ -560,20 +994,20 @@ fn settings(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, s: &Session, drafts: &mut Dr
             hint_p(ctl, ui, t, iw, "st-model-hint", "Choose which model reads the pages. A local server swaps it in when you pick another.");
             if *custom {
                 ui.add_space(14.0);
-                text_box(ctl, ui, "st-model-custom", "Model name", "Model name", cur_model.clone(), drafts, false, iw);
+                text_box(ctl, ui, t, "st-model-custom", "Model name", "Model name", cur_model.clone(), drafts, false, iw);
             }
             if !cloud {
                 ui.add_space(14.0);
                 field_label(ctl, ui, t, iw, "st-idle-label", "Unload the model after it has been idle for (minutes)");
                 let idle = s.settings.get("idleUnloadMin").and_then(|v| v.as_f64()).unwrap_or(10.0);
-                text_box(ctl, ui, "st-idle", "Unload the model after it has been idle for (minutes)", "", format!("{idle}"), drafts, false, 140.0);
+                text_box(ctl, ui, t, "st-idle", "Unload the model after it has been idle for (minutes)", "", format!("{idle}"), drafts, false, 140.0);
                 ui.add_space(6.0);
                 hint_p(ctl, ui, t, iw, "st-idle-hint", "Frees your graphics memory when you stop. 0 keeps it loaded. This only runs while this page is open.");
             }
             ui.add_space(14.0);
             field_label(ctl, ui, t, iw, "st-timeout-label", "Give up on a page after (seconds)");
             let secs = s.settings.get("timeoutSec").and_then(|v| v.as_f64()).unwrap_or(180.0);
-            text_box(ctl, ui, "st-timeout", "Give up on a page after (seconds)", "180", format!("{secs}"), drafts, false, iw);
+            text_box(ctl, ui, t, "st-timeout", "Give up on a page after (seconds)", "180", format!("{secs}"), drafts, false, iw);
             ui.add_space(6.0);
             hint_p(ctl, ui, t, iw, "st-timeout-hint", "A page that takes longer is marked as failed and the batch moves on.");
             ui.add_space(14.0);
@@ -601,7 +1035,7 @@ fn settings(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, s: &Session, drafts: &mut Dr
             let topic = s.a.meta.topic().to_string();
             let name = if topic.is_empty() { "Course words".to_string() } else { format!("Course words for {topic}") };
             field_label(ctl, ui, t, iw, "st-words-label", &name);
-            text_box(ctl, ui, "st-words", &name, "derivative, integral", s.settings.terms(&topic).join(", "), drafts, false, iw);
+            text_box(ctl, ui, t, "st-words", &name, "derivative, integral", s.settings.terms(&topic).join(", "), drafts, false, iw);
             ui.add_space(6.0);
             hint_p(ctl, ui, t, iw, "st-words-hint", "Separate words with commas. Used to catch course words that get misread.");
             section_end(ui, t, iw);
@@ -815,7 +1249,7 @@ fn change_student(
             ctl.text("cs-name-label", "New student name", DIALOG, r);
             ui.add_space(6.0);
             let (slot, _) = ui.allocate_exact_size(vec2(iw, TARGET), Sense::hover());
-            let edit = egui::TextEdit::singleline(name).hint_text("Student name").font(theme::sans(14.0)).margin(vec2(12.0, 13.0)).desired_width(slot.width() - 24.0);
+            let edit = egui::TextEdit::singleline(name).hint_text(egui::RichText::new("Student name").font(theme::sans(14.0)).color(t.placeholder())).font(theme::sans(14.0)).margin(vec2(12.0, 13.0)).desired_width(slot.width() - 24.0);
             let mut r = ui.put(slot, edit);
             r.rect = slot;
             // egui's single-line box gives focus up on Enter; a js input keeps it, so the person (and a screen

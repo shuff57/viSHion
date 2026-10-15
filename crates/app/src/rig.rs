@@ -14,6 +14,7 @@ pub struct Rig {
     pub size: (f32, f32),
     pub be: Rc<Backend>,
     pub slug: String,
+    pub inbox: Inbox,
 }
 
 impl Rig {
@@ -30,14 +31,14 @@ impl Rig {
         let (b2, i2) = (be.clone(), inbox.clone());
         let dispatch: vishion_ui::Dispatch = Box::new(move |c: Cmd| {
             // picture dialogs and font fetches are not part of the rig
-            if matches!(c, Cmd::LoadMathFont | Cmd::LoadFallbackFont | Cmd::LoadEmojiFont | Cmd::ReplaceImage { .. } | Cmd::AddPages { .. }) {
+            if matches!(c, Cmd::LoadMathFont | Cmd::LoadFallbackFont | Cmd::LoadEmojiFont | Cmd::ReplaceImage { .. } | Cmd::AddPages { .. } | Cmd::ImportZip | Cmd::ImportFolder | Cmd::ImportLegacy | Cmd::StagePictures { .. }) {
                 return;
             }
             i2.push(block_on(b2.handle(c, 1_700_000_000_000)));
         });
-        let app = App::new(ctx.clone()).with_host(dispatch, inbox.clone()).theme("light");
+        let app = App::new(ctx.clone()).with_host(dispatch, inbox.clone()).theme("light").camera(true);
         inbox.push(block_on(be.open(None, 1_700_000_000_000)));
-        let mut r = Rig { app, ctx, out: Default::default(), t: 0.0, size: (w, h), be, slug };
+        let mut r = Rig { app, ctx, out: Default::default(), t: 0.0, size: (w, h), be, slug, inbox: inbox.clone() };
         r.frames(8);
         r
     }
@@ -53,6 +54,23 @@ impl Rig {
             let app = &mut self.app;
             self.out = self.ctx.run(input, |c| app.run_frame(c));
         }
+    }
+
+    /// Files dropped on the window in one frame.
+    pub fn drop_files(&mut self, files: Vec<(String, Vec<u8>)>) {
+        self.t += 0.1;
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(self.size.0, self.size.1))),
+            time: Some(self.t),
+            dropped_files: files
+                .into_iter()
+                .map(|(name, b)| egui::DroppedFile { name, bytes: Some(b.into()), ..Default::default() })
+                .collect(),
+            ..Default::default()
+        };
+        let app = &mut self.app;
+        self.out = self.ctx.run(input, |c| app.run_frame(c));
+        self.frames(6);
     }
 
     pub fn act(&mut self, id: &str) {
@@ -285,5 +303,332 @@ mod tests {
         let word = r.app.controls().into_iter().find(|c| c.id.contains("c:0")).unwrap().at.1;
         let tray = r.y_of("Check this word").unwrap();
         assert!(word as f32 + 44.0 <= tray + 30.0, "word target at {word}, tray heading at {tray}");
+    }
+
+    /// Phase 5: the home screen from the wordmark: the list, rename, duplicate, delete, create.
+    #[test]
+    fn home_lists_renames_duplicates_deletes_and_creates() {
+        let mut r = Rig::demo();
+        r.act("crumb");
+        r.act("brand");
+        assert!(r.has("new-assignment") && r.has("open-0"), "{:?}", r.app.controls().iter().map(|c| &c.id).collect::<Vec<_>>());
+        r.act("rename-0");
+        r.app.twin_text("rename-name-0", "Quiz 2");
+        r.frames(2);
+        r.act("rename-ok-0");
+        assert!(label_of(&r, "open-0").starts_with("Quiz 2."), "{}", label_of(&r, "open-0"));
+        r.act("duplicate-0");
+        assert!(r.has("open-1"));
+        r.act("delete-1");
+        assert!(r.has("delete-ok-1"));
+        r.act("delete-cancel-1");
+        assert!(r.has("open-1"), "cancel keeps it");
+        r.act("delete-1");
+        r.act("delete-ok-1");
+        assert!(!r.has("open-1"));
+        r.act("new-assignment");
+        r.app.twin_text("new-name", "Fresh start");
+        r.frames(2);
+        r.act("create-assignment");
+        assert_eq!(r.app.session().unwrap().a.meta.name(), "Fresh start");
+        assert!(!r.has("new-assignment"), "the new assignment is open, not the home screen");
+        // no pages yet: it opens on the overview, which offers Add pages (not an empty review screen)
+        assert_eq!(r.app.session().unwrap().view, vishion_ui::state::View::Inbox);
+        assert!(r.has("add-pages"));
+        r.act("add-pages");
+        assert!(r.has("add-choose"));
+    }
+
+    /// Opening a card from the home screen shows that assignment.
+    #[test]
+    fn home_open_goes_to_the_assignment() {
+        let mut r = Rig::demo();
+        r.act("crumb");
+        r.act("brand");
+        r.act("open-0");
+        assert!(!r.has("open-0"));
+        assert!(r.app.session().is_some());
+    }
+
+    /// Download zip writes `exports/<slug>.zip`, and what it holds reads back as the assignment's files.
+    #[test]
+    fn home_download_zip_round_trips_through_read_zip() {
+        let mut r = Rig::demo();
+        r.act("crumb");
+        r.act("brand");
+        r.act("zip-0");
+        let key = format!("{}/exports/{}.zip", r.slug, r.slug);
+        let bytes = block_on(vishion_store::Store::get(&r.be.projects.store, &key)).unwrap().expect("zip written");
+        let files = vishion_core::export::read_zip(&bytes).unwrap();
+        assert!(files.iter().any(|(k, _)| k.ends_with("/project.json")), "{:?}", files.iter().map(|f| &f.0).collect::<Vec<_>>());
+        assert!(files.iter().all(|(k, _)| !k.contains("/exports/")));
+    }
+
+    /// Assignment settings from the inbox: name and instructions save when the dialog closes, the subject
+    /// at once, and Reset to standard empties the instructions.
+    #[test]
+    fn assignment_settings_edit_name_subject_and_instructions() {
+        let mut r = Rig::demo();
+        r.act("crumb");
+        r.act("assignment-settings");
+        r.app.twin_text("as-name", "  Unit 9 quiz ");
+        r.app.twin_text("as-prompt", "Read carefully.");
+        r.frames(2);
+        // the subject list: pick the first option that is not the current subject
+        r.act("as-topic");
+        let ids: Vec<String> = r.app.controls().iter().filter(|c| c.id.starts_with("as-topic-")).map(|c| c.id.clone()).collect();
+        assert!(ids.len() > 1, "{ids:?}");
+        let cur = r.app.session().unwrap().a.meta.topic().to_string();
+        let other = ids.iter().find(|i| **i != format!("as-topic-{cur}")).unwrap().clone();
+        r.act(&other);
+        assert_eq!(format!("as-topic-{}", r.app.session().unwrap().a.meta.topic()), other);
+        r.act("dialog-close");
+        let m = &r.app.session().unwrap().a.meta;
+        assert_eq!((m.name(), m.prompt()), ("Unit 9 quiz", "Read carefully."));
+        // reset
+        r.act("assignment-settings");
+        r.act("as-reset");
+        r.act("dialog-close");
+        assert_eq!(r.app.session().unwrap().a.meta.prompt(), "");
+    }
+
+    /// The export dialog: scope, the summary of empty pages, Export anyway, and files landing in exports/.
+    #[test]
+    fn export_dialog_asks_before_exporting_empty_pages_and_writes_files() {
+        let mut r = Rig::demo();
+        r.act("crumb");
+        r.act("export");
+        assert!(r.has("ex-scope-all") && r.has("ex-all"));
+        // the demo assignment has pages without a transcript: the summary says so, and "Ready" has Ana only
+        assert!(label_of(&r, "ex-scope-ready").contains("(1)"), "{}", label_of(&r, "ex-scope-ready"));
+        r.act("ex-scope-ready");
+        // one ready page: nothing is empty, so no question is asked
+        r.act("ex-combined");
+        let key = format!("{}/exports/", r.slug);
+        let listed = block_on(vishion_store::Store::list(&r.be.projects.store, &key)).unwrap();
+        assert!(listed.iter().any(|k| k.ends_with(".md")), "{listed:?}");
+        // everyone: pages are empty, so a confirmation stacks on the dialog
+        r.act("ex-scope-all");
+        r.act("ex-csv");
+        assert!(r.has("dialog-ok") && label_of(&r, "dialog-ok") == "Export anyway");
+        r.act("dialog-ok");
+        let listed = block_on(vishion_store::Store::list(&r.be.projects.store, &key)).unwrap();
+        assert!(listed.iter().any(|k| k.ends_with("-index.csv")), "{listed:?}");
+        assert!(r.has("ex-all"), "back on the export dialog");
+        r.act("ex-cancel");
+        assert!(!r.has("ex-all"));
+    }
+
+    /// The subjects editor: add a subject with words, delete it (confirmed), restore the built-in set.
+    #[test]
+    fn subjects_editor_adds_edits_deletes_and_restores() {
+        let mut r = Rig::demo();
+        r.act("crumb");
+        r.act("assignment-settings");
+        r.act("as-edit-topics");
+        assert!(r.has("tp-topic") && r.has("tp-terms"));
+        r.act("tp-new-btn");
+        r.app.twin_text("tp-new", "Physics");
+        r.frames(2);
+        r.act("tp-add");
+        r.app.twin_text("tp-terms", "force, mass\nenergy");
+        r.frames(2);
+        r.act("dialog-close");
+        let st = &r.app.session().unwrap().settings;
+        assert_eq!(st.terms("Physics"), vec!["force", "mass", "energy"]);
+        // back on the assignment settings; open it again and delete Physics (it was the one shown)
+        assert!(r.has("as-name"));
+        r.act("as-edit-topics");
+        r.act("tp-topic");
+        r.act("tp-topic-Physics");
+        r.act("tp-delete");
+        assert_eq!(label_of(&r, "dialog-ok"), "Delete subject");
+        r.act("dialog-ok");
+        assert!(r.app.session().unwrap().settings.get("topics").unwrap().get("Physics").is_none());
+        // General stays
+        r.act("tp-delete");
+        assert!(!r.has("dialog-ok"));
+        // restore defaults is confirmed, then the built-in subjects are back
+        r.act("tp-restore");
+        r.act("dialog-ok");
+        let topics = r.app.session().unwrap().settings.get("topics").unwrap().clone();
+        assert!(topics.get("Medical").is_some() && topics.get("General").is_some());
+    }
+
+    fn png(w: u32, h: u32) -> Vec<u8> {
+        let mut out = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(w, h, image::Rgb([240, 240, 240])))
+            .write_to(&mut out, image::ImageFormat::Png)
+            .unwrap();
+        out.into_inner()
+    }
+
+    /// The Add screen: staged pictures with names, a skipped file, a chosen name, then Transcribe adds the
+    /// pages and starts the run.
+    #[test]
+    fn add_screen_stages_names_skips_and_commits() {
+        use crate::backend::Picked;
+        let mut r = Rig::demo();
+        r.act("crumb");
+        let before = r.app.session().unwrap().a.pages.len();
+        r.act("add-pages");
+        assert!(r.has("add-choose") && !r.has("add-commit") || r.has("add-commit"));
+        let conn = vishion_ui::Conn { demo: true, ..Default::default() };
+        let files = vec![
+            Picked { name: "page10.png".into(), bytes: png(300, 400) },
+            Picked { name: "page2.png".into(), bytes: png(300, 400) },
+            Picked { name: "notes.pdf".into(), bytes: vec![1, 2, 3] },
+        ];
+        let inbox = r.inbox.clone();
+        block_on(r.be.stage_files(files, &conn, true, None, &|e| inbox.push(e)));
+        r.frames(4);
+        let a = &r.app.session().unwrap().add;
+        assert_eq!(a.rows.len(), 2);
+        assert_eq!(a.rows[0].item.file_name, "page2.png", "natural order");
+        assert_eq!(a.skipped.len(), 1);
+        assert!(!a.working);
+        // choose a name for the first one by typing it
+        let k = a.rows[0].key;
+        r.act(&format!("staged-change-{k}"));
+        r.app.twin_text(&format!("staged-name-{k}"), "Nia W.");
+        r.frames(2);
+        r.act(&format!("staged-use-{k}"));
+        assert_eq!(r.app.session().unwrap().add.rows[0].item.name.as_deref(), Some("Nia W."));
+        r.act("add-commit");
+        let s = r.app.session().unwrap();
+        assert_eq!(s.a.pages.len(), before + 2);
+        assert_eq!(s.view, vishion_ui::state::View::Inbox);
+        assert!(s.a.pages.values().any(|p| p.student_name() == Some("Nia W.")));
+    }
+
+    /// Dropping pictures on the Add screen stages them like the picker does.
+    #[test]
+    fn add_screen_takes_dropped_files() {
+        let mut r = Rig::demo();
+        r.act("crumb");
+        r.act("add-pages");
+        r.drop_files(vec![("drop1.png".into(), png(200, 300)), ("readme.txt".into(), b"x".to_vec())]);
+        let a = &r.app.session().unwrap().add;
+        assert_eq!(a.rows.len(), 1, "{:?}", a.rows.len());
+        assert_eq!(a.rows[0].item.file_name, "drop1.png");
+        assert_eq!(a.skipped.len(), 1);
+    }
+
+    /// Phase 9a: every screen at a phone's width: every target is 44 x 44 and nothing runs past the right edge.
+    #[test]
+    fn phone_width_screens_fit_and_keep_44pt_targets() {
+        use crate::backend::Picked;
+        fn check(r: &Rig, what: &str, bad: &mut Vec<String>) {
+            for c in r.app.controls() {
+                // a control scrolled out of its dialog's body is reported with no size, or the sliver that shows
+                let hidden = c.size.0 == 0 || c.size.1 == 0 || (c.region == 4 && c.size.0 >= 44);
+                if !hidden && (c.size.0 < 44 || c.size.1 < 44) {
+                    bad.push(format!("{what}: {} is {:?}", c.id, c.size));
+                }
+                if c.at.0 < 0 || c.at.0 + c.size.0 as i32 > 391 {
+                    bad.push(format!("{what}: {} spans x {}..{}", c.id, c.at.0, c.at.0 + c.size.0 as i32));
+                }
+            }
+        }
+        let mut bad = vec![];
+        let mut r = Rig::sized(390.0, 844.0);
+        check(&r, "review", &mut bad);
+        r.act("crumb");
+        check(&r, "inbox", &mut bad);
+        r.act("assignment-settings");
+        check(&r, "assignment settings", &mut bad);
+        r.act("as-topic");
+        check(&r, "assignment settings, subject list", &mut bad);
+        r.act("as-topic");
+        r.act("as-edit-topics");
+        check(&r, "subjects", &mut bad);
+        r.act("tp-new-btn");
+        check(&r, "subjects, new subject", &mut bad);
+        r.act("tp-add-cancel");
+        r.act("dialog-close");
+        r.act("dialog-close");
+        r.act("export");
+        check(&r, "export", &mut bad);
+        r.act("ex-cancel");
+        r.act("settings");
+        check(&r, "settings", &mut bad);
+        r.act("dialog-close");
+        r.act("add-pages");
+        check(&r, "add, empty", &mut bad);
+        let conn = vishion_ui::Conn { demo: true, ..Default::default() };
+        let inbox = r.inbox.clone();
+        block_on(r.be.stage_files(vec![Picked { name: "page1.png".into(), bytes: png(200, 300) }], &conn, true, None, &|e| inbox.push(e)));
+        r.frames(4);
+        let k = r.app.session().unwrap().add.rows[0].key;
+        check(&r, "add, staged", &mut bad);
+        r.act(&format!("staged-change-{k}"));
+        check(&r, "add, choosing a student", &mut bad);
+        r.act("add-camera");
+        check(&r, "camera", &mut bad);
+        r.act("capture-close");
+        r.act("brand");
+        check(&r, "home", &mut bad);
+        assert!(bad.is_empty(), "{bad:#?}");
+    }
+
+    /// Capture on phone: frames with a page are recognised, the shutter keeps one, auto-capture takes the next
+    /// once the page holds still, and Done returns to the Add screen with the photos staged.
+    #[test]
+    fn camera_screen_finds_the_page_and_takes_photos() {
+        use vishion_ui::Event;
+        fn page_frame(w: usize, h: usize) -> Vec<u8> {
+            let mut v = vec![0u8; w * h * 4];
+            for y in 0..h {
+                for x in 0..w {
+                    let on = x > w / 5 && x < w * 4 / 5 && y > h / 10 && y < h * 9 / 10;
+                    let l = if on { 235 } else { 40 };
+                    let i = (y * w + x) * 4;
+                    v[i..i + 4].copy_from_slice(&[l, l, l, 255]);
+                }
+            }
+            v
+        }
+        let mut r = Rig::demo();
+        r.act("crumb");
+        r.act("add-pages");
+        r.act("add-camera");
+        assert!(r.has("capture-shutter") && r.has("capture-auto"));
+        assert!(r.app.session().unwrap().capture.error.is_some(), "native has no camera, and says so");
+        // the shutter has nothing to keep before the first frame
+        r.inbox.push(Event::CameraFrame { w: 320, h: 240, rgba: page_frame(320, 240) });
+        r.frames(3);
+        assert!(r.app.session().unwrap().capture.found.is_some());
+        assert!(r.app.session().unwrap().capture.error.is_none());
+        r.act("capture-shutter");
+        assert_eq!(r.app.session().unwrap().capture.shots, 1);
+        assert_eq!(r.app.session().unwrap().add.rows.len(), 1);
+        // auto: the page holds still for a while (after the shutter's cool-down)
+        for _ in 0..40 {
+            r.inbox.push(Event::CameraFrame { w: 320, h: 240, rgba: page_frame(320, 240) });
+        }
+        r.frames(4);
+        let s = r.app.session().unwrap();
+        assert_eq!(s.capture.shots, 2, "auto-capture took one more photo");
+        assert_eq!(s.add.rows.len(), 2);
+        r.act("capture-done");
+        assert_eq!(r.app.session().unwrap().view, vishion_ui::state::View::Add);
+        assert!(r.has("add-commit"));
+    }
+
+    /// The wordmark's scan-in (header.js `logo`): a bar sweeps across while the handwriting becomes type, once
+    /// after the page loads and again when the pointer arrives; at rest there is no bar.
+    #[test]
+    fn the_wordmark_scans_in_once_and_then_rests() {
+        fn bar(r: &Rig) -> bool {
+            r.out.shapes.iter().any(|s| match &s.shape {
+                egui::epaint::Shape::Rect(rc) => (rc.rect.width() - 1.52).abs() < 0.05 && (rc.rect.height() - 28.95).abs() < 0.1,
+                _ => false,
+            })
+        }
+        let mut r = Rig::demo();
+        // Rig::demo ran 8 frames: the scan starts on the third and is driven by capped frame times
+        assert!(bar(&r), "the bar is crossing during the scan-in");
+        r.frames(80);
+        assert!(!bar(&r), "the wordmark is at rest after the scan");
     }
 }

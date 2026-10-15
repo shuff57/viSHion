@@ -14,11 +14,84 @@ pub struct Conn {
     pub timeout_secs: u64,
     pub prompt: String,
     pub demo: bool,
+    /// `settings.provider`: which provider answers (`net::Provider::for_setting`).
+    pub provider: String,
+    /// `settings.guessIllegible` (default on): ask the model for likely words after a page is read.
+    pub guess: bool,
+    /// The teacher's earlier resolutions for the guess prompt (`W.referenceExamples`).
+    pub examples: Vec<String>,
+}
+
+/// A picture that is ready to be added: prepared (JPEG, at most 1600 px) and, perhaps, a name for its page.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StagedItem {
+    pub file_name: String,
+    pub bytes: Vec<u8>,
+    /// The student's name (read from the page, or chosen) and where it came from: `read` | `chosen` | `file`.
+    pub name: Option<String>,
+    pub source: String,
+}
+
+/// The storage card of the home screen (`S.d.folder`).
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct FolderInfo {
+    pub mode: String,
+    pub name: String,
+    pub permission: String,
+    /// The browser can pick folders.
+    pub supported: bool,
+}
+
+/// One assignment on the home screen (`fs.listProjects`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Card {
+    pub slug: String,
+    pub name: String,
+    pub pages: usize,
+    pub done: usize,
+    /// Last change, ms since the epoch.
+    pub updated: f64,
 }
 
 /// UI to host.
 #[derive(Debug)]
 pub enum Cmd {
+    /// The home screen's list: `Event::Projects`.
+    ListProjects,
+    /// Web: `choose` a folder to save in, `browser` storage instead, or `reconnect` the remembered folder.
+    Folder(String),
+    /// Ask for pictures and get each one ready for staging (`Event::Staged` one by one, `Event::Skipped` for
+    /// files that cannot be added). `preset` is a student chosen beforehand; otherwise, with `read_names`,
+    /// the model reads the name at the top of each page.
+    StagePictures { conn: Conn, read_names: bool, preset: Option<String> },
+    /// Stage pictures that were dropped on the window (name, bytes), as `StagePictures` stages the picked ones.
+    StageFiles { files: Vec<(String, Vec<u8>)>, conn: Conn, read_names: bool, preset: Option<String> },
+    /// Web: open the camera and send `Event::CameraFrame`s until `CameraStop`.
+    CameraStart,
+    CameraStop,
+    /// The shutter: keep this frame (RGBA, `w` x `h`) as a staged picture named `name`; answered by
+    /// `Event::Staged` like a picked file.
+    CaptureShot { name: String, w: u32, h: u32, rgba: Vec<u8>, conn: Conn, read_names: bool, preset: Option<String> },
+    /// Save the staged pictures as new pages: `Event::PagesAdded`.
+    CommitStaged { slug: String, items: Vec<StagedItem> },
+    /// Ask for a project zip and import it as a new assignment: `Event::Opened`.
+    ImportZip,
+    /// Bring sessions of the old single-file app into a new assignment: `Event::Opened`.
+    ImportLegacy,
+    /// Ask for a project folder and import it as a new assignment: `Event::Opened`.
+    ImportFolder,
+    /// Write `exports/<slug>.zip` with every file of the assignment (the home card's Download zip).
+    DownloadZip { slug: String },
+    /// Open another assignment: `Event::Opened`.
+    OpenProject { slug: String },
+    /// `fs.createProject` then open it: `Event::Opened`.
+    CreateProject { name: String },
+    /// `fs.renameProject`, then the list again.
+    RenameProject { slug: String, name: String },
+    /// `fs.duplicateProject`, then the list again.
+    DuplicateProject { slug: String },
+    /// `fs.deleteProject`, then the list again.
+    DeleteProject { slug: String },
     /// Read `<slug>/images/<id>.jpg`; answered by `Event::Image`.
     LoadImage { slug: String, id: String },
     /// `savePage`: written compact under the key the page was loaded from.
@@ -44,7 +117,7 @@ pub enum Cmd {
     /// sent (the worker may be busy reading), so it never needs an answer.
     Stop,
     /// Ask for likely words for the unreadable words of a page (`W.guess`): `Event::Guessed`.
-    Guess { slug: String, id: String, raw: String },
+    Guess { slug: String, id: String, raw: String, conn: Conn, examples: Vec<String> },
     /// Write `exports/<name>` (the strip's "Export N selected").
     Export { slug: String, name: String, bytes: Vec<u8> },
     /// Web: fetch the STIX Two Math font once (it is not part of the wasm, plan risk "wasm size").
@@ -71,6 +144,20 @@ pub enum Event {
         /// The assignment came from the backup copy of a damaged `project.json`.
         notice: Option<String>,
     },
+    /// Whether Home offers "Import old sessions".
+    LegacyAvailable(bool),
+    /// Where assignments are saved (web): `mode` is `none` | `folder` | `idb`, `permission` `granted` | `prompt`.
+    Folder(FolderInfo),
+    /// A frame of the camera (RGBA).
+    CameraFrame { w: u32, h: u32, rgba: Vec<u8> },
+    /// The camera could not be opened (the person said no, or there is none).
+    CameraError(String),
+    /// One picture is ready to stage. `names_down`: the name reader could not reach the server.
+    Staged { item: StagedItem, names_down: bool },
+    /// Files that cannot be added, with the reason each.
+    Skipped(Vec<(String, String)>),
+    /// The assignments the home screen lists.
+    Projects(Vec<Card>),
     /// The store holds no assignment.
     Empty { storage: String },
     /// Opening failed (the message is shown on screen; nothing is written).

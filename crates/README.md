@@ -74,6 +74,24 @@ node check-assetsignore.mjs
 
 Windows default Chrome path is `C:/Program Files/Google/Chrome/Application/chrome.exe`; Linux `/usr/bin/google-chrome`.
 
+## Capture on phone (Phase 9b)
+
+`View::Capture` is `design/Phone.dc.html`: the Add screen's "Use the camera" (web only) opens the viewfinder.
+The browser side (`app::camera`) sends `Event::CameraFrame`s (RGBA, at most 960 wide, about 6 a second); the
+page is found by `core::capture::detect_page` (a bright, even region covering a quarter of the frame or
+more), and `Steady` fires auto-capture after the page holds still for 12 frames. The shutter (or auto) sends
+`Cmd::CaptureShot`, which stages the frame like a picked file (name reading included); Done returns to the
+Add screen with the photos in the list. The page detector is a heuristic, not a corner finder: it frames the
+bright region's box and does not straighten (the staging step's Straighten still applies).
+
+## Opening the web build
+
+The web build is a wasm module and needs a web server: it does not run from a `file://` page, so opening
+`index.html` from disk does not work (decision recorded in `docs/RUST-REWRITE-PLAN.md`). Serve the output
+folder with `wrangler dev`, or any static host that sends the CSP below (it needs `'wasm-unsafe-eval'`).
+Folder saving in the browser needs Chrome or Edge (File System Access); other browsers keep work in
+IndexedDB, and Home says so.
+
 ## CSP
 
 `build.mjs` takes the policy from the repo-root `_headers` unchanged and appends `'wasm-unsafe-eval'` and the
@@ -96,7 +114,32 @@ whenever the inline bootstrap script in `crates/app/web/index.html` changes, so 
   activating a flagged word).
 - tray: choices, typed fix, step, close (Escape inside it closes it and returns focus to a word).
 - dialogs: Change student, confirmations, Settings (theme). Modal: only its controls are in the twin.
-- inbox: a minimal assignment overview the crumb and the last student's Done return to (full inbox is phase 5).
+- inbox: the assignment overview the crumb and the last student's Done return to (tabs, run bar, rows).
+- assignment settings (Phase 6): the inbox's "Assignment settings" opens a dialog for the name, subject (select over
+  `settings.topics`) and instructions (multi-line, "Reset to standard"); name and instructions are saved when it
+  closes, the subject at once (`dialog::Dialog::Assignment`, `Out::Meta`).
+- export (Phase 6): the inbox's Export opens `Dialog::Export` (scope everyone / ready / selected, the three export
+  selects saved to settings, a summary of empty pages, one button per kind and Download all). Empty pages ask
+  first (Export anyway); files land in `exports/` through `Cmd::Export`, "Copy all text" uses the clipboard.
+- subjects and words (Phase 6): "Edit subjects and their words" in Assignment settings opens `Dialog::Topics`
+  (stacked on it): pick, description, words (one per line or commas), New subject, Delete subject (General stays;
+  confirmed), Restore defaults (confirmed). Typed text is saved on every change of subject and on Done.
+- add pages (Phase 5): the inbox's "Add pages" opens `View::Add`: Choose files (`Cmd::StagePictures`; each file
+  checked like `image.check`, shrunk, levelled when the setting says so, and its name read from the top 14% by
+  the model, or from the sample names in demo mode), staged rows with a student chooser (known names or a typed
+  one) and Remove, skipped-file and names-down notices, the subject, "Read the name" switch, and Transcribe N
+  pages (`Cmd::CommitStaged`, then the run starts). Files dropped on the window are staged too (`Cmd::StageFiles`; a native folder is walked). Not yet: paste
+  (egui has no image paste) and the full-size look at a photo with its lines.
+- home (`ui::home`, Phase 5): the wordmark on the inbox goes there, and an empty store starts there. Lists the
+  assignments (`Cmd::ListProjects` -> `Event::Projects`), opens one, creates, renames, duplicates and deletes
+  (inline fields and an inline confirm instead of dialogs, so it works with no session). Import zip (`core::export::read_zip`, stored and deflated
+  entries) and Download zip (writes `exports/<slug>.zip`, `Cmd::DownloadZip`) are in. Import folder
+  (`Cmd::ImportFolder`: a native folder dialog, `webkitdirectory` on the web) is in too. The storage card has the JS app's four states on the web (choose a folder, reconnect, saving in
+  this browser, saving to a folder): `Cmd::Folder(choose|browser|reconnect)` stores or clears the handle as
+  `kv/root` in `ocr_fs` and reloads, and boot uses the folder when its permission is still granted
+  (`AnyStore::Fsa`). "Import old sessions" (`Cmd::ImportLegacy`) reads the old app's `ocr_sessions_v2` and `ocr_images` in place on
+  the web, and an exported JSON file natively (`[sessions]` or `{ sessions, images }`); pictures are shrunk, applied
+  corrections stay resolved, line boxes come from the ink scan when the page opens.
 
 Flows are `ui::state::Session` over `core::words` (`choose`, `use_all`, which call `core::judge::toggle`),
 `core::groups`, `core::export`. The screen never touches storage: it sends `host::Cmd`s (`LoadImage`,
@@ -113,8 +156,8 @@ Flows are `ui::state::Session` over `core::words` (`choose`, `use_all`, which ca
   TrueType in `ui/assets/fonts`; egui's own faces are not linked (`latex-rust` is vendored to keep them out).
 - Math: `ui::math` is the only user of latex-rust; a layout error shows the TeX in red monospace. On the web the
   font is fetched on first use and the TeX shows muted until it arrives.
-- Honest gaps: Straighten (needs the imaging port, phase 5) and Transcribe / Retry (need `net`, phase 3) reach the
-  host and answer with a notice saying so; "Suggest likely words" is still absent.
+- Honest gaps: none known in this screen beyond the open items in the plan. Transcribe / Retry go through `net` and
+  "Suggest likely words" asks the model (also automatically after a read, when `guessIllegible` is not off).
 - wasm: about 4.0 MB (1.7 MB gzip) from 7.3 MB (3.2 MB gzip): no egui default fonts (-1.4 MB), math font
   out of the wasm (-0.84 MB), `opt-level=z`, `strip`, `panic=abort`, wasm-opt -Oz.
 
@@ -145,12 +188,19 @@ closing it returns focus to what opened it. The line being read is `data-reading
 - Do not use `std::time::Instant` or `SystemTime` in code that runs on wasm32 (it panics); use egui time.
 - `cargo test` must pass natively; wasm builds with `--target wasm32-unknown-unknown` (CI does both).
 
+## Providers
+
+`vishion_net::Provider` is the seam to a model API (`transcribe` streams a page, `complete` returns one answer).
+`Provider::for_setting(settings.provider)` picks it: every provider the Settings select lists (local, Ollama
+Cloud, OpenRouter, custom) is `OpenAiCompatible`; `mock` answers from memory (tests, trying the seam). The
+backend reads, reads names and guesses only through it, so another API is one more variant.
+
 ## Demo mode and reading pages
 
 `--demo`, `?demo=1` and the `demo` setting answer Retry, Transcribe, Transcribe again and the inbox's Resume
 with the sample transcripts of js/ocr.js (`core::demo`), run the offline judge over them, and add the sample
-guesses for unreadable words, exactly as the JS app's demo mode does. Without demo mode the host says the OCR
-connection is not there yet (phase 3) and leaves the page alone. Straighten is a port of js/deskew.js
+guesses for unreadable words, exactly as the JS app's demo mode does. Without demo mode, reading goes to the server (`net`) and Guess asks the same model for likely words
+(`net::complete`, js/guess.js prompt, `core::guess::parse_guesses`). Straighten is a port of js/deskew.js
 (`app::pictures::deskew`), also applied to pictures picked with Replace and Add page.
 
 ## Review-screen tests

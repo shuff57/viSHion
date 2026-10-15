@@ -315,13 +315,23 @@ mod tests {
         let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let url = format!("http://{}", l.local_addr().unwrap());
         std::thread::spawn(move || {
-            let (mut s, _) = l.accept().unwrap();
-            // the request is a JSON body with a JPEG in it: read until the client has stopped sending
-            s.set_read_timeout(Some(std::time::Duration::from_millis(300))).unwrap();
-            let mut b = [0u8; 65536];
-            while s.read(&mut b).map_or(false, |n| n > 0) {}
-            let r = "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\ndata: {\"choices\":[{\"delta\":{\"content\":\"```\\nHello\"}}]}\n\ndata: {\"choices\":[{\"delta\":{\"content\":\" world\\n```\"}}],\"usage\":{\"completion_tokens\":2}}\n\ndata: [DONE]\n\n";
-            s.write_all(r.as_bytes()).unwrap();
+            // /slots is polled while the page is read; only the POST gets the stream
+            for conn in l.incoming() {
+                let Ok(mut s) = conn else { return };
+                std::thread::spawn(move || {
+                    let mut b = [0u8; 65536];
+                    let n = s.read(&mut b).unwrap_or(0);
+                    if b[..n].starts_with(b"GET ") {
+                        let _ = s.write_all(b"HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
+                        return;
+                    }
+                    // the request is a JSON body with a JPEG in it: read until the client has stopped sending
+                    s.set_read_timeout(Some(std::time::Duration::from_millis(300))).unwrap();
+                    while s.read(&mut b).map_or(false, |n| n > 0) {}
+                    let r = "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\ndata: {\"choices\":[{\"delta\":{\"content\":\"```\\nHello\"}}]}\n\ndata: {\"choices\":[{\"delta\":{\"content\":\" world\\n```\"}}],\"usage\":{\"completion_tokens\":2}}\n\ndata: [DONE]\n\n";
+                    s.write_all(r.as_bytes()).unwrap();
+                });
+            }
         });
         let (store, slug) = block_on(seed(1)).unwrap();
         let be = Backend::new(store, "Saved");
@@ -337,6 +347,156 @@ mod tests {
         // read_pages resets the flag at the start of a run (a Stop belongs to the run in progress)
         block_on(be.read_pages(&slug, vec!["p-maya-1".into()], conn, &|e| out.borrow_mut().push(e)));
         assert!(out.borrow().iter().any(|e| matches!(e, Event::Transcribed { outcome: vishion_ui::ReadOutcome::Unreachable(_), .. })));
+    }
+
+    /// Phase 3: the judge model's likely words come back from the server, cleaned like `W.parseGuesses`.
+    #[test]
+    fn guesses_are_asked_of_the_server_outside_demo_mode() {
+        use std::io::{Read, Write};
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", l.local_addr().unwrap());
+        std::thread::spawn(move || {
+            let (mut s, _) = l.accept().unwrap();
+            s.set_read_timeout(Some(std::time::Duration::from_millis(300))).unwrap();
+            let mut b = [0u8; 65536];
+            while s.read(&mut b).map_or(false, |n| n > 0) {}
+            let content = r#"Sure: [{"n":1,"options":[{"text":"discriminant","percent":60},{"text":"determinant","percent":25}]}]"#;
+            let j = serde_json::json!({"choices": [{"message": {"content": content}}]}).to_string();
+            let r = format!("HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{j}", j.len());
+            s.write_all(r.as_bytes()).unwrap();
+        });
+        let (store, slug) = block_on(seed(1)).unwrap();
+        let be = Backend::new(store, "Saved");
+        let conn = vishion_ui::Conn { url, timeout_secs: 5, ..Default::default() };
+        let ev = block_on(be.handle(Cmd::Guess { slug, id: "p-maya-1".into(), raw: "the [illegible] root".into(), conn, examples: vec![] }, 0));
+        let Event::Guessed { result: Ok(g), .. } = ev else { panic!("{ev:?}") };
+        assert_eq!(g["i:0"][0]["text"], "discriminant");
+        assert_eq!(g["i:0"][1]["percent"], 25);
+    }
+
+    /// `autoGuess`: a page read from the server that has an unreadable word is asked again for likely words.
+    #[test]
+    fn a_page_with_unreadable_words_gets_guesses_after_reading() {
+        use std::io::{Read, Write};
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", l.local_addr().unwrap());
+        std::thread::spawn(move || {
+            for conn in l.incoming() {
+                let Ok(mut s) = conn else { return };
+                std::thread::spawn(move || {
+                    s.set_read_timeout(Some(std::time::Duration::from_millis(300))).unwrap();
+                    let mut b = [0u8; 65536];
+                    let mut req = Vec::new();
+                    while let Ok(n) = s.read(&mut b) {
+                        if n == 0 {
+                            break;
+                        }
+                        req.extend_from_slice(&b[..n]);
+                    }
+                    let req = String::from_utf8_lossy(&req).to_string();
+                    let reply = if req.starts_with("GET ") {
+                        "HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Length: 0\r\n\r\n".to_string()
+                    } else if req.contains("\"stream\":true") {
+                        "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\ndata: {\"choices\":[{\"delta\":{\"content\":\"The [illegible] root\"}}],\"usage\":{\"completion_tokens\":3}}\n\ndata: [DONE]\n\n".to_string()
+                    } else {
+                        let c = r#"[{"n":1,"options":[{"text":"discriminant","percent":70}]}]"#;
+                        let j = serde_json::json!({"choices": [{"message": {"content": c}}]}).to_string();
+                        format!("HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{j}", j.len())
+                    };
+                    let _ = s.write_all(reply.as_bytes());
+                });
+            }
+        });
+        let (store, slug) = block_on(seed(1)).unwrap();
+        let be = Backend::new(store, "Saved");
+        let conn = vishion_ui::Conn { url: url.clone(), timeout_secs: 5, guess: true, ..Default::default() };
+        let Event::Many(evs) = block_on(be.handle(Cmd::Transcribe { slug: slug.clone(), ids: vec!["p-maya-1".into()], conn }, 0)) else { panic!() };
+        let g = evs.iter().find_map(|e| match e {
+            Event::Transcribed { outcome: vishion_ui::ReadOutcome::Done { guesses, .. }, .. } => Some(guesses.clone()),
+            _ => None,
+        });
+        assert_eq!(g.flatten().unwrap()["i:0"][0]["text"], "discriminant");
+        // switched off: the page is read and left alone
+        let conn = vishion_ui::Conn { url, timeout_secs: 5, guess: false, ..Default::default() };
+        let Event::Many(evs) = block_on(be.handle(Cmd::Transcribe { slug, ids: vec!["p-maya-1".into()], conn }, 0)) else { panic!() };
+        assert!(evs.iter().any(|e| matches!(e, Event::Transcribed { outcome: vishion_ui::ReadOutcome::Done { guesses: None, .. }, .. })));
+    }
+
+    /// Import folder: a stored assignment folder is read back with its folder name in front, and imported
+    /// as a new assignment under a fresh slug.
+    #[test]
+    fn a_project_folder_imports_as_a_new_assignment() {
+        let dir = std::env::temp_dir().join(format!("vishion-folder-import-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = AnyStore::Fs(vishion_store::fs::FsStore::new(&dir));
+        let (_store, slug) = block_on(seed_into(store, 1_700_000_000_000)).unwrap();
+        let files = crate::backend::read_folder(&dir.join(&slug));
+        assert!(files.iter().any(|f| f.name == format!("{slug}/project.json")), "{:?}", files.iter().map(|f| &f.name).collect::<Vec<_>>());
+        let (target, _) = block_on(seed(1)).unwrap();
+        let be = Backend::new(target, "Saved");
+        let entries: Vec<(String, Vec<u8>)> = files.into_iter().map(|f| (f.name, f.bytes)).collect();
+        let new_slug = block_on(be.projects.import_files(&entries)).unwrap();
+        let Event::Opened { assignment, .. } = block_on(be.open(Some(&new_slug), 5)) else { panic!("open") };
+        assert!(assignment.page("p-maya-1").is_some());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Old sessions: a session with text and a picture becomes a page of a new assignment named like the old
+    /// app's import, with its applied corrections kept as resolved.
+    #[test]
+    fn old_sessions_import_as_a_new_assignment() {
+        fn b64(data: &[u8]) -> String {
+            const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+            let mut out = String::new();
+            for c in data.chunks(3) {
+                let n = (c[0] as u32) << 16 | (*c.get(1).unwrap_or(&0) as u32) << 8 | *c.get(2).unwrap_or(&0) as u32;
+                for i in 0..4 {
+                    if i <= c.len() {
+                        out.push(T[(n >> (18 - 6 * i) & 63) as usize] as char);
+                    } else {
+                        out.push('=');
+                    }
+                }
+            }
+            out
+        }
+        let mut png = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(40, 30, image::Rgb([250, 250, 250])))
+            .write_to(&mut png, image::ImageFormat::Png)
+            .unwrap();
+        let url = format!("data:image/png;base64,{}", b64(&png.into_inner()));
+        let sessions: Vec<serde_json::Value> = vec![
+            serde_json::json!({"id": "s1", "name": "page one", "lastRaw": "The derivitive", "preRaw": "The derivitive", "created": 2,
+                "appliedDiff": [{"orig": "derivitive", "term": "derivative"}], "topic": "Medical"}),
+            serde_json::json!({"id": "s2", "name": "page zero", "lastRaw": "Hello", "created": 1}),
+        ];
+        let images: std::collections::BTreeMap<String, String> = [("s1".to_string(), url)].into();
+        let (store, _) = block_on(seed(1)).unwrap();
+        let be = Backend::new(store, "Saved");
+        let ev = block_on(be.import_legacy_from(&sessions, &images, 1_700_000_000_000));
+        let Event::Many(evs) = ev else { panic!("{ev:?}") };
+        let Some(Event::Opened { assignment, .. }) = evs.into_iter().find(|e| matches!(e, Event::Opened { .. })) else { panic!("not opened") };
+        assert_eq!(assignment.meta.name(), "Imported from the old app");
+        assert_eq!(assignment.meta.topic(), "Medical");
+        assert_eq!(assignment.pages.len(), 2);
+        let with_corr = assignment.pages.values().find(|p| p.raw() == "The derivitive").unwrap();
+        assert_eq!(with_corr.status(), "done");
+        assert_eq!(with_corr.resolved().get("c:0").and_then(|v| v.as_str()), Some("suggested"));
+    }
+
+    /// Phase 8: the provider is picked by the `provider` setting, so a mock answers with no server at all, for
+    /// reading, name reading and guesses.
+    #[test]
+    fn a_mock_provider_answers_without_a_server() {
+        let (store, slug) = block_on(seed(1)).unwrap();
+        let be = Backend::new(store, "Saved");
+        let conn = vishion_ui::Conn { url: "http://127.0.0.1:1".into(), timeout_secs: 5, provider: "mock".into(), ..Default::default() };
+        let Event::Many(evs) = block_on(be.handle(Cmd::Transcribe { slug: slug.clone(), ids: vec!["p-maya-1".into()], conn: conn.clone() }, 0)) else { panic!() };
+        assert!(evs.iter().any(|e| matches!(e, Event::Transcribed { outcome: vishion_ui::ReadOutcome::Done { raw, .. }, .. } if raw == "A mock transcript.")), "{evs:?}");
+        // a guess is answered by the mock's canned reply: an empty list parses to no guesses
+        let ev = block_on(be.handle(Cmd::Guess { slug, id: "p-maya-1".into(), raw: "a [illegible] word".into(), conn, examples: vec![] }, 0));
+        let Event::Guessed { result: Ok(g), .. } = ev else { panic!("{ev:?}") };
+        assert!(g.is_empty());
     }
 
     /// The native path: a real folder, written and read back through `FsStore` and the project layer.

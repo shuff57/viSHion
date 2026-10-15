@@ -71,12 +71,15 @@ Each phase ends with a runnable build on both targets and a parity check against
 | 0 | Workspace + CI | Cargo workspace, native + wasm builds, `wrangler dev` serving the web build with prod CSP | Both targets boot an empty app; CI runs `cargo test` and the CSP check. |
 | 1 | `core` data + words | model, words, judge, groups, render pipeline, export | Ported JS tests pass; S5 corpus gives identical units/pieces; export bytes match JS on fixtures. |
 | 2 | `store` | idb + fsa + native fs, legacy import | S3 `run.mjs` oracle test passes on all modes; old projects open unchanged in both directions. |
-| 3 | `net` + queue | streaming client, run/stop/retry/resume | S4 scenario table passes; demo mode works end to end. **Done** for the client: mock-server tests cover streaming, partial on a dropped stream, 503, dead port and Stop; demo mode unchanged. Not done: `/slots` progress polling, the judge-model Guess outside demo mode, and a run of the web transport against a real server. |
+| 3 | `net` + queue | streaming client, run/stop/retry/resume | S4 scenario table passes; demo mode works end to end. **Done** for the client: mock-server tests cover streaming, partial on a dropped stream, 503, dead port and Stop; demo mode unchanged. `/slots` progress polling is in (`net::slots`, native thread and web `select`; tested against a mock). The judge-model Guess works outside demo mode (`net::complete`, `core::guess::prompt`; tested against a mock). The automatic guess after a read (`autoGuess`) is in. Not done: a run of the web transport against a real server. |
 | 4 | Review screen | Main screen with math, tray, strip, hidden twin | S8 test suite passes; NVDA smoke test; 44px targets. |
-| 5 | Home, inbox, add | remaining screens, drag-reorder, rotate/replace page | Feature list in `README.md` screens table complete. |
-| 6 | Dialogs | settings, assignment settings, export, topics | Same fields as today; export parity. |
-| 7 | Polish + parity | fonts bundled, dark theme, reduced motion, contrast audit | Side-by-side walkthrough vs JS app with no feature gaps. |
-| 8 | Cutover | deploy web build to the existing route, ship desktop installers | JS app kept on a `/legacy` path for one release. |
+| 5 | Home, inbox, add | remaining screens, drag-reorder, rotate/replace page | Feature list in `README.md` screens table complete. **In progress**: inbox and Home (list, open, create, rename, duplicate, delete) are in. Zip and folder import and Download zip are in. Home's folder card (File System Access folders on the web) is in. Old-session import (web storage, native JSON file) is in. Drop on the Add screen is in. Not done: paste and the photo preview on the Add screen. The Add staging screen (choose, name reading, chooser, commit) and Assignment settings entry are in. |
+| 6 | Dialogs | settings, assignment settings, export, topics | Same fields as today; export parity. **Done** (Settings, Assignment settings, Export, Subjects and words). |
+| 7 | Polish + parity | fonts bundled, dark theme, reduced motion, contrast audit | Side-by-side walkthrough vs JS app with no feature gaps. **In progress**: a token-level contrast test (4.5:1 for text pairs, both themes and both high-contrast variants) is in; placeholder text in the dark theme was 3.7:1 and now uses `muted`. Reduced motion is in on the web (no easing, a still spinner; native has no system query yet). Not done: the side-by-side walkthrough against the JS app. |
+| 8 | Provider abstraction | `net::Provider` trait, OpenAI-compatible impl, settings pick by id | Existing `net` tests pass through the trait; a second (mock) provider is selectable. **Done**: `net::Provider` (OpenAI-compatible and Mock), picked by `settings.provider`; reading, name reading and guesses go through it. |
+| 9a | Phone fit | Home, inbox, review, Add and the dialogs at 390 x 844 | Every target 44 x 44, nothing past the right edge. **Done**: a rig test walks all of them; the inbox header drops its right group to its own row like the review header does. |
+| 9b | Capture on phone | `design/Phone.dc.html` is a camera capture screen (viewfinder, page-found detection, shutter, captured-pages thumbnail, auto toggle), not a phone version of the other screens | Web: getUserMedia viewfinder and a page-corner detector feed the Add staging step; auto-capture toggle. **Built**: `core::capture` (detector, steady counter, tested), `View::Capture`, `app::camera` (web). Camera access itself is untested here: needs a browser with a camera. |
+| 10 | Cutover | deploy web build to the existing route, ship the plain desktop binaries | JS app kept on a `/legacy` path for one release. |
 
 Rough order of risk: phase 4 first (earliest real validation of the UI), then 2 (data loss is the worst failure).
 If staffing is one person, do 0, 1, 4, then 2, 3, 5, 6, 7.
@@ -103,13 +106,18 @@ If staffing is one person, do 0, 1, 4, then 2, 3, 5, 6, 7.
 | Mobile web keyboard / IME on canvas | poor phone editing | out of scope for v1 (`Phone.dc.html` is already "later"). |
 | egui and `latex-rust` version pinning | upgrade friction | isolate math behind `ui::math`, so it can be swapped. |
 
-## Open decisions
+## Decisions
 
-1. Desktop distribution: plain eframe binary, or wrap in an installer (MSI/dmg)? Needs a signing story.
-2. Keep `llama.cpp` as the only backend, or abstract the OCR provider in `net` now?
-3. Is dropping `file://` acceptable for teachers who open `index.html` directly today?
-4. Phone layout (`Phone.dc.html`): egui responsive layout, or leave for the web DOM later?
+1. **Web storage**: add File System Access folders (Chrome/Edge) beside IndexedDB, with the choose / reconnect
+   card on Home. Other browsers stay on IndexedDB.
+2. **Old single-file sessions**: import on web (the old app's browser storage) and on native (an exported
+   legacy session file).
+3. **Desktop distribution**: plain eframe binary per platform; no installer or signing for v1.
+4. **`file://`**: dropped. The wasm build needs a server; the README says so.
+5. **OCR provider**: abstract it in `net` now (a trait over "read a page" and "complete a prompt"), with the
+   OpenAI-compatible client as the first implementation.
+6. **Phone layout**: build it in egui now, following `design/Phone.dc.html`, for Home, inbox, review and Add.
 
 ## Not in scope for v1
 
-Phone layout, new model features, server-side storage, multi-user sync.
+New model features, server-side storage, multi-user sync.

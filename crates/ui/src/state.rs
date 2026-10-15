@@ -152,6 +152,52 @@ pub const ZOOMS: [f32; 5] = [1.0, 1.5, 2.0, 3.0, 4.0];
 pub enum View {
     Review,
     Inbox,
+    /// js/ui/add.js: the staging step in front of adding pages.
+    Add,
+    /// `design/Phone.dc.html`: the camera.
+    Capture,
+}
+
+/// The camera screen's state.
+#[derive(Debug, Default)]
+pub struct CaptureState {
+    /// The latest frame, kept for the shutter.
+    pub frame: Option<(u32, u32, Vec<u8>)>,
+    pub found: Option<vishion_core::capture::Found>,
+    pub steady: vishion_core::capture::Steady,
+    /// Take the photo by itself once the page holds still.
+    pub auto: bool,
+    /// Photos taken in this visit.
+    pub shots: usize,
+    pub error: Option<String>,
+    /// Frames to ignore after a shot, so one page is not taken twice.
+    pub cooldown: u32,
+}
+
+/// One picture waiting in the Add screen.
+#[derive(Clone, Debug, PartialEq)]
+pub struct StagedRow {
+    pub key: u64,
+    pub item: crate::host::StagedItem,
+    /// The "who is this" chooser is open for this row.
+    pub picking: bool,
+    /// What is typed in its name box.
+    pub draft: String,
+}
+
+/// The Add screen's state (`staged`, `skipped`, `nameDown`, `preset` of js/ui/add.js).
+#[derive(Default, Debug)]
+pub struct AddState {
+    pub rows: Vec<StagedRow>,
+    pub skipped: Vec<(String, String)>,
+    pub names_down: bool,
+    /// Pictures are being prepared and read for names.
+    pub working: bool,
+    /// A student chosen beforehand ("Add pages for Maya").
+    pub preset: Option<String>,
+    pub seq: u64,
+    /// The pages just committed are to be read when the host answers.
+    pub starting: bool,
 }
 
 pub struct Session {
@@ -171,6 +217,8 @@ pub struct Session {
     pub dirty: Dirty,
     pub now: i64,
     pub view: View,
+    pub add: AddState,
+    pub capture: CaptureState,
     /// `S.d.textView === 'raw'`: the transcript as plain monospace text.
     pub text_raw: bool,
     /// Zoom of the page pane, one of `ZOOMS`.
@@ -238,6 +286,8 @@ impl Session {
             dirty: Dirty::default(),
             now,
             view: View::Review,
+            add: AddState::default(),
+            capture: CaptureState { auto: true, ..Default::default() },
             text_raw: false,
             zoom: 1.0,
             multi: BTreeSet::new(),
@@ -1029,6 +1079,36 @@ impl Session {
         self.sync_tray();
     }
 
+    /// `openExport`'s `chosen()` with `flatten`: page copies named after the student (`<name> page N` when a
+    /// student has several), ordered within the student. `scope`: `all` | `ready` | `selected`.
+    pub fn export_pages(&self, scope: &str) -> Vec<Page> {
+        let mut out = vec![];
+        for g in self.groups() {
+            if scope == "ready" && g.status != groups::Status::Ready {
+                continue;
+            }
+            let ids: Vec<&String> = g.pages.iter().filter(|id| scope != "selected" || self.multi.contains(*id)).collect();
+            let n = ids.len();
+            for (i, id) in ids.into_iter().enumerate() {
+                let Some(p) = self.a.page(id) else { continue };
+                let mut c = p.clone();
+                c.set("order", json!(i));
+                c.set("name", json!(if n > 1 { format!("{} page {}", g.name, i + 1) } else { g.name.clone() }));
+                let mut st = c.get("student").and_then(Value::as_object).cloned().unwrap_or_default();
+                st.insert("name".into(), json!(g.name));
+                c.set("student", Value::Object(st));
+                out.push(c);
+            }
+        }
+        out
+    }
+
+    /// `S.updateMeta({ key })`: one field of the assignment's `project.json`.
+    pub fn set_meta(&mut self, key: &str, v: Value) {
+        self.a.meta.set(key, v);
+        self.dirty.meta = true;
+    }
+
     /// Pages the host created for a student (picture already stored). They are saved like any edit.
     pub fn pages_added(&mut self, list: Vec<Page>) {
         let ids: Vec<String> = list.iter().map(|p| p.id().to_string()).collect();
@@ -1095,6 +1175,11 @@ impl Session {
         n
     }
 
+    /// The teacher's earlier resolutions for this topic, as the guess prompt quotes them (`W.referenceExamples`).
+    pub fn reference_examples(&self) -> Vec<String> {
+        vishion_core::words::reference_examples(&self.settings, self.a.meta.topic(), Some(10))
+    }
+
     /// How to reach the OCR server for a run (`S.d.settings`, `O.buildPrompt`).
     pub fn read_conn(&self) -> crate::host::Conn {
         let st = &self.settings;
@@ -1106,6 +1191,9 @@ impl Session {
             timeout_secs: st.get("timeoutSec").and_then(Value::as_u64).filter(|n| *n > 0).unwrap_or(180),
             prompt: vishion_core::words::build_prompt(st, &self.a.meta),
             demo: st.get("demo").and_then(Value::as_bool) == Some(true),
+            provider: text("provider"),
+            guess: st.get("guessIllegible").and_then(Value::as_bool) != Some(false),
+            examples: self.reference_examples(),
         }
     }
 

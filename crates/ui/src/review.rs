@@ -98,8 +98,25 @@ pub(crate) enum Act {
     Transcribe(String, bool),
     Guess(String),
     OpenSettings,
+    OpenAssignment,
+    OpenExport,
+    OpenAdd(Option<String>),
+    AddChoose,
+    OpenCapture,
+    CaptureShot,
+    CaptureAuto(bool),
+    CaptureClose,
+    AddDropped(Vec<(String, Vec<u8>)>),
+    AddRemove(u64),
+    AddPick(u64),
+    AddName(u64, String),
+    AddDraft(u64, String),
+    AddCommit,
+    AddSubject(String),
+    AddReadNames(bool),
     CloseDialog,
     Inbox,
+    Home,
     OpenReview(String),
     ExportSelected,
     ReviewAgain,
@@ -127,6 +144,7 @@ struct Cx<'a> {
     screen_h: f32,
     stage: &'a mut Stage,
     emoji: &'a mut emoji::EmojiCache,
+    camera: Option<&'a egui::TextureHandle>,
     /// Page pictures a row asks for (visible thumbnails): loaded by the host, answered as `Event::Image`.
     want: &'a mut Vec<String>,
     /// Keep the reading line in view this frame.
@@ -205,7 +223,7 @@ fn tw(ui: &Ui, text: &str, font: egui::FontId) -> f32 {
 }
 
 pub(crate) fn show(app: &mut App, ctx: &egui::Context, t: &Tokens) {
-    let App { ctl, session, math, images, typed, typed_for, status_msg, status_err, boot, notice, save, storage, dialog, stage, host, want, emoji: emoji_cache, .. } = app;
+    let App { cam_tex, home, ctl, session, math, images, typed, typed_for, status_msg, status_err, boot, notice, save, storage, dialog, stage, host, want, emoji: emoji_cache, .. } = app;
     let mut acts: Vec<Act> = vec![];
     if let Some(s) = session.as_mut() {
         // js renderWho: Original cannot stay set where both versions read the same
@@ -226,7 +244,19 @@ pub(crate) fn show(app: &mut App, ctx: &egui::Context, t: &Tokens) {
         ctx.request_repaint();
     }
     let narrow = screen.width() < NARROW || short;
+    let show_home = home.active || matches!(boot, Boot::Empty);
+    let mut home_acts = vec![];
+    if show_home {
+        if home.cards.is_none() && !home.asked {
+            home.asked = true;
+            if let Some((d, _)) = host.as_ref() {
+                d(Cmd::ListProjects);
+            }
+        }
+        home_acts = crate::home::show(ctx, &mut *ctl, t, &mut *home, storage, narrow, crate::now_ms());
+    }
     match (&*boot, session.as_ref()) {
+        (_, _) if show_home => {}
         (Boot::Ready, Some(s)) => {
             let mut cx = Cx {
                 t,
@@ -244,10 +274,11 @@ pub(crate) fn show(app: &mut App, ctx: &egui::Context, t: &Tokens) {
                 stage: &mut *stage,
                 want: &mut *want,
                 emoji: &mut *emoji_cache,
+                camera: cam_tex.as_ref(),
                 scroll_read: false,
             };
             // `.topbar`: padding 8 and a 1px border at the bottom only, `gap: 4px 24px`, min-height 64
-            if !short {
+            if !short && s.view != View::Capture {
                 let hdr = egui::TopBottomPanel::top("hdr")
                     .min_height(64.0)
                     .show_separator_line(false)
@@ -279,6 +310,8 @@ pub(crate) fn show(app: &mut App, ctx: &egui::Context, t: &Tokens) {
             }
             match s.view {
                 View::Inbox => inbox(ctx, &mut cx, s),
+                View::Add => add_view(ctx, &mut cx, s),
+                View::Capture => capture_view(ctx, &mut cx, s),
                 View::Review => review(ctx, &mut cx, s, narrow),
             }
             if let Some(m) = status_msg.as_ref() {
@@ -304,13 +337,13 @@ pub(crate) fn show(app: &mut App, ctx: &egui::Context, t: &Tokens) {
     }
 
     // a modal dialog draws last, over everything
-    if let (Some(d), Some(s)) = (dialog.as_mut(), session.as_ref()) {
+    if let (Some(d), Some(s), false) = (dialog.as_mut(), session.as_ref(), show_home) {
         if let Some(o) = dialog::show(ctx, &mut *ctl, t, s, d) {
             acts.push(Act::Dialog(o));
         }
     }
 
-    if let Some(s) = session.as_ref() {
+    if let (Some(s), false) = (session.as_ref(), show_home) {
         route_keys(&*ctl, s, dialog.is_some(), &mut acts);
     }
 
@@ -319,8 +352,25 @@ pub(crate) fn show(app: &mut App, ctx: &egui::Context, t: &Tokens) {
             d(c);
         }
     };
+    for a in home_acts {
+        use crate::home::HomeAct;
+        send(match a {
+            HomeAct::Open(slug) => Cmd::OpenProject { slug },
+            HomeAct::Create(name) => Cmd::CreateProject { name },
+            HomeAct::Rename(slug, name) => Cmd::RenameProject { slug, name },
+            HomeAct::Duplicate(slug) => Cmd::DuplicateProject { slug },
+            HomeAct::Delete(slug) => Cmd::DeleteProject { slug },
+            HomeAct::ImportZip => Cmd::ImportZip,
+            HomeAct::ImportFolder => Cmd::ImportFolder,
+            HomeAct::ImportLegacy => Cmd::ImportLegacy,
+            HomeAct::Folder(what) => Cmd::Folder(what.to_string()),
+            HomeAct::DownloadZip(slug) => Cmd::DownloadZip { slug },
+        });
+        // the list is asked for again after a change
+        home.cards = None;
+    }
     let dialog_was = ctl.dialog_was;
-    if let Some(s) = session.as_mut() {
+    if let (Some(s), false) = (session.as_mut(), show_home) {
         s.now = crate::now_ms();
         for a in acts {
             if !matches!(a, Act::ReadLine(_) | Act::ReadMove(_) | Act::ReadEdge(_) | Act::ReadClear | Act::Zoom(_) | Act::ZoomSet(_) | Act::Pan(_) | Act::Dialog(_) | Act::CloseDialog | Act::Scrolled(_)) {
@@ -351,6 +401,11 @@ pub(crate) fn show(app: &mut App, ctx: &egui::Context, t: &Tokens) {
             }
         }
         ctl.dialog_was = open_now;
+    }
+    if std::mem::take(&mut ctl.want_home) {
+        home.active = true;
+        home.cards = None;
+        home.asked = false;
     }
 }
 
@@ -445,6 +500,25 @@ fn spoken_line(unit: &str) -> String {
     }
     out.push_str(rest);
     out.replace(['*', '`'], "").split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Make one kind of export of the pages in `scope` and deliver it: a file into `exports/`, or the clipboard.
+fn run_export(s: &Session, ctx: &egui::Context, kind: &str, scope: &str, send: &dyn Fn(Cmd), say: &mut dyn FnMut(String, bool)) {
+    let pages = s.export_pages(scope);
+    let list: Vec<&Page> = pages.iter().collect();
+    let get = |k: &str, d: &str| s.settings.get(k).and_then(|v| v.as_str()).unwrap_or(d).to_string();
+    let o = vishion_core::export::Opts::new(&get("exportText", "corrected"), &get("exportSeparator", "label"), &get("exportFormat", "md"));
+    match vishion_core::export::run(kind, &list, &o, &s.a.meta, &crate::home::iso(s.now)) {
+        Some(vishion_core::export::Export::File { name, bytes, .. }) => {
+            send(Cmd::Export { slug: s.slug.clone(), name, bytes });
+            say(format!("Exporting {}\u{2026}", state::plural(list.len(), "page", "pages")), false);
+        }
+        Some(vishion_core::export::Export::Copy(text)) => {
+            ctx.copy_text(text);
+            say("Copied all the text.".into(), false);
+        }
+        None => say("Nothing to export for that choice.".into(), true),
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -708,10 +782,85 @@ fn apply(
         Act::Stop => send(Cmd::Stop),
         Act::Guess(id) => {
             if let Some(p) = s.page(&id) {
-                send(Cmd::Guess { slug, id: id.clone(), raw: p.raw().to_string() });
+                send(Cmd::Guess { slug, id: id.clone(), raw: p.raw().to_string(), conn: s.read_conn(), examples: s.reference_examples() });
             }
         }
         Act::OpenSettings => *dialog = Some(Dialog::settings()),
+        Act::OpenAdd(preset) => {
+            s.add = state::AddState { preset, ..Default::default() };
+            s.view = View::Add;
+            ctl.focus_title = Some("add-title");
+        }
+        Act::OpenCapture => {
+            s.capture = state::CaptureState { auto: s.capture.auto, ..Default::default() };
+            s.view = View::Capture;
+            ctl.focus_title = Some("capture-title");
+            send(Cmd::CameraStart);
+        }
+        Act::CaptureShot => {
+            if let Some(c) = capture_shot(s) {
+                send(c);
+            }
+        }
+        Act::CaptureAuto(on) => {
+            s.capture.auto = on;
+            s.capture.steady.reset();
+        }
+        Act::CaptureClose => {
+            send(Cmd::CameraStop);
+            s.view = View::Add;
+        }
+        Act::AddChoose => {
+            s.add.working = true;
+            let read_names = s.settings.get("readNames").and_then(|v| v.as_bool()) != Some(false);
+            send(Cmd::StagePictures { conn: s.read_conn(), read_names, preset: s.add.preset.clone() });
+        }
+        Act::AddDropped(files) => {
+            s.add.working = true;
+            let read_names = s.settings.get("readNames").and_then(|v| v.as_bool()) != Some(false);
+            send(Cmd::StageFiles { files, conn: s.read_conn(), read_names, preset: s.add.preset.clone() });
+        }
+        Act::AddRemove(k) => s.add.rows.retain(|r| r.key != k),
+        Act::AddPick(k) => {
+            if let Some(r) = s.add.rows.iter_mut().find(|r| r.key == k) {
+                r.picking = !r.picking;
+            }
+        }
+        Act::AddName(k, name) => {
+            if let Some(r) = s.add.rows.iter_mut().find(|r| r.key == k) {
+                let name = name.trim().to_string();
+                r.item.name = (!name.is_empty()).then_some(name);
+                r.item.source = "chosen".into();
+                r.picking = false;
+            }
+        }
+        Act::AddDraft(k, text) => {
+            if let Some(r) = s.add.rows.iter_mut().find(|r| r.key == k) {
+                r.draft = text;
+            }
+        }
+        Act::AddSubject(v) => s.set_meta("topic", serde_json::json!(v)),
+        Act::AddReadNames(on) => {
+            s.settings.set("readNames", serde_json::json!(on));
+            s.dirty.settings = true;
+        }
+        Act::AddCommit => {
+            let items: Vec<_> = s.add.rows.iter().map(|r| r.item.clone()).collect();
+            if !items.is_empty() {
+                s.add.rows.clear();
+                s.add.skipped.clear();
+                s.add.starting = true;
+                send(Cmd::CommitStaged { slug, items });
+            }
+        }
+        Act::OpenAssignment => *dialog = Some(Dialog::assignment()),
+        Act::OpenExport => {
+            if s.pages().is_empty() {
+                say("Add pages first, then export them.".into(), true);
+            } else {
+                *dialog = Some(Dialog::export(if s.multi.is_empty() { "all" } else { "selected" }));
+            }
+        }
         Act::CloseDialog => {
             if let Some(d) = dialog.as_ref() {
                 dialog::commit(s, d);
@@ -723,6 +872,7 @@ fn apply(
             ctl.say_node("inbox-title");
             ctl.focus_title = Some("inbox-title");
         }
+        Act::Home => ctl.want_home = true,
         Act::OpenReview(id) => {
             s.select(&id);
             s.view = View::Review;
@@ -800,6 +950,65 @@ fn apply(
                     ctl.say(said);
                     return;
                 }
+                dialog::Out::Scope(sc) => {
+                    if let Some(Dialog::Export { scope, .. }) = dialog.as_mut() {
+                        *scope = sc;
+                    }
+                    return;
+                }
+                dialog::Out::Export(kind, sc) => {
+                    let n = s.export_pages(sc).iter().filter(|p| p.status() != "done").count();
+                    let total = s.export_pages(sc).len();
+                    if total == 0 {
+                        say("Nothing to export for that choice.".into(), true);
+                        return;
+                    }
+                    if n > 0 {
+                        // stacked on the export dialog: Cancel comes back to it
+                        ctl.under = dialog.take().map(|d| (d, "ex-all"));
+                        ctl.want_focus = Some("dialog-cancel".into());
+                        *dialog = Some(Dialog::Confirm {
+                            title: "Some pages are empty".into(),
+                            text: format!("{n} of {total} pages have no transcript. Export anyway?"),
+                            ok: "Export anyway".into(),
+                            danger: false,
+                            then: After::ExportRun(kind.to_string(), sc),
+                        });
+                        return;
+                    }
+                    // the dialog stays open, as in the JS (`run` does not close it)
+                    run_export(s, ctx, kind, sc, &send, &mut say);
+                    return;
+                }
+                dialog::Out::OpenTopics => {
+                    if let Some(d) = dialog.as_ref() {
+                        dialog::commit(s, d);
+                    }
+                    ctl.under = dialog.take().map(|d| (d, "as-edit-topics"));
+                    ctl.want_focus = Some("tp-topic".into());
+                    *dialog = Some(Dialog::topics(s.a.meta.topic()));
+                    return;
+                }
+                dialog::Out::Topic(act) => {
+                    let Some(d) = dialog.as_mut() else { return };
+                    match dialog::topic_act(s, d, act) {
+                        dialog::TopicResult::Said(m) => ctl.say(m),
+                        dialog::TopicResult::Warn(m) => say(m, true),
+                        dialog::TopicResult::Ask(then, opener, ok, text) => {
+                            // stacked on the editor: Cancel comes back to it
+                            ctl.under = dialog.take().map(|d| (d, opener));
+                            ctl.want_focus = Some("dialog-cancel".into());
+                            *dialog = Some(Dialog::Confirm { title: ok.clone(), text, ok, danger: true, then });
+                        }
+                        dialog::TopicResult::Nothing => {}
+                    }
+                    return;
+                }
+                dialog::Out::Meta(key, v, said) => {
+                    s.set_meta(key, v);
+                    ctl.say(said);
+                    return;
+                }
                 dialog::Out::AskClearFixes => {
                     if let Some(d) = dialog.as_ref() {
                         dialog::commit(s, d);
@@ -862,6 +1071,32 @@ fn apply(
                         say(format!("Where the model runs: {}.", dialog::provider(&id).1), false);
                         back_to = Some("st-provider");
                     }
+                    After::RestoreTopics => {
+                        if let Some((Dialog::Topics { cur, drafts, .. }, _)) = ctl.under.as_mut() {
+                            drafts.clear();
+                            *cur = "General".into();
+                        }
+                        let d = vishion_core::model::Settings::defaults();
+                        if let Some(t) = d.get("topics") {
+                            s.settings.set("topics", t.clone());
+                            s.dirty.settings = true;
+                        }
+                        say("Restored the built-in subjects.".into(), false);
+                    }
+                    After::DeleteTopic(name) => {
+                        if let Some((Dialog::Topics { cur, drafts, .. }, _)) = ctl.under.as_mut() {
+                            drafts.clear();
+                            *cur = "General".into();
+                        }
+                        let mut topics = s.settings.get("topics").cloned().unwrap_or_else(|| serde_json::json!({}));
+                        if let Some(o) = topics.as_object_mut() {
+                            o.remove(&name);
+                        }
+                        s.settings.set("topics", topics);
+                        s.dirty.settings = true;
+                        say(format!("Deleted the subject {name}."), false);
+                    }
+                    After::ExportRun(kind, sc) => run_export(s, ctx, &kind, sc, &send, &mut say),
                     After::RemovePage(id) => s.remove_page(&id),
                     After::TranscribeAgain(id) => send(Cmd::Transcribe { slug, ids: vec![id], conn: s.read_conn() }),
                     After::ReviewAgain(ids) => {
@@ -914,16 +1149,19 @@ fn header(ui: &mut Ui, cx: &mut Cx, s: &Session) {
     let save_col = if cx.save.failed.is_some() { t.bad } else { t.muted };
     let crumb_label = format!("Back to {name}");
 
-    // header.js `forInbox`: wordmark on the left, save state and Settings on the right
-    if s.view == View::Inbox {
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 12.0;
+    // header.js `forInbox`: wordmark on the left, save state and Settings on the right. Like the flex-wrap of
+    // `.topbar`, the right group drops to its own row when the wordmark and it do not fit (a phone).
+    if s.view != View::Review {
+        let sg = ui.painter().layout_no_wrap(save_text.clone(), theme::sans(13.0), save_col);
+        let right_w = sg.size().x + 24.0 + 12.0 + TARGET;
+        let fits = widgets::BRAND_W + 12.0 + right_w + 4.0 <= ui.available_width();
+        let mut brand = |ui: &mut Ui, cx: &mut Cx| {
             if widgets::brand(cx.ctl, ui, t, C::new("brand", "viSHion", HEADER)) {
-                cx.acts.push(Act::Inbox);
+                cx.acts.push(Act::Home);
             }
-            let sg = ui.painter().layout_no_wrap(save_text.clone(), theme::sans(13.0), save_col);
-            let w = sg.size().x + 24.0 + 12.0 + TARGET;
-            ui.add_space((ui.available_width() - w - 4.0).max(0.0));
+        };
+        let mut right = |ui: &mut Ui, cx: &mut Cx, gap: f32| {
+            ui.add_space(gap);
             let (sr, _) = ui.allocate_exact_size(vec2(sg.size().x + 24.0, TARGET), Sense::hover());
             let icon = if cx.save.failed.is_some() { Icon::Warn } else { Icon::Check };
             let icon_col = if cx.save.failed.is_some() { t.bad } else { t.ok };
@@ -935,12 +1173,28 @@ fn header(ui: &mut Ui, cx: &mut Cx, s: &Session) {
             } else {
                 widgets::paint_icon(ui, ir, icon, icon_col);
             }
-            ui.painter().galley(pos2(sr.left() + 24.0, (sr.center().y - sg.size().y / 2.0 - 1.0).round()), sg, save_col);
+            ui.painter().galley(pos2(sr.left() + 24.0, (sr.center().y - sg.size().y / 2.0 - 1.0).round()), sg.clone(), save_col);
             cx.ctl.status("save-state", &save_text, HEADER, sr);
             if widgets::icon_button(cx.ctl, ui, t, C::new("settings", "Settings", HEADER), Icon::Gear, false) {
                 cx.acts.push(Act::OpenSettings);
             }
-        });
+        };
+        if fits {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 12.0;
+                brand(ui, cx);
+                let gap = (ui.available_width() - right_w - 4.0).max(0.0);
+                right(ui, cx, gap);
+            });
+        } else {
+            brand(ui, cx);
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 12.0;
+                let gap = (ui.available_width() - right_w - 4.0).max(0.0);
+                right(ui, cx, gap);
+            });
+        }
         return;
     }
 
@@ -1147,6 +1401,403 @@ fn inbox(ctx: &egui::Context, cx: &mut Cx, s: &Session) {
     });
 }
 
+/// The shutter: the current frame as a `CaptureShot` command, counted and named. `None` before the first frame.
+pub(crate) fn capture_shot(s: &mut Session) -> Option<Cmd> {
+    let (w, h, rgba) = s.capture.frame.clone()?;
+    s.capture.shots += 1;
+    s.capture.cooldown = 20;
+    s.capture.steady.reset();
+    s.add.working = true;
+    let read_names = s.settings.get("readNames").and_then(|v| v.as_bool()) != Some(false);
+    Some(Cmd::CaptureShot {
+        name: format!("Photo {}.jpg", s.add.seq + s.add.rows.len() as u64 + 1),
+        w,
+        h,
+        rgba,
+        conn: s.read_conn(),
+        read_names,
+        preset: s.add.preset.clone(),
+    })
+}
+
+/// `design/Phone.dc.html`: close, the title, Done; the viewfinder with the page frame and a pill; and the
+/// thumbnail with its count, the shutter and the auto toggle.
+fn capture_view(ctx: &egui::Context, cx: &mut Cx, s: &Session) {
+    let t = cx.t;
+    let bg = Color32::from_rgb(0x12, 0x16, 0x1F);
+    let yellow = Color32::from_rgb(0xFF, 0xE2, 0x7A);
+    let white = Color32::WHITE;
+    egui::CentralPanel::default().frame(egui::Frame::none().fill(bg)).show(ctx, |ui| {
+        ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
+        let full = ui.available_rect_before_wrap();
+        // top bar, 64 high
+        let bar = Rect::from_min_size(full.min, vec2(full.width(), 64.0));
+        let title = if s.a.meta.name().is_empty() { "Capture" } else { s.a.meta.name() };
+        let g = ui.painter().layout_no_wrap(title.to_string(), theme::sans_semi(16.0), white);
+        ui.painter().galley(pos2(bar.center().x - g.size().x.min(bar.width() - 200.0) / 2.0, bar.center().y - g.size().y / 2.0), g.clone(), white);
+        cx.ctl.heading("capture-title", 1, title, TEXT, Rect::from_center_size(bar.center(), g.size()));
+        let mut cui = ui.child_ui(Rect::from_min_size(bar.min + vec2(8.0, 10.0), vec2(TARGET, TARGET)), Layout::top_down(Align::Min), None);
+        if widgets::icon_button(cx.ctl, &mut cui, t, C::new("capture-close", "Close camera", TEXT), Icon::Close, false) {
+            cx.acts.push(Act::CaptureClose);
+        }
+        let done_w = tw(ui, "Done", theme::sans_semi(14.0)) + 28.0;
+        let mut dui = ui.child_ui(Rect::from_min_size(pos2(bar.right() - 8.0 - done_w, bar.top() + 10.0), vec2(done_w, TARGET)), Layout::top_down(Align::Min), None);
+        if widgets::button(cx.ctl, &mut dui, t, C::new("capture-done", "Done", TEXT), "Done", Look::Ghost, done_w) {
+            cx.acts.push(Act::CaptureClose);
+        }
+
+        // viewfinder
+        let foot_h = 148.0;
+        let view = Rect::from_min_max(pos2(full.left(), bar.bottom()), pos2(full.right(), full.bottom() - foot_h));
+        ui.painter().rect_filled(view, 0.0, Color32::from_rgb(0x17, 0x1C, 0x27));
+        let (msg, ok) = match (&s.capture.error, s.capture.found) {
+            (Some(e), _) => (e.clone(), false),
+            (None, Some(_)) => ("Page found. Hold steady.".to_string(), true),
+            (None, None) => ("Looking for the page\u{2026}".to_string(), false),
+        };
+        if let (Some(tex), Some((fw, fh, _))) = (cx.camera, s.capture.frame.as_ref()) {
+            // contain: the whole frame, centred
+            let k = (view.width() / *fw as f32).min(view.height() / *fh as f32);
+            let size = vec2(*fw as f32 * k, *fh as f32 * k);
+            let img = Rect::from_center_size(view.center(), size);
+            ui.painter().image(tex.id(), img, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+            if let Some(f) = s.capture.found {
+                let r = Rect::from_min_max(pos2(img.left() + f.x0 * size.x, img.top() + f.y0 * size.y), pos2(img.left() + f.x1 * size.x, img.top() + f.y1 * size.y));
+                ui.painter().rect_stroke(r.expand(6.0), 6.0, Stroke::new(3.0, yellow));
+                for c in [r.left_top(), r.right_top(), r.left_bottom(), r.right_bottom()] {
+                    let h = Rect::from_center_size(c, vec2(14.0, 14.0));
+                    ui.painter().rect_filled(h, 3.0, yellow);
+                    ui.painter().rect_stroke(h, 3.0, Stroke::new(2.0, bg));
+                }
+            }
+        }
+        let pill = ui.painter().layout_no_wrap(msg.clone(), theme::sans_semi(14.0), if ok { yellow } else { white });
+        let pr = Rect::from_center_size(pos2(view.center().x, view.top() + 12.0 + (pill.size().y + 16.0) / 2.0), vec2(pill.size().x + 32.0, pill.size().y + 16.0));
+        ui.painter().rect_filled(pr, 999.0, Color32::from_rgba_unmultiplied(20, 27, 45, 199));
+        ui.painter().galley(pr.center() - pill.size() / 2.0, pill, if ok { yellow } else { white });
+        cx.ctl.status("capture-status", &msg, TEXT, pr);
+
+        // footer: thumbnail count, shutter, auto
+        let foot = Rect::from_min_size(pos2(full.left(), full.bottom() - foot_h), vec2(full.width(), foot_h));
+        let cy = foot.center().y;
+        let n = s.capture.shots;
+        let review_label = if n == 0 { "No photos yet".to_string() } else { format!("Review {} captured {}", n, if n == 1 { "page" } else { "pages" }) };
+        let thumb = Rect::from_center_size(pos2(foot.left() + 24.0 + 26.0, cy), vec2(52.0, 64.0));
+        ui.painter().rect_filled(thumb, 4.0, Color32::from_rgb(0xFC, 0xFC, 0xF8));
+        ui.painter().rect_stroke(thumb, 4.0, Stroke::new(2.0, white));
+        if n > 0 {
+            let badge = Rect::from_center_size(thumb.right_top() + vec2(0.0, 0.0), vec2(24.0, 24.0));
+            ui.painter().circle_filled(badge.center(), 12.0, yellow);
+            let g = ui.painter().layout_no_wrap(n.to_string(), theme::sans_semi(13.0), Color32::from_rgb(0x14, 0x1B, 0x2D));
+            ui.painter().galley(badge.center() - g.size() / 2.0, g, Color32::from_rgb(0x14, 0x1B, 0x2D));
+        }
+        let hit = Rect::from_center_size(thumb.center(), vec2(thumb.width().max(TARGET), thumb.height().max(TARGET)));
+        let tr = ui.interact(hit, ui.id().with("capture-thumb"), Sense::click());
+        if cx.ctl.reg(ui, &tr, C::new("capture-review", &review_label, TEXT).disabled(n == 0)) && n > 0 {
+            cx.acts.push(Act::CaptureClose);
+        }
+        // shutter
+        let sc = pos2(foot.center().x, cy);
+        let sr = Rect::from_center_size(sc, vec2(76.0, 76.0));
+        let shr = ui.interact(sr, ui.id().with("capture-shutter"), Sense::click());
+        ui.painter().circle_stroke(sc, 36.0, Stroke::new(4.0, white));
+        ui.painter().circle_filled(sc, 29.0, if shr.hovered() { yellow } else { white });
+        if cx.ctl.reg(ui, &shr, C::new("capture-shutter", "Take photo", TEXT).disabled(s.capture.frame.is_none())) {
+            cx.acts.push(Act::CaptureShot);
+        }
+        // auto
+        let auto = s.capture.auto;
+        let label = if auto { "Auto: on" } else { "Auto: off" };
+        let w = tw(ui, label, theme::sans_semi(14.0)) + 36.0;
+        let ar = Rect::from_center_size(pos2(foot.right() - 24.0 - w / 2.0, cy), vec2(w, TARGET));
+        let air = ui.interact(ar, ui.id().with("capture-auto"), Sense::click());
+        let col = if auto { yellow } else { white };
+        ui.painter().rect_stroke(ar, 999.0, Stroke::new(2.0, col));
+        let g = ui.painter().layout_no_wrap(label.to_string(), theme::sans_semi(14.0), col);
+        ui.painter().galley(ar.center() - g.size() / 2.0, g, col);
+        if cx.ctl.reg(ui, &air, C::new("capture-auto", label, TEXT).pressed(auto)) {
+            cx.acts.push(Act::CaptureAuto(!auto));
+        }
+    });
+}
+
+/// js/ui/add.js `render`: choose files, the staged pages with the student each belongs to, the subject, and the
+/// button that saves and starts the run.
+fn add_view(ctx: &egui::Context, cx: &mut Cx, s: &Session) {
+    let t = cx.t;
+    // files dropped on the window (a folder is read for the pictures in it)
+    let dropped = ctx.input(|i| i.raw.dropped_files.clone());
+    if !dropped.is_empty() {
+        let mut files: Vec<(String, Vec<u8>)> = vec![];
+        for f in dropped {
+            if let Some(b) = &f.bytes {
+                files.push((f.name.clone(), b.to_vec()));
+            } else if let Some(p) = &f.path {
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    fn walk(p: &std::path::Path, out: &mut Vec<(String, Vec<u8>)>) {
+                        if p.is_dir() {
+                            if let Ok(rd) = std::fs::read_dir(p) {
+                                for e in rd.flatten() {
+                                    walk(&e.path(), out);
+                                }
+                            }
+                        } else if let Ok(b) = std::fs::read(p) {
+                            out.push((p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default(), b));
+                        }
+                    }
+                    walk(p, &mut files);
+                }
+                #[cfg(target_arch = "wasm32")]
+                let _ = p;
+            }
+        }
+        if !files.is_empty() {
+            cx.acts.push(Act::AddDropped(files));
+        }
+    }
+    egui::CentralPanel::default().frame(egui::Frame::none().fill(t.bg)).show(ctx, |ui| {
+        cx.ctl.scrolls[TEXT as usize] = true;
+        egui::ScrollArea::vertical().auto_shrink([false, false]).animated(false).id_source("add-scroll").show(ui, |ui| {
+            if cx.inline_header {
+                header_inline(ui, cx, s);
+            }
+            let avail = ui.available_width();
+            let pad = if cx.narrow { 16.0 } else { 24.0 };
+            let side = (avail - avail.min(1120.0)) / 2.0 + pad;
+            let margin = Margin { left: side, right: side, top: if cx.narrow { 28.0 } else { 40.0 }, bottom: if cx.narrow { 48.0 } else { 56.0 } };
+            egui::Frame::none().inner_margin(margin).show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
+                add_body(ui, cx, s);
+            });
+            cx.ctl.flush_scroll(ui, &[HEADER, TEXT]);
+        });
+    });
+}
+
+fn add_body(ui: &mut Ui, cx: &mut Cx, s: &Session) {
+    let t = cx.t;
+    let w = ui.available_width();
+    let a = &s.add;
+    let title = match &a.preset {
+        Some(p) => format!("Add pages for {p}"),
+        None => "Add pages".to_string(),
+    };
+    let size = if cx.narrow { 30.0 } else { 36.0 };
+    let r = css_text(ui, &title, theme::serif_semi(size), t.ink, size * 1.15, w, false);
+    cx.ctl.heading("add-title", 1, &title, TEXT, r);
+    ui.add_space(8.0);
+    let sub = format!("Adding to {}", s.a.meta.name());
+    let r = css_text(ui, &sub, theme::sans(14.0), t.muted, 14.0 * 1.4, w, false);
+    cx.ctl.text("add-sub", &sub, TEXT, r);
+    ui.add_space(20.0);
+
+    // drop zone (a button here: files come from the picker)
+    egui::Frame::none().fill(t.surface).stroke(Stroke::new(1.0, t.line2)).rounding(10.0).inner_margin(Margin::symmetric(24.0, 28.0)).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        let big = "Drop photos or scans here";
+        let r = css_text(ui, big, theme::sans_semi(18.0), t.ink, 18.0 * 1.4, ui.available_width(), false);
+        cx.ctl.heading("add-drop", 2, big, TEXT, r);
+        ui.add_space(6.0);
+        let note = "Drop them here, or choose files. PNG, JPG, or WebP, up to 40 MB each.";
+        let r = css_text(ui, note, theme::sans(14.0), t.muted, 14.0 * 1.4, ui.available_width(), false);
+        cx.ctl.text("add-types", note, TEXT, r);
+        ui.add_space(14.0);
+        let busy = a.working;
+        let label = if busy { "Getting pages ready\u{2026}" } else { "Choose files" };
+        if widgets::button(cx.ctl, ui, t, C::new("add-choose", label, TEXT).disabled(busy), label, Look::Primary, 0.0) {
+            cx.acts.push(Act::AddChoose);
+        }
+        if cx.ctl.camera_ok {
+            ui.add_space(8.0);
+            if widgets::button(cx.ctl, ui, t, C::new("add-camera", "Use the camera", TEXT).disabled(busy), "Use the camera", Look::Outline, 0.0) {
+                cx.acts.push(Act::OpenCapture);
+            }
+        }
+        ui.add_space(12.0);
+        let tip = "iPhone photos: in Settings, Camera, Formats, choose Most Compatible so pages save as JPG.";
+        let r = css_text(ui, tip, theme::sans(13.0), t.muted, 13.0 * 1.4, ui.available_width(), false);
+        cx.ctl.text("add-tip", tip, TEXT, r);
+    });
+
+    if !a.skipped.is_empty() {
+        ui.add_space(14.0);
+        let names: Vec<&str> = a.skipped.iter().take(3).map(|(n, _)| n.as_str()).collect();
+        let more = if a.skipped.len() > 3 { format!(" and {} more", a.skipped.len() - 3) } else { String::new() };
+        let mut why: Vec<&str> = vec![];
+        for (_, r) in &a.skipped {
+            if !why.contains(&r.as_str()) {
+                why.push(r);
+            }
+        }
+        let msg = format!(
+            "{} skipped: {}{} can\u{2019}t be added. {}",
+            state::plural(a.skipped.len(), "file was", "files were"),
+            names.join(", "),
+            more,
+            why.join(" ")
+        );
+        egui::Frame::none().fill(t.warn_bg).stroke(Stroke::new(1.0, t.warn_line)).rounding(10.0).inner_margin(Margin::symmetric(16.0, 12.0)).show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            let r = css_text(ui, &msg, theme::sans(14.0), t.ink, 14.0 * 1.4, ui.available_width(), false);
+            cx.ctl.status("add-skipped", &msg, TEXT, r);
+        });
+    }
+    if a.names_down {
+        ui.add_space(14.0);
+        let msg = "Names could not be read: the transcription server did not answer, so choose a student for each page, or start the server and add the pages again.";
+        egui::Frame::none().fill(t.warn_bg).stroke(Stroke::new(1.0, t.warn_line)).rounding(10.0).inner_margin(Margin::symmetric(16.0, 12.0)).show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            let r = css_text(ui, msg, theme::sans(14.0), t.ink, 14.0 * 1.4, ui.available_width(), false);
+            cx.ctl.status("add-names-down", msg, TEXT, r);
+        });
+    }
+
+    if !a.rows.is_empty() {
+        ui.add_space(28.0);
+        let head = format!("Ready to transcribe: {}", state::plural(a.rows.len(), "page", "pages"));
+        let r = css_text(ui, &head, theme::serif_semi(24.0), t.ink, 24.0 * 1.2, w, false);
+        cx.ctl.heading("add-ready", 2, &head, TEXT, r);
+        ui.add_space(12.0);
+        let known: Vec<String> = {
+            let mut v: Vec<String> = s.groups().into_iter().map(|g| g.name).collect();
+            v.extend(a.rows.iter().filter_map(|r| r.item.name.clone()));
+            v.sort_by(|x, y| vishion_core::jsx::nat_compare(x, y));
+            v.dedup();
+            v
+        };
+        for r in &a.rows {
+            add_row(ui, cx, r, &known);
+            ui.add_space(8.0);
+        }
+    }
+
+    // subject, read names, and the button
+    ui.add_space(24.0);
+    let topics: Vec<String> = s.settings.get("topics").and_then(|v| v.as_object()).map(|o| o.keys().cloned().collect()).unwrap_or_default();
+    if !topics.is_empty() {
+        let r = css_text(ui, "Subject", theme::sans_semi(14.0), t.ink, 19.6, w, false);
+        cx.ctl.text("add-topic-label", "Subject", TEXT, r);
+        ui.add_space(6.0);
+        let cur = s.a.meta.topic().to_string();
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = vec2(8.0, 8.0);
+            for (i, k) in topics.iter().enumerate() {
+                let id = format!("add-topic-{i}");
+                let look = if *k == cur { Look::Primary } else { Look::Outline };
+                if widgets::button(cx.ctl, ui, t, C::new(&id, k, TEXT).pressed(*k == cur), k, look, 0.0) {
+                    cx.acts.push(Act::AddSubject(k.clone()));
+                }
+            }
+        });
+        ui.add_space(14.0);
+    }
+    let read_on = s.settings.get("readNames").and_then(|v| v.as_bool()) != Some(false);
+    let lbl = if read_on { "Read the name at the top of each page: on" } else { "Read the name at the top of each page: off" };
+    if widgets::button(cx.ctl, ui, t, C::new("add-read-names", lbl, TEXT).pressed(read_on), lbl, Look::Outline, 0.0) {
+        cx.acts.push(Act::AddReadNames(!read_on));
+    }
+    ui.add_space(20.0);
+    let missing = a.rows.iter().filter(|r| r.item.name.is_none()).count();
+    let n = a.rows.len();
+    let cta = if a.working { "Getting pages ready\u{2026}".to_string() } else { format!("Transcribe {}", state::plural(n, "page", "pages")) };
+    if widgets::button(cx.ctl, ui, t, C::new("add-commit", &cta, TEXT).disabled(n == 0 || a.working), &cta, Look::Primary, 0.0) {
+        cx.acts.push(Act::AddCommit);
+    }
+    ui.add_space(8.0);
+    let hint = if n == 0 {
+        "Add pages to get started.".to_string()
+    } else if missing == 0 {
+        "Every page has a student.".to_string()
+    } else {
+        format!("{} a student. You can choose one after transcribing.", state::plural(missing, "page needs", "pages need"))
+    };
+    let r = css_text(ui, &hint, theme::sans(13.0), t.muted, 13.0 * 1.4, w, false);
+    cx.ctl.status("add-hint", &hint, TEXT, r);
+}
+
+/// `.staged-row`: thumbnail, file name, the student (read or chosen, or a chooser), remove.
+fn add_row(ui: &mut Ui, cx: &mut Cx, r: &state::StagedRow, known: &[String]) {
+    let t = cx.t;
+    egui::Frame::none().fill(t.surface).stroke(Stroke::new(1.0, t.line)).rounding(10.0).inner_margin(Margin::symmetric(16.0, 12.0)).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 14.0;
+            let (th, _) = ui.allocate_exact_size(vec2(40.0, 52.0), Sense::hover());
+            ui.painter().rect_filled(th, 2.0, t.paper);
+            if let Some(Slot::Ready(im)) = cx.images.get(&format!("staged-{}", r.key)) {
+                ui.painter().image(im.thumb.id(), th, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+            }
+            ui.vertical(|ui| {
+                ui.spacing_mut().item_spacing.y = 2.0;
+                let name = ui.label(RichText::new(&r.item.file_name).font(theme::sans_semi(14.0)).color(t.ink));
+                cx.ctl.text(&format!("staged-file-{}", r.key), &r.item.file_name, TEXT, name.rect);
+                let (who, how) = match &r.item.name {
+                    Some(n) if r.item.source == "read" => (n.clone(), "Read from the top of the page"),
+                    Some(n) => (n.clone(), "Chosen by you"),
+                    None => ("Name not found".to_string(), "Choose a student"),
+                };
+                let line = format!("{who}. {how}");
+                let l = ui.label(RichText::new(&line).font(theme::sans(13.0)).color(if r.item.name.is_some() { t.muted } else { t.bad }));
+                cx.ctl.text(&format!("staged-who-{}", r.key), &line, TEXT, l.rect);
+            });
+        });
+        ui.add_space(8.0);
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing.x = 8.0;
+            let change = format!("Change the student for {}", r.item.file_name);
+            if widgets::button(cx.ctl, ui, t, C::new(&format!("staged-change-{}", r.key), &change, TEXT), "Change", Look::Outline, 0.0) {
+                cx.acts.push(Act::AddPick(r.key));
+            }
+            let remove = format!("Remove {}", r.item.file_name);
+            if widgets::button(cx.ctl, ui, t, C::new(&format!("staged-remove-{}", r.key), &remove, TEXT), "Remove", Look::Ghost, 0.0) {
+                cx.acts.push(Act::AddRemove(r.key));
+            }
+        });
+        if r.picking {
+            ui.add_space(8.0);
+            // a name that is not in the list yet
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 8.0;
+                let mut buf = r.draft.clone();
+                let btn_w = tw(ui, "Use this name", theme::sans_semi(14.0)) + widgets::BTN_PAD;
+                let fw = (ui.available_width() - btn_w - 8.0).clamp(120.0, 360.0);
+                let (slot, _) = ui.allocate_exact_size(vec2(fw, TARGET), Sense::hover());
+                let edit = egui::TextEdit::singleline(&mut buf)
+                    .hint_text(RichText::new("Student name").font(theme::sans(14.0)).color(t.placeholder()))
+                    .font(theme::sans(14.0))
+                    .margin(vec2(12.0, 13.0))
+                    .desired_width(fw - 24.0);
+                let mut er = ui.put(slot, edit);
+                er.rect = slot;
+                let id = format!("staged-name-{}", r.key);
+                if let Some(v) = cx.ctl.reg_text(ui, &er, C::new(&id, "Student name", TEXT), &r.draft) {
+                    buf = v;
+                }
+                let entered = er.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                if buf != r.draft {
+                    cx.acts.push(Act::AddDraft(r.key, buf.clone()));
+                }
+                let use_it = widgets::button(cx.ctl, ui, t, C::new(&format!("staged-use-{}", r.key), "Use this name", TEXT), "Use this name", Look::Primary, btn_w);
+                if (use_it || entered) && !buf.trim().is_empty() {
+                    cx.acts.push(Act::AddName(r.key, buf.clone()));
+                }
+            });
+            ui.add_space(8.0);
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing = vec2(8.0, 8.0);
+                for (i, k) in known.iter().enumerate() {
+                    let label = format!("{k} for {}", r.item.file_name);
+                    if widgets::button(cx.ctl, ui, t, C::new(&format!("staged-{}-pick-{i}", r.key), &label, TEXT), k, Look::Outline, 0.0) {
+                        cx.acts.push(Act::AddName(r.key, k.clone()));
+                    }
+                }
+            });
+        }
+    });
+}
+
 /// A button of a run bar: id, label, primary, what it does.
 type BarBtn = (&'static str, String, bool, Act);
 
@@ -1213,6 +1864,19 @@ fn inbox_body(ui: &mut Ui, cx: &mut Cx, s: &Session) {
     ui.add_space(8.0);
     let r = css_text(ui, &sub, theme::sans(14.0), t.muted, 14.0 * 1.4, w, false);
     cx.ctl.text("inbox-sub", &sub, TEXT, r);
+    ui.add_space(12.0);
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing.x = 8.0;
+        if widgets::button(cx.ctl, ui, t, C::new("assignment-settings", "Assignment settings", TEXT), "Assignment settings", Look::Outline, 0.0) {
+            cx.acts.push(Act::OpenAssignment);
+        }
+        if widgets::button(cx.ctl, ui, t, C::new("add-pages", "Add pages", TEXT), "Add pages", Look::Primary, 0.0) {
+            cx.acts.push(Act::OpenAdd(None));
+        }
+        if widgets::button(cx.ctl, ui, t, C::new("export", "Export", TEXT), "Export", Look::Outline, 0.0) {
+            cx.acts.push(Act::OpenExport);
+        }
+    });
 
     if groups.is_empty() {
         ui.add_space(28.0);
@@ -1224,6 +1888,10 @@ fn inbox_body(ui: &mut Ui, cx: &mut Cx, s: &Session) {
                 ui.add_space(10.0);
                 let r = css_text(ui, "No pages in this assignment", theme::sans_semi(18.0), t.ink, 18.0 * 1.4, w, false);
                 cx.ctl.heading("inbox-empty", 2, "No pages in this assignment", TEXT, r);
+                ui.add_space(14.0);
+                if widgets::button(cx.ctl, ui, t, C::new("add-pages-empty", "Add pages", TEXT), "Add pages", Look::Primary, 0.0) {
+                    cx.acts.push(Act::OpenAdd(None));
+                }
             });
         });
         return;
@@ -1373,16 +2041,6 @@ fn inbox_body(ui: &mut Ui, cx: &mut Cx, s: &Session) {
             }
         });
     }
-    ui.add_space(12.0);
-    css_text(
-        ui,
-        "Adding pages in bulk, assignment settings and exporting arrive with phase 5 and 6.",
-        theme::sans(13.0),
-        t.muted,
-        13.0 * 1.4,
-        w,
-        false,
-    );
 }
 
 /// `.srow`: selection box, thumbnail, name and counts, the status chip, a chevron, and Retry for a failed one.
@@ -3356,7 +4014,7 @@ fn alternatives(ui: &mut Ui, cx: &mut Cx, s: &Session, cur: &Entry) {
         let (slot, _) = ui.allocate_exact_size(vec2(tw_, TARGET), Sense::hover());
         let edit = egui::TextEdit::singleline(&mut *cx.typed)
             // Chrome's default placeholder colour (`::placeholder`), in both themes
-            .hint_text(RichText::new("Type what it says").font(theme::sans(14.0)).color(Color32::from_rgb(117, 117, 117)))
+            .hint_text(RichText::new("Type what it says").font(theme::sans(14.0)).color(t.placeholder()))
             .font(theme::sans(14.0))
             .margin(vec2(12.0, 13.0))
             .min_size(slot.size())
