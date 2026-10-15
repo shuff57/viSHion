@@ -788,6 +788,8 @@ fn apply(
         Act::OpenSettings => {
             s.conn_test = None;
             s.models_note.clear();
+            s.check_note.clear();
+            s.checking = false;
             // a local server is cheap to ask, so the picker is filled when Settings opens (js settings.js)
             let provider = s.settings.get("provider").and_then(|v| v.as_str()).unwrap_or("local").to_string();
             if provider == "local" && s.settings.get("demo").and_then(|v| v.as_bool()) != Some(true) {
@@ -1012,6 +1014,18 @@ fn apply(
                         }
                         dialog::TopicResult::Nothing => {}
                     }
+                    return;
+                }
+                dialog::Out::CheckModels(url, key) => {
+                    s.checking = true;
+                    s.check_note = "Listing models\u{2026}".into();
+                    send(Cmd::CheckModels { conn: find_conn(s, url, key) });
+                    return;
+                }
+                dialog::Out::ShowAllModels(url, key) => {
+                    dialog::set_working(s, None);
+                    s.check_note = "Showing every model that takes images.".into();
+                    send(Cmd::FindModels { conn: find_conn(s, url, key), working: None, all: true });
                     return;
                 }
                 dialog::Out::FindModels(url, key) => {

@@ -61,6 +61,9 @@ pub enum Cmd {
     /// Settings, Find models: the models the server lists that can read images (`working` narrows a cloud
     /// picker to the models a check found usable; `all` ignores it).
     FindModels { conn: Conn, working: Option<Vec<String>>, all: bool },
+    /// Settings, Check which models work: one tiny image to every model that takes images, `Event::ModelsProgress`
+    /// as they answer and `Event::ModelsChecked` at the end.
+    CheckModels { conn: Conn },
     /// Settings, Test connection: ask the server (the address and key as typed) what it serves.
     TestConnection { conn: Conn },
     /// Web: `choose` a folder to save in, `browser` storage instead, or `reconnect` the remembered folder.
@@ -151,6 +154,11 @@ pub enum Event {
     },
     /// Whether Home offers "Import old sessions".
     LegacyAvailable(bool),
+    /// How far Check which models work has got.
+    ModelsProgress { done: usize, total: usize },
+    /// The end of Check which models work: the ids that answered (what to remember as working), the picker
+    /// narrowed to them (when any did) and the sentence for Settings.
+    ModelsChecked { ok: Vec<String>, list: Vec<(String, String, Option<bool>)>, note: String },
     /// The answer to `FindModels`: the models, or the sentence that says why not.
     ModelsFound(Result<Vec<(String, String, Option<bool>)>, String>),
     /// The answer to `TestConnection`: a line for the Settings dialog, and whether it is good news.

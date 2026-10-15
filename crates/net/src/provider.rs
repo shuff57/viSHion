@@ -90,9 +90,45 @@ impl Provider {
             Provider::OpenAiCompatible => crate::post_json(url, api_key, body, timeout_secs).await,
             Provider::Mock(m) => match &m.fail {
                 Some(msg) => Err(Error::Network(msg.clone())),
+                None if url.ends_with("/v1/chat/completions") => {
+                    Ok(crate::Reply { status: 200, body: "{\"choices\":[{\"message\":{\"content\":\"OK\"}}]}".into() })
+                }
                 None => Ok(crate::Reply { status: 200, body: "{\"capabilities\":[\"completion\",\"vision\"]}".into() }),
             },
         }
+    }
+
+    /// `M.probe`: one tiny picture and a one-word question to each model, with the key. A model that answers
+    /// accepts images with this key; one that is refused is left out. `progress(done, total)` after each.
+    pub async fn probe(&self, base: &str, api_key: &str, ids: &[String], progress: &dyn Fn(usize, usize)) -> (Vec<String>, Vec<(String, String)>) {
+        const TINY: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAIAAAD8GO2jAAAAN0lEQVR4nO3RwQ0AMAjDwJT9d05HMB9+vgGCZF7bXJrT9XhgwR8gEyETIRMhEyETIRMhEyEThXzH8QM9OMM6fAAAAABJRU5ErkJggg==";
+        let url = format!("{}/v1/chat/completions", base.trim_end_matches('/'));
+        let (mut ok, mut failed) = (vec![], vec![]);
+        for (i, id) in ids.iter().enumerate() {
+            let body = serde_json::json!({
+                "model": id, "stream": false, "max_tokens": 8, "temperature": 0,
+                "messages": [{"role": "user", "content": [
+                    {"type": "image_url", "image_url": {"url": TINY}},
+                    {"type": "text", "text": "Reply with the single word OK."}]}]
+            })
+            .to_string();
+            match self.post_json(&url, api_key, &body, 60).await {
+                Ok(r) if r.status == 200 => {
+                    let answered = serde_json::from_str::<serde_json::Value>(&r.body)
+                        .ok()
+                        .is_some_and(|v| v["choices"][0]["message"]["content"].is_string());
+                    if answered {
+                        ok.push(id.clone());
+                    } else {
+                        failed.push((id.clone(), "empty answer".to_string()));
+                    }
+                }
+                Ok(r) => failed.push((id.clone(), format!("HTTP {}", r.status))),
+                Err(_) => failed.push((id.clone(), "no connection".to_string())),
+            }
+            progress(i + 1, ids.len());
+        }
+        (ok, failed)
     }
 
     /// `M.list` (before the picker's tidying): the rows the server lists, each with what `/api/show` says about

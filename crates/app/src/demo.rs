@@ -599,6 +599,68 @@ mod tests {
         assert!(matches!(block_on(be.find_models(&empty, None, false)), Event::ModelsFound(Err(m)) if m == "Enter the server address first."));
     }
 
+    /// Settings, Check which models work: a model the key cannot use is left out, progress is reported, and a
+    /// refused key says so.
+    #[test]
+    fn check_models_keeps_the_models_that_answer() {
+        use std::io::{Read, Write};
+        fn serve(refuse_all: bool) -> String {
+            let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let url = format!("http://{}", l.local_addr().unwrap());
+            std::thread::spawn(move || {
+                for conn in l.incoming() {
+                    let Ok(mut s) = conn else { return };
+                    std::thread::spawn(move || {
+                        s.set_read_timeout(Some(std::time::Duration::from_millis(250))).unwrap();
+                        let mut req = Vec::new();
+                        let mut b = [0u8; 16384];
+                        while let Ok(n) = s.read(&mut b) {
+                            if n == 0 {
+                                break;
+                            }
+                            req.extend_from_slice(&b[..n]);
+                        }
+                        let text = String::from_utf8_lossy(&req).to_string();
+                        let (status, body) = if text.starts_with("GET /v1/models") {
+                            ("200 OK", r#"{"data":[{"id":"good"},{"id":"bad"}]}"#.to_string())
+                        } else if refuse_all || text.contains("\"model\":\"bad\"") {
+                            ("403 Forbidden", "{}".to_string())
+                        } else {
+                            ("200 OK", r#"{"choices":[{"message":{"content":"OK"}}]}"#.to_string())
+                        };
+                        let _ = s.write_all(format!("HTTP/1.1 {status}\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{body}", body.len()).as_bytes());
+                    });
+                }
+            });
+            url
+        }
+        let be = Backend::new(AnyStore::Mem(vishion_store::mem::MemStore::default()), "Saved");
+        let run = |url: String| -> Vec<Event> {
+            let out = std::cell::RefCell::new(vec![]);
+            let conn = vishion_ui::Conn { url, provider: "custom".into(), ..Default::default() };
+            block_on(be.check_models(&conn, &|e| out.borrow_mut().push(e)));
+            out.into_inner()
+        };
+        let evs = run(serve(false));
+        assert_eq!(evs.iter().filter(|e| matches!(e, Event::ModelsProgress { .. })).count(), 2);
+        match evs.last().unwrap() {
+            Event::ModelsChecked { ok, list, note } => {
+                assert_eq!(ok, &vec!["good".to_string()]);
+                assert_eq!(list.len(), 1);
+                assert_eq!(note, "1 of 2 models answered with your key. Only those are listed. Left out: Bad (HTTP 403).");
+            }
+            e => panic!("{e:?}"),
+        }
+        let evs = run(serve(true));
+        match evs.last().unwrap() {
+            Event::ModelsChecked { ok, note, .. } => {
+                assert!(ok.is_empty());
+                assert_eq!(note, "None of the 2 models answered, and the endpoint refused the key. Check the API key above.");
+            }
+            e => panic!("{e:?}"),
+        }
+    }
+
     /// The native path: a real folder, written and read back through `FsStore` and the project layer.
     #[test]
     fn folder_store_round_trip_keeps_edits() {

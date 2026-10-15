@@ -664,4 +664,26 @@ mod tests {
         }).collect();
         assert!(said.iter().any(|t| t.starts_with("1 model found, 1 that can see images")), "{said:?}");
     }
+
+    /// Check which models work remembers the usable models for the provider, and Show every model again clears
+    /// them; the other profile values survive both.
+    #[test]
+    fn checked_models_are_remembered_as_working() {
+        use vishion_ui::Event;
+        let mut r = Rig::demo();
+        r.act("crumb");
+        r.act("settings");
+        assert!(r.has("st-check-models") && r.has("st-show-all-models"));
+        r.inbox.push(Event::ModelsChecked {
+            ok: vec!["m1".into()],
+            list: vec![("m1".into(), "M 1".into(), Some(true))],
+            note: "1 of 2 models answered with your key. Only those are listed.".into(),
+        });
+        r.frames(3);
+        let p = r.app.session().unwrap().settings.get("profiles").unwrap().clone();
+        assert_eq!(p["local"]["working"], serde_json::json!(["m1"]));
+        r.act("st-show-all-models");
+        let p = r.app.session().unwrap().settings.get("profiles").unwrap().clone();
+        assert!(p["local"].get("working").is_none());
+    }
 }

@@ -145,6 +145,9 @@ pub enum Out {
     TestConnection(String, String),
     /// Find models: the engine address and key as typed.
     FindModels(String, String),
+    /// Check which models work (the engine address and key as typed), or show every model again.
+    CheckModels(String, String),
+    ShowAllModels(String, String),
     /// An assignment field changed in the open dialog (it stays open): key, value, what is said.
     Meta(&'static str, serde_json::Value, String),
     /// Make this kind of export (combined | pages | csv | json | copy | all) for the scope shown.
@@ -371,15 +374,34 @@ pub fn remember(s: &mut Session) {
     let id = setting_str(s, "provider", "local");
     let id = provider(&id).0;
     let mut profiles = s.settings.get("profiles").cloned().filter(|v| v.is_object()).unwrap_or_else(|| json!({}));
-    let entry = json!({
-        "url": shown_url(id, &setting_str(s, "ocrUrl", "")),
-        "model": setting_str(s, "model", ""),
-        "key": setting_str(s, "apiKey", ""),
-    });
+    // (`M.remember` merges: the list of models a check found usable stays)
+    let mut entry = profiles.get(id).cloned().filter(|v| v.is_object()).unwrap_or_else(|| json!({}));
+    if let Some(e) = entry.as_object_mut() {
+        e.insert("url".into(), json!(shown_url(id, &setting_str(s, "ocrUrl", ""))));
+        e.insert("model".into(), json!(setting_str(s, "model", "")));
+        e.insert("key".into(), json!(setting_str(s, "apiKey", "")));
+    }
     if let Some(m) = profiles.as_object_mut() {
         m.insert(id.to_string(), entry);
     }
     s.settings.set("profiles", profiles);
+}
+
+/// `M.setWorking`: the models a check found usable for the provider in use (`None` clears the list).
+pub fn set_working(s: &mut Session, ids: Option<&[String]>) {
+    use serde_json::json;
+    remember(s);
+    let id = setting_str(s, "provider", "local");
+    let id = provider(&id).0;
+    let mut profiles = s.settings.get("profiles").cloned().filter(|v| v.is_object()).unwrap_or_else(|| json!({}));
+    if let Some(e) = profiles.get_mut(id).and_then(|e| e.as_object_mut()) {
+        match ids {
+            Some(list) => e.insert("working".into(), json!(list)),
+            None => e.remove("working"),
+        };
+    }
+    s.settings.set("profiles", profiles);
+    s.dirty.settings = true;
 }
 
 /// `M.switchTo`: remember the values in use, then take the saved ones of `id` (or its defaults).
@@ -1028,6 +1050,30 @@ fn settings(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, s: &Session, drafts: &mut Dr
                 ui.add_space(6.0);
                 let r = para(ui, iw, &s.models_note, theme::sans(13.0), t.muted, 18.2);
                 ctl.status("st-models-note", &s.models_note, DIALOG, r);
+            }
+            // Check which models work: one tiny image to each, so a model the key cannot use is left out
+            ui.add_space(8.0);
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing = vec2(12.0, 8.0);
+                let typed = |s: &Session, drafts: &Drafts| {
+                    let shown = drafts.get("st-ocr").cloned().unwrap_or_else(|| shown_url(pid.0, &setting_str(s, "ocrUrl", pid.2)));
+                    let key = drafts.get("st-key").cloned().unwrap_or_else(|| setting_str(s, "apiKey", ""));
+                    (engine_url(s, pid.0, &shown), key.trim().to_string())
+                };
+                let busy = s.checking;
+                if widgets::button(ctl, ui, t, C::new("st-check-models", "Check which models work", DIALOG).disabled(busy), "Check which models work", Look::Outline, 0.0) {
+                    let (u, k) = typed(s, drafts);
+                    out = Some(Out::CheckModels(u, k));
+                }
+                if widgets::button(ctl, ui, t, C::new("st-show-all-models", "Show every model again", DIALOG).disabled(busy), "Show every model again", Look::Ghost, 0.0) {
+                    let (u, k) = typed(s, drafts);
+                    out = Some(Out::ShowAllModels(u, k));
+                }
+            });
+            if !s.check_note.is_empty() {
+                ui.add_space(6.0);
+                let r = para(ui, iw, &s.check_note, theme::sans(13.0), t.muted, 18.2);
+                ctl.status("st-check-note", &s.check_note, DIALOG, r);
             }
             ui.add_space(6.0);
             hint_p(ctl, ui, t, iw, "st-model-hint", "Choose which model reads the pages. A local server swaps it in when you pick another.");

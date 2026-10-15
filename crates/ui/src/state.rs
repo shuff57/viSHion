@@ -223,6 +223,9 @@ pub struct Session {
     /// What Find models found: (id, label, takes images), and the note under the model picker.
     pub found_models: Vec<(String, String, Option<bool>)>,
     pub models_note: String,
+    /// "Check which models work" is running, and what it said.
+    pub checking: bool,
+    pub check_note: String,
     pub capture: CaptureState,
     /// `S.d.textView === 'raw'`: the transcript as plain monospace text.
     pub text_raw: bool,
@@ -295,6 +298,8 @@ impl Session {
             conn_test: None,
             found_models: vec![],
             models_note: String::new(),
+            checking: false,
+            check_note: String::new(),
             capture: CaptureState { auto: true, ..Default::default() },
             text_raw: false,
             zoom: 1.0,

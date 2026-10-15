@@ -1118,6 +1118,21 @@ impl App {
                 }
                 Event::Folder(f) => self.home.folder = Some(f),
                 Event::LegacyAvailable(on) => self.home.legacy = on,
+                Event::ModelsProgress { done, total } => {
+                    if let Some(s) = &mut self.session {
+                        s.check_note = format!("Checking {done} of {total}\u{2026}");
+                    }
+                }
+                Event::ModelsChecked { ok, list, note } => {
+                    if let Some(s) = &mut self.session {
+                        s.checking = false;
+                        s.check_note = note;
+                        if !ok.is_empty() {
+                            dialog::set_working(s, Some(&ok));
+                            s.found_models = list;
+                        }
+                    }
+                }
                 Event::ModelsFound(r) => {
                     if let Some(s) = &mut self.session {
                         match r {

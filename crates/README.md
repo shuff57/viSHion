@@ -211,6 +211,14 @@ every picker, narrows a cloud picker to `profiles[provider].working` unless aske
 first; `pretty` tidies the ids ("gemma4:31b-cloud" is "Gemma 4 31B"). The picker lists the result; a local
 provider is asked when Settings opens.
 
+### Check which models work
+
+`Cmd::CheckModels` lists every model that takes images, sends each a tiny picture and a one-word question
+(`Provider::probe`), and reports `Event::ModelsProgress` as they answer. The ids that answered are stored as
+`profiles[provider].working` and narrow a cloud picker (`assemble`); none answering keeps the full list and says
+whether the key was refused. "Show every model again" clears `working`. `dialog::remember` merges into the
+profile, so `working` survives a provider switch.
+
 ## Demo mode and reading pages
 
 `--demo`, `?demo=1` and the `demo` setting answer Retry, Transcribe, Transcribe again and the inbox's Resume

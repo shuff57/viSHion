@@ -552,6 +552,52 @@ impl Backend {
         }
     }
 
+    /// Settings, Check which models work (`M.probe` and the button of js/ui/settings.js): list every model that
+    /// takes images, send each a tiny picture, keep those that answer. `emit` hears the progress.
+    pub async fn check_models(&self, conn: &Conn, emit: &dyn Fn(Event)) {
+        let id = if conn.provider.is_empty() { "local" } else { conn.provider.as_str() };
+        let provider = vishion_net::Provider::for_setting(id);
+        let (shows, cloud, relay) = (id == "local", id != "local", id == "ollama-cloud");
+        let done = |note: String| Event::ModelsChecked { ok: vec![], list: vec![], note };
+        let rows = match provider.list_models(&conn.url, &conn.api_key, shows, relay).await {
+            Ok(r) => r,
+            Err(m) => return emit(done(m)),
+        };
+        let all = vishion_net::models::assemble(rows, id, cloud, None, true);
+        if all.is_empty() {
+            return emit(done("The endpoint listed no models that take images.".into()));
+        }
+        let ids: Vec<String> = all.iter().map(|m| m.id.clone()).collect();
+        let (ok, failed) = provider.probe(&conn.url, &conn.api_key, &ids, &|d, n| emit(Event::ModelsProgress { done: d, total: n })).await;
+        if ok.is_empty() {
+            // usually a missing or wrong key: keep the full list rather than an empty picker
+            let refused = failed.iter().any(|(_, why)| why.contains("401") || why.contains("403"));
+            let tail = if refused { ", and the endpoint refused the key. Check the API key above." } else { ". Check the key and the connection." };
+            return emit(done(format!("None of the {} models answered{tail}", all.len())));
+        }
+        let list: Vec<(String, String, Option<bool>)> =
+            all.iter().filter(|m| ok.contains(&m.id)).map(|m| (m.id.clone(), m.label.clone(), m.vision)).collect();
+        let bad: Vec<String> = failed
+            .iter()
+            .take(4)
+            .map(|(id, why)| format!("{} ({why})", vishion_net::models::pretty(id, "")))
+            .collect();
+        let mut note = format!(
+            "{} of {} models answered with your key{}",
+            ok.len(),
+            all.len(),
+            if ok.len() == all.len() { ". All are listed." } else { ". Only those are listed." }
+        );
+        if !bad.is_empty() {
+            note.push_str(&format!(" Left out: {}", bad.join(", ")));
+            if failed.len() > 4 {
+                note.push_str(&format!(" and {} more", failed.len() - 4));
+            }
+            note.push('.');
+        }
+        emit(Event::ModelsChecked { ok, list, note });
+    }
+
     /// Settings, Find models (`M.list`): what the server lists that can read images.
     pub async fn find_models(&self, conn: &Conn, working: Option<Vec<String>>, all: bool) -> Event {
         let id = if conn.provider.is_empty() { "local" } else { conn.provider.as_str() };
@@ -793,6 +839,11 @@ impl Backend {
             Cmd::Folder(_) => Event::Many(vec![]),
             Cmd::ImportLegacy => self.import_legacy(now).await,
             Cmd::TestConnection { conn } => self.test_connection(&conn).await,
+            Cmd::CheckModels { conn } => {
+                let out = std::cell::RefCell::new(vec![]);
+                self.check_models(&conn, &|e| out.borrow_mut().push(e)).await;
+                Event::Many(out.into_inner())
+            }
             Cmd::FindModels { conn, working, all } => self.find_models(&conn, working, all).await,
             Cmd::ListProjects => Event::Many(vec![Event::LegacyAvailable(self.legacy_available()), self.list_event(now).await]),
             Cmd::OpenProject { slug } => self.open(Some(&slug), now).await,
