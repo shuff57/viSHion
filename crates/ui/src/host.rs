@@ -127,6 +127,8 @@ pub enum Cmd {
     SaveMeta { slug: String, meta: Project },
     /// `settings.json` (secrets stripped by the project layer).
     SaveSettings { settings: Settings },
+    /// The settings alone, for Settings opened from the home screen (no assignment is open): `Event::SettingsLoaded`.
+    LoadSettings,
     /// `deletePage`: the page file, its image and its originals. The UI already dropped it from the order.
     RemovePage { slug: String, id: String },
     /// Turn the stored image a quarter turn clockwise; answered by `Event::Image`.
@@ -171,6 +173,8 @@ pub enum Event {
         /// The assignment came from the backup copy of a damaged `project.json`.
         notice: Option<String>,
     },
+    /// The answer to `LoadSettings`.
+    SettingsLoaded(Box<Settings>),
     /// Whether Home offers "Import old sessions".
     LegacyAvailable(bool),
     /// The browser allowed the remembered folder again (the banner's Reconnect): save everything once more.

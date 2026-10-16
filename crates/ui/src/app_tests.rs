@@ -236,6 +236,61 @@ fn empty_store_and_failure_have_a_screen() {
     assert!(app.nodes().iter().any(|n| matches!(n, Node::Status { text, .. } if text == "boom")));
 }
 
+/// Settings from the home screen, with no assignment open: the settings are asked for, the dialog opens on them,
+/// a change is written when it closes, and nothing of the settings-only session is left behind.
+#[test]
+fn settings_from_the_home_screen_load_edit_and_save() {
+    use vishion_core::model::Settings;
+    let ctx = egui::Context::default();
+    let sent: Rc<RefCell<Vec<Cmd>>> = Rc::default();
+    let s2 = sent.clone();
+    let inbox = Inbox::new(ctx.clone());
+    let mut app = App::new(ctx.clone()).with_host(Box::new(move |c| s2.borrow_mut().push(c)), inbox.clone());
+    inbox.push(Event::Empty { storage: "Saved in this browser".into() });
+    let mut t = 0.0;
+    let mut frames = |app: &mut App, n: usize| {
+        for _ in 0..n {
+            t += 0.1;
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 800.0))),
+                time: Some(t),
+                ..Default::default()
+            };
+            let _ = ctx.run(input, |c| app.step(c, false));
+        }
+    };
+    let act = |app: &mut App, id: &str| {
+        assert!(app.controls().iter().any(|c| c.id == id), "no control {id}");
+        app.queue.lock().unwrap().push(format!("act:{id}"));
+    };
+    frames(&mut app, 3);
+    act(&mut app, "settings");
+    frames(&mut app, 3);
+    assert!(sent.borrow().iter().any(|c| matches!(c, Cmd::LoadSettings)), "Settings on Home asks for the settings");
+    assert!(app.dialog.is_none(), "the dialog waits for the settings");
+    inbox.push(Event::SettingsLoaded(Box::new(Settings::defaults())));
+    frames(&mut app, 3);
+    assert!(matches!(app.dialog, Some(dialog::Dialog::Settings { .. })), "Settings opens on what came back");
+    // a local-server settings dialog asks which models it has, as it does inside an assignment
+    assert!(sent.borrow().iter().any(|c| matches!(c, Cmd::FindModels { .. })));
+    // change something and close
+    act(&mut app, "st-provider");
+    frames(&mut app, 3);
+    act(&mut app, "st-provider-ollama-cloud");
+    frames(&mut app, 3);
+    act(&mut app, "dialog-ok");
+    frames(&mut app, 3);
+    act(&mut app, "dialog-close");
+    frames(&mut app, 4);
+    assert!(app.dialog.is_none());
+    let saved: Vec<_> = sent.borrow().iter().filter_map(|c| match c {
+        Cmd::SaveSettings { settings } => Some(settings.clone()),
+        _ => None,
+    }).collect();
+    assert_eq!(saved.last().and_then(|s| s.get("provider").and_then(|v| v.as_str()).map(String::from)).as_deref(), Some("ollama-cloud"));
+    assert!(app.home_settings.is_none(), "the settings-only session is dropped once Settings is closed and saved");
+}
+
 #[test]
 fn home_storage_card_has_the_four_states_of_the_js_app() {
     use crate::host::FolderInfo;

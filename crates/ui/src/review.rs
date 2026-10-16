@@ -230,7 +230,7 @@ fn tw(ui: &Ui, text: &str, font: egui::FontId) -> f32 {
 }
 
 pub(crate) fn show(app: &mut App, ctx: &egui::Context, t: &Tokens) {
-    let App { cam_tex, home, ctl, session, math, images, typed, typed_for, status_msg, status_err, boot, notice, save, storage, dialog, stage, host, want, emoji: emoji_cache, .. } = app;
+    let App { cam_tex, home, ctl, session, home_settings, math, images, typed, typed_for, status_msg, status_err, boot, notice, save, storage, dialog, stage, host, want, emoji: emoji_cache, .. } = app;
     let mut acts: Vec<Act> = vec![];
     if let Some(s) = session.as_mut() {
         // js renderWho: Original cannot stay set where both versions read the same
@@ -405,7 +405,7 @@ pub(crate) fn show(app: &mut App, ctx: &egui::Context, t: &Tokens) {
     }
 
     // a modal dialog draws last, over everything
-    if let (Some(d), Some(s), false) = (dialog.as_mut(), session.as_ref(), show_home) {
+    if let (Some(d), Some(s)) = (dialog.as_mut(), session.as_ref().or(home_settings.as_ref())) {
         if let Some(o) = dialog::show(ctx, &mut *ctl, t, s, d) {
             acts.push(Act::Dialog(o));
         }
@@ -422,6 +422,20 @@ pub(crate) fn show(app: &mut App, ctx: &egui::Context, t: &Tokens) {
     };
     for a in home_acts {
         use crate::home::HomeAct;
+        if matches!(a, HomeAct::Settings) {
+            // Settings from the home screen: an open assignment's settings, or the settings alone, asked for first
+            match session.as_mut() {
+                Some(s) => {
+                    let find = prepare_settings(s);
+                    *dialog = Some(Dialog::settings());
+                    if let Some(c) = find {
+                        send(c);
+                    }
+                }
+                None => send(Cmd::LoadSettings),
+            }
+            continue;
+        }
         send(match a {
             HomeAct::Open(slug) => Cmd::OpenProject { slug },
             HomeAct::Create(name) => Cmd::CreateProject { name },
@@ -433,12 +447,13 @@ pub(crate) fn show(app: &mut App, ctx: &egui::Context, t: &Tokens) {
             HomeAct::ImportLegacy => Cmd::ImportLegacy,
             HomeAct::Folder(what) => Cmd::Folder(what.to_string()),
             HomeAct::DownloadZip(slug) => Cmd::DownloadZip { slug },
+            HomeAct::Settings => unreachable!("handled above"),
         });
         // the list is asked for again after a change
         home.cards = None;
     }
     let dialog_was = ctl.dialog_was;
-    if let (Some(s), false) = (session.as_mut(), show_home) {
+    if let Some(s) = session.as_mut().or(home_settings.as_mut()) {
         s.now = crate::now_ms();
         for a in acts {
             if !matches!(a, Act::ReadLine(_) | Act::ReadMove(_) | Act::ReadEdge(_) | Act::ReadClear | Act::Zoom(_) | Act::ZoomSet(_) | Act::Pan(_) | Act::Dialog(_) | Act::CloseDialog | Act::Scrolled(_)) {
@@ -590,6 +605,21 @@ fn run_export(s: &Session, ctx: &egui::Context, kind: &str, scope: &str, send: &
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Before Settings opens: forget the last answers shown in it, and ask a local server which models it has
+/// (it is cheap to ask, so the picker is filled when Settings opens: js settings.js).
+pub(crate) fn prepare_settings(s: &mut Session) -> Option<Cmd> {
+    s.conn_test = None;
+    s.models_note.clear();
+    s.check_note.clear();
+    s.unload_note.clear();
+    s.checking = false;
+    let provider = s.settings.get("provider").and_then(|v| v.as_str()).unwrap_or("local").to_string();
+    if provider == "local" && s.settings.get("demo").and_then(|v| v.as_bool()) != Some(true) {
+        return Some(Cmd::FindModels { conn: s.read_conn(), working: None, all: false });
+    }
+    None
+}
+
 fn apply(
     a: Act,
     s: &mut Session,
@@ -854,16 +884,8 @@ fn apply(
             }
         }
         Act::OpenSettings => {
-            s.conn_test = None;
-            s.models_note.clear();
-            s.check_note.clear();
-            s.unload_note.clear();
-            s.checking = false;
-            // a local server is cheap to ask, so the picker is filled when Settings opens (js settings.js)
-            let provider = s.settings.get("provider").and_then(|v| v.as_str()).unwrap_or("local").to_string();
-            if provider == "local" && s.settings.get("demo").and_then(|v| v.as_bool()) != Some(true) {
-                let c = s.read_conn();
-                send(Cmd::FindModels { conn: c, working: None, all: false });
+            if let Some(c) = prepare_settings(s) {
+                send(c);
             }
             *dialog = Some(Dialog::settings());
         }

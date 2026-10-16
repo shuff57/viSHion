@@ -275,7 +275,10 @@ mod web {
                                     b.stage_pictures(&conn, read_names, preset.as_deref(), &|e| inbox.push(e)).await;
                                     return;
                                 }
-                                let e: Event = b.handle(cmd, js_sys::Date::now() as i64).await;
+                                let mut e: Event = b.handle(cmd, js_sys::Date::now() as i64).await;
+                                if let Event::SettingsLoaded(settings) = &mut e {
+                                    local_settings::overlay(settings);
+                                }
                                 inbox.push(e);
                             });
                         })

@@ -276,6 +276,14 @@ impl Backend {
     }
 
     /// Open `want`, or the most recently updated assignment. Answers `Empty` / `Failed` / `Opened`.
+    /// `settings.json` as the settings in use (defaults when there is none or it is damaged, which is left alone).
+    async fn settings_now(&self) -> Settings {
+        match self.projects.load_settings().await {
+            Ok(Some(m)) => Settings::load(&Value::Object(m)),
+            _ => Settings::defaults(),
+        }
+    }
+
     pub async fn open(&self, want: Option<&str>, now: i64) -> Event {
         let slug = match want {
             Some(s) => s.to_string(),
@@ -287,11 +295,8 @@ impl Backend {
                 Err(e) => return Event::Failed(e.to_string()),
             },
         };
-        let settings = match self.projects.load_settings().await {
-            Ok(Some(m)) => Settings::load(&Value::Object(m)),
-            // a damaged settings.json is left alone; the app runs on defaults for this session
-            _ => Settings::defaults(),
-        };
+        // (a damaged settings.json is left alone; the app runs on defaults for this session)
+        let settings = self.settings_now().await;
         match self.projects.open_project(&slug, true, now).await {
             Ok(Some(o)) => Event::Opened {
                 slug: o.slug,
@@ -998,6 +1003,7 @@ impl Backend {
             },
             Cmd::SavePage { slug, page } => done(self.projects.save_page(&slug, &page).await),
             Cmd::SaveMeta { slug, mut meta } => done(self.projects.save_meta(&slug, &mut meta, Some(now)).await),
+            Cmd::LoadSettings => Event::SettingsLoaded(Box::new(self.settings_now().await)),
             Cmd::SaveSettings { settings } => done(self.projects.save_settings(&settings).await),
         }
     }

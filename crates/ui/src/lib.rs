@@ -757,6 +757,9 @@ pub struct App {
     boot: Boot,
     home: home::Home,
     session: Option<state::Session>,
+    /// Settings opened from the home screen with no assignment open: a session with nothing in it but the
+    /// settings, so the dialog and its saves work as they do inside an assignment. Dropped when the dialog closes.
+    home_settings: Option<state::Session>,
     storage: String,
     notice: Option<String>,
     save: SaveState,
@@ -919,6 +922,7 @@ impl App {
             boot: Boot::Loading,
             home: Default::default(),
             session: None,
+            home_settings: None,
             storage: String::new(),
             notice: None,
             save: SaveState::default(),
@@ -1181,7 +1185,7 @@ impl App {
                         (true, None) => Some("Nothing was loaded.".to_string()),
                         (true, Some(_)) => None,
                     };
-                    if let Some(s) = &mut self.session {
+                    if let Some(s) = self.settings_session() {
                         s.unload_note = said.clone().unwrap_or_default();
                     }
                     // the idle unload tells the person (a toast); the button's answer is in Settings
@@ -1216,12 +1220,12 @@ impl App {
                     }
                 }
                 Event::ModelsProgress { done, total } => {
-                    if let Some(s) = &mut self.session {
+                    if let Some(s) = self.settings_session() {
                         s.check_note = format!("Checking {done} of {total}\u{2026}");
                     }
                 }
                 Event::ModelsChecked { ok, list, note } => {
-                    if let Some(s) = &mut self.session {
+                    if let Some(s) = self.settings_session() {
                         s.checking = false;
                         s.check_note = note;
                         if !ok.is_empty() {
@@ -1231,7 +1235,7 @@ impl App {
                     }
                 }
                 Event::ModelsFound(r) => {
-                    if let Some(s) = &mut self.session {
+                    if let Some(s) = self.settings_session() {
                         match r {
                             Ok(list) => {
                                 let seeing = list.iter().filter(|m| m.2 == Some(true)).count();
@@ -1247,8 +1251,20 @@ impl App {
                     }
                 }
                 Event::ConnectionTested { ok, text } => {
-                    if let Some(s) = &mut self.session {
+                    if let Some(s) = self.settings_session() {
                         s.conn_test = Some((ok, text));
+                    }
+                }
+                Event::SettingsLoaded(settings) => {
+                    // Settings asked for from the home screen: a session holding only these, and the dialog
+                    if self.session.is_none() && (self.home.active || matches!(self.boot, Boot::Empty)) {
+                        let mut s = state::Session::new(String::new(), vishion_core::model::Assignment::new(vishion_core::model::Project::empty()), *settings, now_ms());
+                        let find = review::prepare_settings(&mut s);
+                        self.home_settings = Some(s);
+                        self.dialog = Some(dialog::Dialog::settings());
+                        if let Some(c) = find {
+                            self.send(c);
+                        }
                     }
                 }
                 Event::Projects(cards) => {
@@ -1550,7 +1566,29 @@ impl App {
         }
     }
 
+    /// The session the Settings dialog edits: the open assignment's, or the settings-only one behind the home screen.
+    fn settings_session(&mut self) -> Option<&mut state::Session> {
+        match self.session.as_mut() {
+            Some(s) => Some(s),
+            None => self.home_settings.as_mut(),
+        }
+    }
+
     fn flush_dirty(&mut self) {
+        // settings changed on the home screen are written, and the settings-only session goes once Settings closes
+        if self.session.is_none() {
+            if let Some(h) = &mut self.home_settings {
+                if h.dirty.settings {
+                    h.dirty.settings = false;
+                    let settings = h.settings.clone();
+                    self.save.pending += 1;
+                    self.send(Cmd::SaveSettings { settings });
+                }
+            }
+            if self.dialog.is_none() && self.home_settings.as_ref().is_some_and(|h| !h.dirty.settings) {
+                self.home_settings = None;
+            }
+        }
         let Some(s) = &mut self.session else { return };
         if !s.dirty.any() {
             return;
@@ -1633,7 +1671,7 @@ impl App {
         let name = self
             .theme_override
             .clone()
-            .or_else(|| self.session.as_ref().and_then(|s| s.settings.get("theme").and_then(|v| v.as_str().map(String::from))))
+            .or_else(|| self.session.as_ref().or(self.home_settings.as_ref()).and_then(|s| s.settings.get("theme").and_then(|v| v.as_str().map(String::from))))
             .unwrap_or_else(|| self.theme_name.clone());
         self.theme_name = name;
         let forced = self.forced;

@@ -107,6 +107,15 @@ Rules for every slice: follow the surrounding code and the "Rules to keep" in `c
 that are already recorded (above); no push, no PR; update this table's "Done when" with what was built and
 what could not be verified without a live server or browser.
 
+## Home: wordmark and Settings
+
+Added after the cutover decision. The home screen has a top bar like the JS app's: the wordmark (its scan-in plays once
+on load and now always runs to its end; a pointer crossing the header no longer restarts it) and a Settings button.
+Settings has no assignment to live in on Home, so `Cmd::LoadSettings` / `Event::SettingsLoaded` fetch them into a
+settings-only session (`App::home_settings`) that the dialog edits, saves through `SaveSettings`, and drops when it
+closes. With an assignment still open behind Home, its own session is used. Tested in the rig and in Chrome; not
+walked against the JS Home screen's Settings beyond opening it.
+
 ## Needs you
 
 Left after the loop of 2026-10-16. Nothing here can be finished or checked from this machine unattended.
