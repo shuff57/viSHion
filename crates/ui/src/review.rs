@@ -1175,6 +1175,9 @@ fn apply(
                         return;
                     }
                     dialog::switch_provider(s, &id);
+                    if let Some(d) = dialog.as_mut() {
+                        dialog::forget_provider_drafts(d);
+                    }
                     ctl.say(format!("Where the model runs: {}.", dialog::provider(&id).1));
                     return;
                 }
@@ -1199,6 +1202,9 @@ fn apply(
                     }
                     After::UseProvider(id) => {
                         dialog::switch_provider(s, &id);
+                        if let Some((d, _)) = ctl.under.as_mut() {
+                            dialog::forget_provider_drafts(d);
+                        }
                         say(format!("Where the model runs: {}.", dialog::provider(&id).1), false);
                         back_to = Some("st-provider");
                     }

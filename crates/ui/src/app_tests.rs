@@ -3003,6 +3003,35 @@ fn parity_settings_provider_select_confirms_a_cloud_endpoint() {
     assert_eq!(h.s().settings.get("model").and_then(|v| v.as_str()), Some("qwen"));
 }
 
+/// The address box shows (and Settings saves) the new provider's address after a switch, not the old draft.
+#[test]
+fn settings_provider_switch_drops_the_old_address_draft() {
+    let mut h = H::new("m1");
+    h.sess().settings.set("ocrUrl", serde_json::json!("http://localhost:9000"));
+    h.act("settings");
+    h.frames(3);
+    // hosted: asks first, then the boxes are refilled
+    h.act("st-provider");
+    h.frames(2);
+    h.act("st-provider-ollama-cloud");
+    h.frames(3);
+    h.act("dialog-ok");
+    h.frames(3);
+    h.act("dialog-close");
+    h.frames(3);
+    assert_eq!(h.s().settings.get("ocrUrl").and_then(|v| v.as_str()), Some("http://localhost:8189/u/ollama.com"), "closing Settings keeps the new address");
+    // and back to a local server: no confirmation, the saved local address returns and survives closing
+    h.act("settings");
+    h.frames(3);
+    h.act("st-provider");
+    h.frames(2);
+    h.act("st-provider-local");
+    h.frames(3);
+    h.act("dialog-close");
+    h.frames(3);
+    assert_eq!(h.s().settings.get("ocrUrl").and_then(|v| v.as_str()), Some("http://localhost:9000"));
+}
+
 /// A mouse press hands focus over without scrolling (Chrome scrolls a focus made by key or script only).
 #[test]
 fn parity_focus_given_by_a_mouse_press_does_not_scroll() {

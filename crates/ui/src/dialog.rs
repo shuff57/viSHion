@@ -405,6 +405,16 @@ pub fn set_working(s: &mut Session, ids: Option<&[String]>) {
     s.dirty.settings = true;
 }
 
+/// After the provider changes the address, key and model boxes show the new provider's values: the text typed
+/// for the old one must not be saved over them when Settings closes (`settings.js` refills the boxes on a switch).
+pub fn forget_provider_drafts(d: &mut Dialog) {
+    if let Dialog::Settings { drafts, .. } = d {
+        for id in ["st-ocr", "st-key", "st-model-custom"] {
+            drafts.remove(id);
+        }
+    }
+}
+
 /// `M.switchTo`: remember the values in use, then take the saved ones of `id` (or its defaults).
 pub fn switch_provider(s: &mut Session, id: &str) {
     use serde_json::json;
