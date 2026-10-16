@@ -128,8 +128,7 @@ whenever the inline bootstrap script in `crates/app/web/index.html` changes, so 
   checked like `image.check`, shrunk, levelled when the setting says so, and its name read from the top 14% by
   the model, or from the sample names in demo mode), staged rows with a student chooser (known names or a typed
   one) and Remove, skipped-file and names-down notices, the subject, "Read the name" switch, and Transcribe N
-  pages (`Cmd::CommitStaged`, then the run starts). Files dropped on the window are staged too (`Cmd::StageFiles`; a native folder is walked). Not yet: paste
-  (egui has no image paste) and the full-size look at a photo with its lines.
+  pages (`Cmd::CommitStaged`, then the run starts). Files dropped on the window are staged too (`Cmd::StageFiles`; a native folder is walked). Picture paste was dropped (plan 11.10).
 - home (`ui::home`, Phase 5): the wordmark on the inbox goes there, and an empty store starts there. Lists the
   assignments (`Cmd::ListProjects` -> `Event::Projects`), opens one, creates, renames, duplicates and deletes
   (inline fields and an inline confirm instead of dialogs, so it works with no session). Import zip (`core::export::read_zip`, stored and deflated
@@ -218,13 +217,6 @@ provider is asked when Settings opens.
 `profiles[provider].working` and narrow a cloud picker (`assemble`); none answering keeps the full list and says
 whether the key was refused. "Show every model again" clears `working`. `dialog::remember` merges into the
 profile, so `working` survives a provider switch.
-
-## Paste on the web
-
-`ui::web::install_paste` listens for `paste` on the window. Pictures on the clipboard (not when the target is an
-input, textarea or select, where paste is text) are read with `arrayBuffer()`, a nameless screenshot is called
-`pasted-<ms>-<n>.png`, and the next frame passes them to `App::paste_files`: the Add screen opens (it does not
-from Home) and the files are staged like dropped ones (`Cmd::StageFiles`).
 
 ## Add screen: Turn, Straighten and Look
 
