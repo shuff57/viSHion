@@ -325,31 +325,95 @@ fn scan_progress(ui: &Ui, r: &egui::Response) -> Option<f64> {
     // whole, not found half played.
     let dt = ui.input(|i| i.unstable_dt as f64).clamp(0.0, 1.0 / 30.0);
     let id = egui::Id::new("brand-scan");
-    // (seconds into the scan, played once, pointer was over, frames drawn)
-    let (mut at, mut played, mut was_over, mut frames): (Option<f64>, bool, bool, u32) =
-        ui.ctx().data(|d| d.get_temp(id)).unwrap_or((None, false, false, 0));
-    frames = frames.saturating_add(1);
-    let over = r.hovered() || r.has_focus();
-    if !played && frames >= 3 {
-        at = Some(0.0);
-        played = true;
-    } else if played && over && !was_over {
-        at = Some(0.0);
-    } else if let Some(a) = at {
-        at = Some(a + dt);
+    let state: ScanState = ui.ctx().data(|d| d.get_temp(id)).unwrap_or_default();
+    let (state, p) = scan_step(state, dt, r.hovered() || r.has_focus());
+    ui.ctx().data_mut(|d| d.insert_temp(id, state));
+    if p.is_some() {
+        ui.ctx().request_repaint();
     }
-    was_over = over;
-    let p = at.map(|a| a / SCAN_SECS);
+    p
+}
+
+/// Where the wordmark's scan-in is: seconds into it (`None` at rest), whether it has played once, whether the
+/// pointer was over it last frame, and how many frames have drawn it.
+#[derive(Clone, Copy, Default, PartialEq, Debug)]
+struct ScanState {
+    at: Option<f64>,
+    played: bool,
+    was_over: bool,
+    frames: u32,
+}
+
+/// One frame of the scan. It starts on the third frame, and again when the pointer or the keyboard arrives, but
+/// never while it is already playing: a pointer moving across the header must not keep sending it back to the
+/// start, so a scan that has begun always runs to its end. Returns the new state and the progress (0 to 1) to draw.
+fn scan_step(mut s: ScanState, dt: f64, over: bool) -> (ScanState, Option<f64>) {
+    s.frames = s.frames.saturating_add(1);
+    if !s.played && s.frames >= 3 {
+        s.at = Some(0.0);
+        s.played = true;
+    } else if s.played && over && !s.was_over && s.at.is_none() {
+        s.at = Some(0.0);
+    } else if let Some(a) = s.at {
+        s.at = Some(a + dt);
+    }
+    s.was_over = over;
+    let p = s.at.map(|a| a / SCAN_SECS);
     if p.is_some_and(|p| p >= 1.0) {
-        at = None;
+        s.at = None;
     }
-    ui.ctx().data_mut(|d| d.insert_temp(id, (at, played, was_over, frames)));
-    match p {
-        Some(p) if p < 1.0 => {
-            ui.ctx().request_repaint();
-            Some(p)
+    (s, p.filter(|p| *p < 1.0))
+}
+
+#[cfg(test)]
+mod scan_tests {
+    use super::*;
+
+    /// Frames of 1/30 s until the scan is over: how many it took (and whether it was ever restarted).
+    fn run(over_at: impl Fn(u32) -> bool) -> (u32, u32) {
+        let mut s = ScanState::default();
+        let (mut shown, mut restarts, mut last) = (0, 0, None::<f64>);
+        for f in 0..400 {
+            let (n, p) = scan_step(s, 1.0 / 30.0, over_at(f));
+            if let (Some(p), Some(l)) = (p, last) {
+                if p < l {
+                    restarts += 1;
+                }
+            }
+            if p.is_some() {
+                shown += 1;
+            }
+            last = p;
+            s = n;
         }
-        _ => None,
+        (shown, restarts)
+    }
+
+    #[test]
+    fn plays_once_on_load_for_its_whole_length() {
+        let (shown, restarts) = run(|_| false);
+        assert!(shown >= 47 && shown <= 49, "1.6 s at 30 fps, got {shown}");
+        assert_eq!(restarts, 0);
+    }
+
+    #[test]
+    fn a_pointer_crossing_the_header_does_not_restart_a_scan_in_progress() {
+        // in and out of the wordmark every few frames while the scan plays (it runs from frame 3 to about 51)
+        let (shown, restarts) = run(|f| f < 45 && (f / 4) % 2 == 0);
+        assert_eq!(restarts, 0, "the scan was sent back to the start");
+        assert!(shown >= 47 && shown <= 49, "ran its length once, got {shown}");
+    }
+
+    #[test]
+    fn the_pointer_arriving_after_it_is_over_plays_it_again() {
+        let mut s = ScanState::default();
+        for _ in 0..200 {
+            s = scan_step(s, 1.0 / 30.0, false).0;
+        }
+        assert_eq!(s.at, None);
+        let (s, p) = scan_step(s, 1.0 / 30.0, true);
+        assert_eq!(p, Some(0.0));
+        assert!(s.at.is_some());
     }
 }
 
