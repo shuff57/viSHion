@@ -96,6 +96,15 @@ fn text_box(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, id: &str, name: &str, hint: 
 
 pub(crate) fn show(ctx: &egui::Context, ctl: &mut Ctl, t: &Tokens, h: &mut Home, storage: &str, narrow: bool, now: i64) -> Vec<HomeAct> {
     let mut acts = vec![];
+    // header.js `forHome`: the wordmark (it scans in once as the page loads) on the topbar. It is not a link here.
+    let pad = if narrow { 16.0 } else { 24.0 };
+    egui::TopBottomPanel::top("home-hdr")
+        .min_height(64.0)
+        .show_separator_line(false)
+        .frame(egui::Frame::none().fill(t.surface).inner_margin(Margin { left: pad, right: pad, top: 8.0, bottom: 9.0 }))
+        .show(ctx, |ui| {
+            widgets::brand(ctl, ui, t, C::new("brand", "viSHion", crate::twin::HEADER));
+        });
     egui::CentralPanel::default().frame(egui::Frame::none().fill(t.bg)).show(ctx, |ui| {
         ctl.scrolls[TEXT as usize] = true;
         egui::ScrollArea::vertical().auto_shrink([false, false]).animated(false).id_source("home-scroll").show(ui, |ui| {
