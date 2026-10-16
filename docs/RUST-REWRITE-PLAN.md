@@ -79,7 +79,7 @@ Each phase ends with a runnable build on both targets and a parity check against
 | 8 | Provider abstraction | `net::Provider` trait, OpenAI-compatible impl, settings pick by id | Existing `net` tests pass through the trait; a second (mock) provider is selectable. **Done**: `net::Provider` (OpenAI-compatible and Mock), picked by `settings.provider`; reading, name reading and guesses go through it. |
 | 9a | Phone fit | Home, inbox, review, Add and the dialogs at 390 x 844 | Every target 44 x 44, nothing past the right edge. **Done**: a rig test walks all of them; the inbox header drops its right group to its own row like the review header does. |
 | 9b | Capture on phone | `design/Phone.dc.html` is a camera capture screen (viewfinder, page-found detection, shutter, captured-pages thumbnail, auto toggle), not a phone version of the other screens | Web: getUserMedia viewfinder and a page-corner detector feed the Add staging step; auto-capture toggle. **Built**: `core::capture` (detector, steady counter, tested), `View::Capture`, `app::camera` (web). Camera access itself is untested here: needs a browser with a camera. |
-| 10 | Cutover | deploy web build to the existing route, ship the plain desktop binaries | JS app kept on a `/legacy` path for one release. |
+| 10 | Cutover | deploy web build to the existing route, ship the plain desktop binaries | **Decided 2026-10-16: Rust at `/`, no `/legacy`.** The root `wrangler.jsonc` now serves `crates/app/dist` (build writes `_headers` and `.assetsignore`); the JS app stays in the repo as the test oracle but is not deployed. The build now sends `Permissions-Policy: camera=(self)` (it was `camera=()`, which would have blocked camera capture). `check-assetsignore.mjs` proves only the Rust app is served. **Not done:** `wrangler deploy` (yours to run), the desktop binaries, and tell users to export a zip from the old site first (a new origin does not see old browser storage; the README says so). |
 
 Rough order of risk: phase 4 first (earliest real validation of the UI), then 2 (data loss is the worst failure).
 If staffing is one person, do 0, 1, 4, then 2, 3, 5, 6, 7.
@@ -122,10 +122,7 @@ Left after the loop of 2026-10-16. Nothing here can be finished or checked from 
   Only the wordmark differs between the two frames (the scan-in animation is mid-play in a still); no other
   gaps were found, so no new 11.x slices. Not walked: the other screens (Home, Add, dialogs) in the JS app.
 - **Phase 4:** NVDA and VoiceOver passes.
-- **Phase 10 cutover:** the layout is a decision. Today `wrangler.jsonc` serves the repo root, which is the JS app.
-  Putting the Rust build at `/` and the JS app at `/legacy` means a deploy step that assembles one asset directory
-  (the CSP hash in `_headers` changes with every build, and `.assetsignore` hides `crates/` and `dist`). Choose
-  that layout, then deploy by hand (`npx wrangler deploy`); nothing here deploys.
+- **Phase 10 deploy:** run it by hand: `node crates/app/web/build.mjs`, then `npx wrangler deploy` from the repo root. Browser storage on the old origin is not visible to the new one, so anyone with work in the old site exports a zip first.
 - **Live checks:** Test connection, Find models, Check which models work, the web transport, Keep originals and
   the idle unload against a real llama-server or Ollama.
 - **Browser hardware:** camera capture (9b), the storage banners'

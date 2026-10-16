@@ -1,8 +1,9 @@
 {
-  // Static site, no Worker script. The repo root is the asset directory; .assetsignore keeps dev files out.
+  // Static site, no Worker script. The Rust web build is the asset directory: run
+  // `node crates/app/web/build.mjs` first (it writes dist/_headers with the CSP and dist/.assetsignore).
   "name": "vishion",
   "compatibility_date": "2026-10-01",
-  "assets": { "directory": "." },
+  "assets": { "directory": "crates/app/dist" },
   // Needs lefthanddev.com to be a zone in this Cloudflare account; deploy creates the DNS record.
   "routes": [{ "pattern": "vishion.lefthanddev.com", "custom_domain": true }]
 }

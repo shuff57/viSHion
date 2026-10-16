@@ -52,7 +52,7 @@ jobs:
           npm ci
           node build.mjs
 
-      - name: Deploy-leak check (.assetsignore keeps crates/, target/, Cargo.* out of the asset dir)
+      - name: Deploy-leak check (the asset dir is the Rust build only: no JS app, sources or screenshots)
         working-directory: crates/app/web
         run: node check-assetsignore.mjs
 

@@ -55,16 +55,18 @@ On disk, per assignment: `<folder>/<slug>/project.json`, `pages/<id>.json`, `ima
 
 ## Deploy (Cloudflare Workers static assets)
 
-The app is a static site: `wrangler.jsonc` serves the repo root as assets, `.assetsignore` keeps dev files (tests, design, tools, bakeoff) out, and `_headers` sets the CSP and cache rules.
+The site is the Rust web build. `wrangler.jsonc` serves `crates/app/dist` as assets; the build writes `dist/_headers` (the CSP with the hash of the inline script, cache rules, camera allowed for this origin) and `dist/.assetsignore` (keeps check screenshots out). The plain-script JS app in the repo root is no longer deployed; it stays in the repo as the oracle for the Rust tests.
 
 ```
-npx wrangler login      # once
-npx wrangler deploy     # uploads the app and attaches vishion.lefthanddev.com
+cd crates/app/web && npm ci && node build.mjs   # builds crates/app/dist
+node check-assetsignore.mjs                     # optional: proves only the Rust app is served
+cd ../../.. && npx wrangler login               # once
+npx wrangler deploy                             # uploads dist and attaches vishion.lefthanddev.com
 ```
 
-`lefthanddev.com` must be a zone in the same Cloudflare account. There is no backend and no secret on the server: each visitor enters their own OpenRouter key (kept in their browser) or points Settings at a local server (`--cors`, http://localhost:8188). Data saved under `file://` or localhost does not carry over to the new origin; export a zip and import it.
+`lefthanddev.com` must be a zone in the same Cloudflare account. There is no backend and no secret on the server: each visitor enters their own OpenRouter key (kept in their browser) or points Settings at a local server (`--cors`, http://localhost:8188). Data saved by the old JS app under `file://` or localhost does not carry over to the new origin; export a zip there and import it here.
 
-If `index.html`'s inline theme script changes, update its `sha256-` in `_headers`.
+The CSP is built from the root `_headers` (the policy) plus the hashes of the inline scripts in `crates/app/web/index.html`; edit the policy in the root `_headers`.
 
 ## Bake-off
 

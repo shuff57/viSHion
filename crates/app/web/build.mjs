@@ -67,6 +67,8 @@ for (const f of fs.readdirSync(path.join(here, 'vendor/katex/fonts'))) {
 }
 fs.copyFileSync(path.join(here, 'index.html'), path.join(dist, 'index.html'));
 fs.copyFileSync(path.join(repo, 'favicon.svg'), path.join(dist, 'favicon.svg'));
+// check and parity runs drop screenshots into dist; none of that is part of the site
+fs.writeFileSync(path.join(dist, '.assetsignore'), '*.png\n.assetsignore\n');
 
 // CSP = the repo's production policy + 'wasm-unsafe-eval' + sha256 of every inline script in index.html.
 const html = fs.readFileSync(path.join(dist, 'index.html'), 'utf8');
@@ -81,7 +83,7 @@ csp = csp.replace(/script-src ([^;]*)/, (_, v) => `script-src ${v} 'wasm-unsafe-
 const headers = `/*
   X-Content-Type-Options: nosniff
   Referrer-Policy: no-referrer
-  Permissions-Policy: camera=(), microphone=(), geolocation=()
+  Permissions-Policy: camera=(self), microphone=(), geolocation=()
   Content-Security-Policy: ${csp}
 
 /index.html

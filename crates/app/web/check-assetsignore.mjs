@@ -1,6 +1,7 @@
-// Deploy-leak check: serve the repo root the way `wrangler deploy` would publish it (root wrangler.jsonc,
-// assets.directory ".", .assetsignore) and require that Rust sources/build output are NOT served while the
-// legacy app still is. Usage: node crates/app/web/check-assetsignore.mjs
+// Deploy-leak check: serve the repo root the way `wrangler deploy` would publish it (root wrangler.jsonc, whose
+// asset directory is crates/app/dist, with dist/.assetsignore) and require that the Rust app is served while the
+// old JS app, the Rust sources and the check screenshots are NOT. Run build.mjs first.
+// Usage: node crates/app/web/check-assetsignore.mjs
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -11,19 +12,16 @@ const repo = path.resolve(here, '../../..');
 const wranglerJs = path.join(here, 'node_modules/wrangler/bin/wrangler.js');
 const port = +(process.env.PORT || 8790);
 
-const firstFile = (dir, re) => {
-  const hit = fs.readdirSync(path.join(repo, dir), { withFileTypes: true }).find(e => e.isFile() && re.test(e.name));
-  return hit ? `${dir}/${hit.name}` : null;
-};
-const mustServe = ['index.html', 'favicon.svg', firstFile('js', /\.js$/), firstFile('css', /\.css$/)].filter(Boolean);
+const dist = path.join(repo, 'crates/app/dist');
+const mustServe = ['index.html', 'favicon.svg', 'vishion_app.js', 'vishion_app_bg.wasm', 'katex.min.js'];
+// the site is only what the build wrote: not the old JS app, not the sources, not screenshots from check runs
 const mustHide = [
-  'Cargo.toml', 'Cargo.lock', 'crates/README.md', 'crates/core/src/lib.rs', 'crates/app/web/package.json',
-  'docs/RUST-REWRITE-PLAN.md', 'spikes/s7-egui/README.md', '.github/workflows/rust.yml', 'wrangler.jsonc', '.assetsignore',
+  'js/main.js', 'css/base.css', 'tests/words.test.js', 'Cargo.toml', 'crates/README.md', 'crates/core/src/lib.rs',
+  'docs/RUST-REWRITE-PLAN.md', '.github/workflows/rust.yml', 'wrangler.jsonc', 'check.png',
 ];
-if (fs.existsSync(path.join(repo, 'target'))) {
-  const t = fs.readdirSync(path.join(repo, 'target'))[0];
-  if (t) mustHide.push(`target/${t}`);
-}
+// a stray screenshot in dist must stay out (check.mjs and parity.mjs write them there)
+fs.writeFileSync(path.join(dist, 'leak-probe.png'), 'x');
+mustHide.push('leak-probe.png');
 
 const p = spawn(process.execPath, [wranglerJs, 'dev', '--config', path.join(repo, 'wrangler.jsonc'),
   '--port', String(port), '--ip', '127.0.0.1', '--local'], {
@@ -65,6 +63,7 @@ try {
   console.error(e);
 } finally {
   stop();
+  fs.rmSync(path.join(dist, 'leak-probe.png'), { force: true });
 }
-console.log(failures.length ? `\n.assetsignore check FAILED (${failures.length})` : '\n.assetsignore check passed');
+console.log(failures.length ? `\n.assetsignore (deploy leak) check FAILED (${failures.length})` : '\n.assetsignore (deploy leak) check passed');
 process.exit(failures.length ? 1 : 0);
