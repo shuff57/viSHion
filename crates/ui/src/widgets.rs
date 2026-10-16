@@ -320,10 +320,10 @@ fn scan_progress(ui: &Ui, r: &egui::Response) -> Option<f64> {
     if reduced_motion(ui.ctx()) {
         return None;
     }
-    // The first frames of a page load are slow (fonts, textures) and the time between them is long, so the
-    // scan is driven by the sum of frame times, each capped, and starts on the third frame: it is seen as a
-    // whole, not found half played.
-    let dt = ui.input(|i| i.unstable_dt as f64).clamp(0.0, 1.0 / 30.0);
+    // The scan follows the clock (a frame's own length, so a slow stretch of frames does not play it in slow
+    // motion and leave it looking stopped half way). It waits for a smooth frame to start, so it is seen as a
+    // whole and not found half played after the heavy first frames of a page load.
+    let dt = ui.input(|i| i.unstable_dt as f64);
     let id = egui::Id::new("brand-scan");
     let state: ScanState = ui.ctx().data(|d| d.get_temp(id)).unwrap_or_default();
     let (state, p) = scan_step(state, dt, r.hovered() || r.has_focus());
@@ -344,12 +344,21 @@ struct ScanState {
     frames: u32,
 }
 
-/// One frame of the scan. It starts on the third frame, and again when the pointer or the keyboard arrives, but
-/// never while it is already playing: a pointer moving across the header must not keep sending it back to the
-/// start, so a scan that has begun always runs to its end. Returns the new state and the progress (0 to 1) to draw.
+/// A frame no longer than this (20 fps or better) is smooth enough to start the scan on.
+const SMOOTH_DT: f64 = 0.05;
+/// A frame counts for at most this much of the scan: a stall of seconds (a tab in the background) does not skip it.
+const MAX_STEP: f64 = 0.25;
+/// If frames never get smooth the scan starts anyway, on this frame.
+const START_ANYWAY: u32 = 40;
+
+/// One frame of the scan, `dt` seconds after the last. It starts on the first smooth frame from the third (or on
+/// frame 40 whatever they are like), and again when the pointer or the keyboard arrives, but never while it is
+/// already playing: a pointer moving across the header must not keep sending it back to the start, so a scan that
+/// has begun always runs to its end. Returns the new state and the progress (0 to 1) to draw.
 fn scan_step(mut s: ScanState, dt: f64, over: bool) -> (ScanState, Option<f64>) {
     s.frames = s.frames.saturating_add(1);
-    if !s.played && s.frames >= 3 {
+    let dt = dt.clamp(0.0, MAX_STEP);
+    if !s.played && s.frames >= 3 && (dt <= SMOOTH_DT || s.frames >= START_ANYWAY) {
         s.at = Some(0.0);
         s.played = true;
     } else if s.played && over && !s.was_over && s.at.is_none() {
@@ -369,12 +378,12 @@ fn scan_step(mut s: ScanState, dt: f64, over: bool) -> (ScanState, Option<f64>) 
 mod scan_tests {
     use super::*;
 
-    /// Frames of 1/30 s until the scan is over: how many it took (and whether it was ever restarted).
-    fn run(over_at: impl Fn(u32) -> bool) -> (u32, u32) {
+    /// Frames of `dt` seconds, 400 of them: how many showed the scan, and whether it was ever sent back to the start.
+    fn run_at(dt: f64, over_at: impl Fn(u32) -> bool) -> (u32, u32) {
         let mut s = ScanState::default();
         let (mut shown, mut restarts, mut last) = (0, 0, None::<f64>);
         for f in 0..400 {
-            let (n, p) = scan_step(s, 1.0 / 30.0, over_at(f));
+            let (n, p) = scan_step(s, dt, over_at(f));
             if let (Some(p), Some(l)) = (p, last) {
                 if p < l {
                     restarts += 1;
@@ -389,11 +398,57 @@ mod scan_tests {
         (shown, restarts)
     }
 
+    fn run(over_at: impl Fn(u32) -> bool) -> (u32, u32) {
+        run_at(1.0 / 30.0, over_at)
+    }
+
     #[test]
     fn plays_once_on_load_for_its_whole_length() {
         let (shown, restarts) = run(|_| false);
         assert!(shown >= 47 && shown <= 49, "1.6 s at 30 fps, got {shown}");
         assert_eq!(restarts, 0);
+    }
+
+    #[test]
+    fn slow_frames_do_not_play_it_in_slow_motion() {
+        // 100 ms frames (10 fps): the scan still lasts 1.6 s of the clock, so about 16 frames, not 48
+        let (shown, restarts) = run_at(0.1, |_| false);
+        assert!((15..=17).contains(&shown), "1.6 s at 10 fps, got {shown}");
+        assert_eq!(restarts, 0);
+    }
+
+    #[test]
+    fn it_waits_for_a_smooth_frame_to_start_and_does_not_wait_forever() {
+        let mut s = ScanState::default();
+        // a long run of 200 ms frames: nothing starts at first
+        for _ in 0..10 {
+            let (n, p) = scan_step(s, 0.2, false);
+            assert_eq!(p, None);
+            s = n;
+        }
+        assert!(!s.played);
+        // the first smooth frame starts it
+        let (s2, p) = scan_step(s, 0.016, false);
+        assert_eq!(p, Some(0.0));
+        assert!(s2.played);
+        // frames that never get smooth start it on frame 40
+        let mut s = ScanState::default();
+        for _ in 0..39 {
+            s = scan_step(s, 0.2, false).0;
+        }
+        assert!(!s.played, "not yet on frame 39");
+        assert!(scan_step(s, 0.2, false).0.played, "started anyway on frame 40");
+    }
+
+    #[test]
+    fn a_stall_of_seconds_does_not_skip_it() {
+        let mut s = ScanState::default();
+        for _ in 0..5 {
+            s = scan_step(s, 0.016, false).0;
+        }
+        assert!(s.at.is_some());
+        let (s, p) = scan_step(s, 5.0, false);
+        assert!(p.is_some(), "a 5 s stall moved it on by a quarter second at most, got {:?}", s.at);
     }
 
     #[test]
