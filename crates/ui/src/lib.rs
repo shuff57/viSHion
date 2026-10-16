@@ -844,6 +844,43 @@ pub struct App {
     closing: bool,
 }
 
+/// Native stand-in for `prefers-reduced-motion`: `VISHION_REDUCE_MOTION=1` anywhere, and on Linux the
+/// desktop's "animations off" switch (`gsettings ... enable-animations`). Windows and macOS have no query yet.
+#[cfg(not(target_arch = "wasm32"))]
+fn native_reduced_motion() -> bool {
+    if let Ok(v) = std::env::var("VISHION_REDUCE_MOTION") {
+        return parse_flag(&v);
+    }
+    #[cfg(target_os = "linux")]
+    if let Ok(o) = std::process::Command::new("gsettings")
+        .args(["get", "org.gnome.desktop.interface", "enable-animations"])
+        .output()
+    {
+        return String::from_utf8_lossy(&o.stdout).trim() == "false";
+    }
+    false
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn parse_flag(v: &str) -> bool {
+    matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on")
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod reduced_motion_tests {
+    use super::parse_flag;
+
+    #[test]
+    fn flag_values() {
+        for on in ["1", "true", " Yes ", "ON"] {
+            assert!(parse_flag(on), "{on}");
+        }
+        for off in ["", "0", "false", "no"] {
+            assert!(!parse_flag(off), "{off}");
+        }
+    }
+}
+
 impl App {
     /// An app without a host: shows the empty state. Used by tests and previews.
     pub fn new(ctx: egui::Context) -> Self {
@@ -866,7 +903,13 @@ impl App {
             hc
         };
         #[cfg(not(target_arch = "wasm32"))]
-        let high_contrast = false;
+        let high_contrast = {
+            if native_reduced_motion() {
+                ctx.style_mut(|s| s.animation_time = 0.0);
+                widgets::set_reduced_motion(&ctx, true);
+            }
+            false
+        };
         let mut app = App {
             ctx,
             queue,
