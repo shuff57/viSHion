@@ -209,9 +209,7 @@ async function tabs(p) {
 
 async function page_state(p, state, isRs) {
   if (state === 'initial') return;
-  if (state === 'tabs') { console.log((isRs ? 'RS' : 'JS') + ' tab order:
-  ' + (await tabs(p)).map((x, i) => (i + 1) + '. ' + x).join('
-  ')); return; }
+  if (state === 'tabs') { console.log((isRs ? 'RS' : 'JS') + ' tab order:\n  ' + (await tabs(p)).map((x, i) => (i + 1) + '. ' + x).join('\n  ')); return; }
   if (state === 'tray0') { if (!isRs) await p.getByRole('button', { name: 'Close the word panel' }).click(); await p.waitForTimeout(500); return; }
   const label = state === 'plain' ? /Show plain text/ : /^Original$/;
   const loc = isRs ? p.locator('#controls button').filter({ hasText: label }).first() : p.getByRole('button', { name: label }).first();
