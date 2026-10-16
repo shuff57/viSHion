@@ -116,6 +116,16 @@ settings-only session (`App::home_settings`) that the dialog edits, saves throug
 closes. With an assignment still open behind Home, its own session is used. Tested in the rig and in Chrome; not
 walked against the JS Home screen's Settings beyond opening it.
 
+## Loading splash
+
+`index.html` shows the wordmark animation full screen while the app loads, as the sibling apps do: the handwriting is
+scanned into type once (the header wordmark's motion, 1.8 s), and the page stays up until that has finished and the app
+has left its loading state (`data-booted` on the twin), then fades out (0.35 s). Before this the page removed its boot
+logo the moment `start()` resolved, so a fast load cut the animation off partway, and it was an endless alternating
+loop; the app's own header wordmark then started again. The header's copy now starts settled when a splash was shown
+(`ui::widgets::skip_intro`). Reduced motion shows the settled word for half a second. A browser driven by a test
+skips the splash (`?splash=1` forces it, `?splash=0` skips it); `check.mjs` covers it.
+
 ## Needs you
 
 Left after the loop of 2026-10-16. Nothing here can be finished or checked from this machine unattended.

@@ -121,14 +121,16 @@
   .live { position: absolute; left: 0; top: 0; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
   /* what is on the page before the first frame, and instead of it when the app cannot start: plain text, so a
      screen reader has something to say while the 1.8 MB download runs (the JS app is DOM and has its text at once) */
-  #boot { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px;
-          padding: 24px; text-align: center; font: 18px/1.4 system-ui, sans-serif; color: #1B2230; }
+  #boot { position: fixed; inset: 0; z-index: 10; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px;
+          padding: 24px; text-align: center; font: 18px/1.4 system-ui, sans-serif; color: #1B2230; background: #EEF1F5; transition: opacity .35s ease; }
+  #boot.leaving { opacity: 0; pointer-events: none; }
   #boot p { margin: 0; max-width: 40em; }
-  #boot .boot-logo { width: min(260px, 70vw); height: auto; }
+  #boot .boot-logo { width: min(520px, 78vw); height: auto; }
   #boot .detail { font-size: 14px; opacity: .8; }
-  @media (prefers-color-scheme: dark) { #boot { color: #E6EAF2; } }
+  #boot-status { font-size: 14px; color: #5A6478; }
+  @media (prefers-color-scheme: dark) { #boot { color: #E6EAF2; background: #0F131C; } #boot-status { color: #A8B2C5; } }
   /* Windows contrast themes: the page behind the canvas takes the system colours */
-  @media (forced-colors: active) { html, body { background: Canvas; } #boot { color: CanvasText; } }
+  @media (forced-colors: active) { html, body { background: Canvas; } #boot { color: CanvasText; background: Canvas; } #boot-status { color: CanvasText; } }
 </style>
 </head>
 <body>
@@ -136,21 +138,22 @@
 <div id="controls"></div>
 <div id="announce" class="live" role="status" aria-live="polite" aria-atomic="true"></div>
 <div id="announce-alert" class="live" role="alert" aria-live="assertive" aria-atomic="true"></div>
-<div id="boot"><svg class="boot-logo" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 120" aria-hidden="true" focusable="false">
+<div id="boot"><svg class="boot-logo" xmlns="http://www.w3.org/2000/svg" viewBox="24 18 312 84" aria-hidden="true" focusable="false">
   <style>
     @font-face { font-family:'Caveat'; font-weight:600; src:url(fonts/caveat-600-logo.woff2) format('woff2'); }
-    @font-face { font-family:'Instrument Sans'; font-weight:600; src:url(fonts/instrument-sans-latin-600-normal.woff2) format('woff2'); }
-    .boot-logo { --ink:#141B2D; --accent:#26358F; }
+    @font-face { font-family:'Hack'; font-weight:400; src:url(fonts/hack-latin-400-normal.ttf) format('truetype'); }
+    .boot-logo { --ink:#141B2D; --accent:#26358F; overflow:visible; }
     @media (prefers-color-scheme: dark) { .boot-logo { --ink:#E8ECF3; --accent:#8FA0FF; } }
-    .hand  { font:600 68px 'Caveat','Segoe Script','Bradley Hand',cursive; fill:var(--accent); opacity:.85;
-             animation:hand 5s ease-in-out infinite alternate; }
-    .clean { font:600 56px 'Instrument Sans','Segoe UI',system-ui,sans-serif; fill:var(--ink);
-             animation:clean 5s ease-in-out infinite alternate; }
+    /* the handwriting is scanned into type once (the header wordmark's motion, a little slower), then the word stays set */
+    .hand  { font:600 68px 'Caveat','Segoe Script','Bradley Hand',cursive; fill:var(--accent); clip-path:inset(0);
+             animation:hand 1.8s ease-in-out .25s both; }
+    .clean { font:700 64px 'Hack',ui-monospace,Menlo,Consolas,monospace; fill:var(--ink); clip-path:inset(0 100% 0 0);
+             animation:clean 1.8s ease-in-out .25s both; }
     .clean tspan { fill:var(--accent); }
-    .bar   { fill:var(--accent); animation:bar 5s ease-in-out infinite alternate; }
-    @keyframes clean { 0%,12% { clip-path:inset(0 100% 0 0); } 88%,100% { clip-path:inset(0); } }
-    @keyframes hand  { 0%,12% { clip-path:inset(0); } 88%,100% { clip-path:inset(0 0 0 100%); } }
-    @keyframes bar   { 0%,12% { transform:translateX(0); } 88%,100% { transform:translateX(300px); } }
+    .bar   { fill:var(--accent); opacity:0; animation:bar 1.8s ease-in-out .25s both; }
+    @keyframes hand  { from { clip-path:inset(0); } to { clip-path:inset(0 0 0 100%); } }
+    @keyframes clean { from { clip-path:inset(0 100% 0 0); } to { clip-path:inset(0); } }
+    @keyframes bar   { 0% { opacity:1; transform:translateX(0); } 92% { opacity:1; } 100% { opacity:0; transform:translateX(300px); } }
     @media (prefers-reduced-motion: reduce) { .boot-logo * { animation:none !important; } .hand { display:none; } .clean { clip-path:none; } .bar { display:none; } }
   </style>
   <text class="hand"  x="30" y="82" textLength="300" lengthAdjust="spacingAndGlyphs" transform="rotate(-3 180 60)">viSHion</text>
@@ -160,11 +163,28 @@
 <noscript>viSHion needs JavaScript and WebAssembly.</noscript>
 <script type="module">
 import init, { start } from './vishion_app.js';
+// The loading splash plays the wordmark once, all the way through, before the page opens (?splash=0 skips it,
+// ?splash=1 forces it for a browser driven by a test). The app's own header wordmark then starts settled.
+const splashParam = new URLSearchParams(location.search).get('splash');
+const splash = splashParam === '1' || (splashParam !== '0' && !navigator.webdriver);
+const boot = document.getElementById('boot');
+if (splash && boot) boot.setAttribute('data-splash', '1');
+const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+async function hold() {
+  // the splash's own animations have finished (a few hundred ms is enough where motion is reduced)...
+  const anims = boot.getAnimations({ subtree: true });
+  await Promise.all([...anims.map((a) => a.finished.catch(() => {})), wait(anims.length ? 0 : 500)]);
+  // ...and the app has left its loading state (data-booted on the twin), for at most a few seconds more
+  for (let i = 0; i < 120 && !document.getElementById('controls')?.hasAttribute('data-booted'); i++) await wait(50);
+  boot.classList.add('leaving');
+  await wait(380);
+}
 try {
   await init();
   await start('c');
   window.__ready = true;
-  document.getElementById('boot')?.remove();
+  if (splash && boot) await hold();
+  boot?.remove();
 } catch (e) {
   window.__error = String(e);
   console.error(e);

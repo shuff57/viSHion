@@ -760,6 +760,9 @@ pub struct App {
     /// Settings opened from the home screen with no assignment open: a session with nothing in it but the
     /// settings, so the dialog and its saves work as they do inside an assignment. Dropped when the dialog closes.
     home_settings: Option<state::Session>,
+    /// The page was told the app has left its loading state (web: the splash may fade).
+    #[cfg(target_arch = "wasm32")]
+    booted_marked: bool,
     storage: String,
     notice: Option<String>,
     save: SaveState,
@@ -891,6 +894,11 @@ impl App {
         #[cfg(target_arch = "wasm32")]
         web::install(queue.clone(), ctx.clone());
         theme::install(&ctx);
+        // the page's loading splash played the wordmark: the header's copy starts settled
+        #[cfg(target_arch = "wasm32")]
+        if web::splash_active() {
+            widgets::skip_intro(&ctx);
+        }
         // display preferences (web): no easing when the person asks for reduced motion; more contrast
         #[cfg(target_arch = "wasm32")]
         let high_contrast = {
@@ -923,6 +931,8 @@ impl App {
             home: Default::default(),
             session: None,
             home_settings: None,
+            #[cfg(target_arch = "wasm32")]
+            booted_marked: false,
             storage: String::new(),
             notice: None,
             save: SaveState::default(),
@@ -1667,6 +1677,11 @@ impl App {
     }
 
     fn ui_frame(&mut self, ctx: &egui::Context, system_dark: bool) {
+        #[cfg(target_arch = "wasm32")]
+        if !self.booted_marked && !matches!(self.boot, Boot::Loading) {
+            self.booted_marked = true;
+            web::mark_booted();
+        }
         // theme
         let name = self
             .theme_override

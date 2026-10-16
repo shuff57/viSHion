@@ -419,6 +419,29 @@ try {
     await ctx5.close();
   }
 
+  // ---- loading splash (?splash=1; a browser driven by a test skips it otherwise): the wordmark plays all the way
+  // through before the page opens, and nothing is blocked by the CSP
+  {
+    const ctx7 = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+    const p7 = await ctx7.newPage();
+    await p7.addInitScript(track);
+    await p7.addInitScript(() => {
+      new MutationObserver(() => {
+        if (window.__bootGone || document.getElementById('boot')) return;
+        window.__bootGone = Math.round(performance.now());
+      }).observe(document, { subtree: true, childList: true });
+    });
+    await p7.goto(base + '/?splash=1&demo=1&theme=light', { waitUntil: 'load' });
+    await settled(p7);
+    let gone = 0;
+    for (let i = 0; i < 150 && !gone; i++) { await p7.waitForTimeout(100); gone = await p7.evaluate(() => window.__bootGone || 0); }
+    expect(gone >= 2000, 'the splash stays until its animation has played (gone at ' + gone + ' ms; the animation ends about 2050 ms in)');
+    expect(gone > 0 && gone < 15000, 'the splash goes once the app has loaded');
+    expect(await p7.evaluate(() => document.getElementById('controls').hasAttribute('data-booted')), 'the app marked itself loaded (data-booted)');
+    expect((await p7.evaluate(() => window.__violations)).length === 0, 'zero CSP violations with the splash');
+    await ctx7.close();
+  }
+
   // ---- real storage: an assignment in IndexedDB `ocr_fs` (as the legacy app writes it) opens, edits and saves
   {
     const ctx3 = await browser.newContext({ viewport: { width: 1280, height: 800 } });

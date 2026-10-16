@@ -1635,6 +1635,22 @@ pub fn mark_preferences(reduced_motion: bool, high_contrast: bool) {
     }
 }
 
+/// The page's loading splash is up (`index.html` marks it `data-splash`): it has played the wordmark, so the
+/// header's copy starts settled instead of playing it a second time.
+pub fn splash_active() -> bool {
+    web_sys::window()
+        .and_then(|w| w.document())
+        .and_then(|d| d.get_element_by_id("boot"))
+        .is_some_and(|b| b.has_attribute("data-splash"))
+}
+
+/// The app has left its loading state: the splash may fade out (`index.html` waits for `data-booted`).
+pub fn mark_booted() {
+    if let Some(h) = host() {
+        let _ = h.set_attribute("data-booted", "1");
+    }
+}
+
 // ---- the DOM transcript: measuring, formulas, colours
 
 /// What the browser laid out for the transcript lines: heights by line id, and the rectangle of each flagged

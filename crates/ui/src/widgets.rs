@@ -344,6 +344,11 @@ struct ScanState {
     frames: u32,
 }
 
+/// The page's loading splash already played the wordmark: it starts settled and plays again only for the pointer.
+pub(crate) fn skip_intro(ctx: &egui::Context) {
+    ctx.data_mut(|d| d.insert_temp(egui::Id::new("brand-scan"), ScanState { played: true, frames: 3, ..Default::default() }));
+}
+
 /// A frame no longer than this (20 fps or better) is smooth enough to start the scan on.
 const SMOOTH_DT: f64 = 0.05;
 /// A frame counts for at most this much of the scan: a stall of seconds (a tab in the background) does not skip it.
