@@ -111,10 +111,16 @@ what could not be verified without a live server or browser.
 
 Left after the loop of 2026-10-16. Nothing here can be finished or checked from this machine unattended.
 
-- **Real Node 22+.** `node` on this box is a Bun shim (1.4.2), so the Chrome-driven scripts in `crates/app/web`
-  (`check.mjs`, `visual-compare.mjs`, `parity.mjs`, `a11y.mjs`) do not run: `serve.mjs` never sees wrangler come up.
-  Install Node, then run them. The phase 7 side-by-side walkthrough and the phase 4 twin and 44px checks are
-  waiting on that run. (`visual-compare.mjs` also had raw newlines inside two string literals; fixed.)
+- **Browser checks need real Node.** `node` on this box is a Bun shim (kept for another tool), so the scripts in
+  `crates/app/web` fail there. Node 22 is unpacked in `~/.local/share/node22`; run them with
+  `PATH=$HOME/.local/share/node22/bin:$PATH`, and `CHROME=/usr/bin/google-chrome` for `visual-compare.mjs`.
+  Run 2026-10-16 on that setup: `check.mjs`, `a11y.mjs`, `parity.mjs` (36 controls, 44px, light, dark, phone) and
+  `check-assetsignore.mjs` pass. `check.mjs` had two stale tests, fixed: the ring baseline raced the wordmark
+  scan-in (now waits for two matching frames), and the empty-store wait used the review screen's `empty-title`
+  instead of Home's `home-empty`. `visual-compare.mjs` had raw newlines in two string literals; fixed.
+  Side-by-side screenshots (JS vs Rust web, 1280x800 and 390x844, light and dark) show the same layout.
+  Only the wordmark differs between the two frames (the scan-in animation is mid-play in a still); no other
+  gaps were found, so no new 11.x slices. Not walked: the other screens (Home, Add, dialogs) in the JS app.
 - **Phase 4:** NVDA and VoiceOver passes.
 - **Phase 10 cutover:** the layout is a decision. Today `wrangler.jsonc` serves the repo root, which is the JS app.
   Putting the Rust build at `/` and the JS app at `/legacy` means a deploy step that assembles one asset directory

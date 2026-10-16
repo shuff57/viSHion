@@ -115,7 +115,9 @@ try {
   const shot = async () => { await page.mouse.move(640, 740); await page.waitForTimeout(500); return (await page.screenshot()).toString('base64'); };
   await page.mouse.click(640, 4); // click on the transcript pane: canvas gets pointer focus
   expect((await active()).id === 'c', 'click focuses the canvas (pointer path still works)');
-  const idle = await shot();
+  // the wordmark scans in over 1.6 s of capped frame time (slow on a software renderer): wait until two frames match
+  let idle = await shot();
+  for (let i = 0; i < 40; i++) { const next = await shot(); if (next === idle) break; idle = next; }
 
   // 2. Tab from the canvas must leave it and land on the first control (the old trap)
   const firstControl = await page.evaluate(() => document.querySelector('#controls button:not([disabled]), #controls input').dataset.id);
@@ -429,8 +431,8 @@ try {
     await settled(p3);
     const empty = async () => { for (let i = 0; i < 6; i++) { await p3.mouse.move(600 + i, 300 + i); await p3.waitForTimeout(80); } };
     await empty();
-    await p3.waitForSelector('#controls [data-id="empty-title"]', { timeout: 60000 });
-    expect((await p3.textContent('#controls [data-id="empty-title"]')) === 'No assignments yet', 'an empty IndexedDB shows the empty state, not a crash');
+    await p3.waitForSelector('#controls [data-id="home-empty"]', { timeout: 60000 });
+    expect((await p3.textContent('#controls [data-id="home-empty"]')) === 'No assignments yet', 'an empty IndexedDB shows the empty state, not a crash');
     // the same files the JS app would have written: project.json and pages/<id>.json as strings, the image as a Blob
     await p3.evaluate(async () => {
       const db = await new Promise((res, rej) => {
