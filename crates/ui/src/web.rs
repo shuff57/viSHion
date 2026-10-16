@@ -1604,63 +1604,6 @@ pub fn forced_tokens(base: &crate::theme::Tokens) -> Option<crate::theme::Tokens
 }
 
 thread_local! {
-    /// Pictures pasted into the page, read and waiting for the next frame (`upload.js` paste handler).
-    static PASTED: std::cell::RefCell<Vec<(String, Vec<u8>)>> = const { std::cell::RefCell::new(Vec::new()) };
-    static PASTE_SEQ: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
-}
-
-/// Take what was pasted since the last frame.
-pub fn take_pasted() -> Vec<(String, Vec<u8>)> {
-    PASTED.with(|p| std::mem::take(&mut *p.borrow_mut()))
-}
-
-/// Listen for paste on the window: pictures on the clipboard are read and queued (not in a text box, where paste is
-/// text). Installed once; `ctx` is woken when they are ready.
-pub fn install_paste(ctx: egui::Context) {
-    let Some(w) = web_sys::window() else { return };
-    let cb = Closure::<dyn FnMut(web_sys::ClipboardEvent)>::new(move |e: web_sys::ClipboardEvent| {
-        // (`/^(INPUT|TEXTAREA|SELECT)$/` of the JS: the target is the page's own control, so text goes there)
-        let tag = e.target().and_then(|t| t.dyn_into::<web_sys::Element>().ok()).map(|el| el.tag_name()).unwrap_or_default();
-        if matches!(tag.as_str(), "INPUT" | "TEXTAREA" | "SELECT") {
-            return;
-        }
-        let Some(dt) = e.clipboard_data() else { return };
-        let files = js_sys::Reflect::get(&dt, &"files".into()).unwrap_or(JsValue::UNDEFINED);
-        let n = js_sys::Reflect::get(&files, &"length".into()).ok().and_then(|v| v.as_f64()).unwrap_or(0.0) as u32;
-        if n == 0 {
-            return;
-        }
-        e.prevent_default();
-        for i in 0..n {
-            let item = js_sys::Reflect::get(&files, &i.to_string().into()).unwrap_or(JsValue::UNDEFINED);
-            if item.is_undefined() {
-                continue;
-            }
-            let ctx = ctx.clone();
-            wasm_bindgen_futures::spawn_local(async move {
-                let mut name = js_sys::Reflect::get(&item, &"name".into()).ok().and_then(|v| v.as_string()).unwrap_or_default();
-                if name.is_empty() || name == "image.png" {
-                    // a screenshot has no file name: the JS names it by time and count
-                    let seq = PASTE_SEQ.with(|s| {
-                        s.set(s.get() + 1);
-                        s.get()
-                    });
-                    name = format!("pasted-{}-{seq}.png", js_sys::Date::now() as u64);
-                }
-                let Ok(f) = js_sys::Reflect::get(&item, &"arrayBuffer".into()).and_then(|f| f.dyn_into::<js_sys::Function>()) else { return };
-                let Ok(p) = f.call0(&item).and_then(|p| p.dyn_into::<js_sys::Promise>()) else { return };
-                if let Ok(buf) = wasm_bindgen_futures::JsFuture::from(p).await {
-                    PASTED.with(|q| q.borrow_mut().push((name, js_sys::Uint8Array::new(&buf).to_vec())));
-                    ctx.request_repaint();
-                }
-            });
-        }
-    });
-    let _ = w.add_event_listener_with_callback("paste", cb.as_ref().unchecked_ref());
-    cb.forget();
-}
-
-thread_local! {
     /// Work that exists only in this tab (a save failed): closing the tab asks first (`fs.js` `beforeunload`).
     static UNSAVED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static GUARD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };

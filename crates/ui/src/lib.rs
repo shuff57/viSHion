@@ -887,8 +887,6 @@ impl App {
         let queue: Queue = Arc::default();
         #[cfg(target_arch = "wasm32")]
         web::install(queue.clone(), ctx.clone());
-        #[cfg(target_arch = "wasm32")]
-        web::install_paste(ctx.clone());
         theme::install(&ctx);
         // display preferences (web): no easing when the person asks for reduced motion; more contrast
         #[cfg(target_arch = "wasm32")]
@@ -1521,23 +1519,6 @@ impl App {
         }
     }
 
-    /// Pictures pasted into the page (`upload.js`): staged on the Add screen, which opens if another screen of
-    /// an assignment is showing. Nothing happens on the home screen or without an assignment.
-    pub fn paste_files(&mut self, files: Vec<(String, Vec<u8>)>) {
-        if self.home.active {
-            return;
-        }
-        let Some(s) = &mut self.session else { return };
-        if s.view != state::View::Add {
-            s.add = state::AddState::default();
-            s.view = state::View::Add;
-        }
-        s.add.working = true;
-        let read_names = s.settings.get("readNames").and_then(|v| v.as_bool()) != Some(false);
-        let cmd = Cmd::StageFiles { files, conn: s.read_conn(), read_names, preset: s.add.preset.clone() };
-        self.send(cmd);
-    }
-
     /// `M.idleCheck`, every 20 seconds: after `idleUnloadMin` minutes with no request to the model and no page
     /// being read, ask the host to free it (a local server only; it works while this page is open).
     fn idle_tick(&mut self, ctx: &egui::Context) {
@@ -1865,13 +1846,6 @@ impl App {
 
         self.want_images();
         self.flush_dirty();
-        #[cfg(target_arch = "wasm32")]
-        {
-            let pasted = web::take_pasted();
-            if !pasted.is_empty() {
-                self.paste_files(pasted);
-            }
-        }
         self.idle_tick(ctx);
         #[cfg(target_arch = "wasm32")]
         web::set_unsaved(self.save.failed.is_some());

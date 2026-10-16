@@ -286,27 +286,6 @@ fn an_idle_model_is_unloaded_after_the_minutes_in_settings() {
     assert!(!h.sent.borrow().iter().any(|c| matches!(c, Cmd::UnloadModel { .. })));
 }
 
-#[test]
-fn pasted_pictures_open_the_add_screen_and_are_staged() {
-    let mut h = H::new("m1");
-    assert_eq!(h.app.session.as_ref().unwrap().view, state::View::Review);
-    h.app.paste_files(vec![("pasted-1-1.png".into(), vec![1, 2, 3])]);
-    h.frames(2);
-    assert_eq!(h.app.session.as_ref().unwrap().view, state::View::Add);
-    let sent = h.sent.borrow();
-    let staged = sent.iter().find_map(|c| match c {
-        Cmd::StageFiles { files, .. } => Some(files.clone()),
-        _ => None,
-    });
-    assert_eq!(staged.unwrap()[0].0, "pasted-1-1.png");
-    drop(sent);
-    // the home screen takes no paste
-    let mut h = H::new("m1");
-    h.app.home.active = true;
-    h.app.paste_files(vec![("x.png".into(), vec![1])]);
-    assert!(!h.sent.borrow().iter().any(|c| matches!(c, Cmd::StageFiles { .. })));
-}
-
 // ---------------------------------------------------------------------------------------------------------
 // Blind critic (phase 4 review screen): behaviour of js/ui/review.js + header.js that the screen lacks.
 // Each test names the JS behaviour it is checked against and is expected to FAIL until fixed.
