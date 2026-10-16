@@ -107,6 +107,24 @@ Rules for every slice: follow the surrounding code and the "Rules to keep" in `c
 that are already recorded (above); no push, no PR; update this table's "Done when" with what was built and
 what could not be verified without a live server or browser.
 
+## Needs you
+
+Left after the loop of 2026-10-16. Nothing here can be finished or checked from this machine unattended.
+
+- **Real Node 22+.** `node` on this box is a Bun shim (1.4.2), so the Chrome-driven scripts in `crates/app/web`
+  (`check.mjs`, `visual-compare.mjs`, `parity.mjs`, `a11y.mjs`) do not run: `serve.mjs` never sees wrangler come up.
+  Install Node, then run them. The phase 7 side-by-side walkthrough and the phase 4 twin and 44px checks are
+  waiting on that run. (`visual-compare.mjs` also had raw newlines inside two string literals; fixed.)
+- **Phase 4:** NVDA and VoiceOver passes.
+- **Phase 10 cutover:** the layout is a decision. Today `wrangler.jsonc` serves the repo root, which is the JS app.
+  Putting the Rust build at `/` and the JS app at `/legacy` means a deploy step that assembles one asset directory
+  (the CSP hash in `_headers` changes with every build, and `.assetsignore` hides `crates/` and `dist`). Choose
+  that layout, then deploy by hand (`npx wrangler deploy`); nothing here deploys.
+- **Live checks:** Test connection, Find models, Check which models work, the web transport, Keep originals and
+  the idle unload against a real llama-server or Ollama.
+- **Browser hardware:** camera capture (9b), a real paste into the Add screen (11.10), the storage banners'
+  reconnect and leave-page paths (11.5).
+
 ## Test strategy
 
 - **Oracle tests** reuse the spike harnesses: S1 `harness/run.js` (imaging), S3 `run.mjs` (storage), S4
