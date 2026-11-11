@@ -5,7 +5,7 @@
 
 use serde_json::{json, Value};
 use vishion_core::import::{self, Options};
-use vishion_core::model::{Assignment, Settings};
+use vishion_core::model::{Assignment, Page, Settings};
 use vishion_store::fsa::FsaStore;
 use vishion_store::idb::IdbStore;
 use vishion_store::projects::Projects;
@@ -150,8 +150,25 @@ pub async fn rewrite_all(mode: &str) -> std::result::Result<String, JsValue> {
                 for u in &o.unreadable {
                     unreadable.push(format!("{name}/{}: {}", u.id, u.error));
                 }
-                for p in o.assignment.pages.values() {
-                    pr.save_page(&name, p).await.map_err(err)?;
+                // `open_project` changes pages in memory only, as `fs.openProject` does: `order` = position
+                // (`S.reindex()`) and `transcribing` -> `pending`. "Untouched" is the page as the file holds it,
+                // read through the same parser; the opened copy must differ from it by exactly those changes.
+                for (id, p) in &o.assignment.pages {
+                    let path = format!("{name}/pages/{id}.json");
+                    let text = pr.read_text(&path).await.map_err(err)?.ok_or_else(|| err(format!("{path} vanished")))?;
+                    let mut stored = Page::from_json(&text).map_err(err)?;
+                    stored.1 = Some(id.clone());
+                    let mut opened = stored.clone();
+                    if let Some(n) = p.get("order") {
+                        opened.set("order", n.clone());
+                    }
+                    if opened.status() == "transcribing" {
+                        opened.set("status", json!("pending"));
+                    }
+                    if opened != *p {
+                        return Err(err(format!("{path}: open_project changed more than order/status in memory")));
+                    }
+                    pr.save_page(&name, &stored).await.map_err(err)?;
                     pages += 1;
                 }
                 pr.save_meta(&name, &mut o.assignment.meta, None).await.map_err(err)?;
