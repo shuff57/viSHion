@@ -43,9 +43,16 @@ impl Rig {
         r
     }
 
+    /// `n` frames, 100 ms apart (10 fps: slower than a smooth frame, so the wordmark's scan-in waits for its
+    /// fallback frame; see `frames_at`).
     pub fn frames(&mut self, n: usize) {
+        self.frames_at(n, 0.1);
+    }
+
+    /// `n` frames, `dt` seconds apart on the clock egui sees.
+    pub fn frames_at(&mut self, n: usize, dt: f64) {
         for _ in 0..n {
-            self.t += 0.1;
+            self.t += dt;
             let input = egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(self.size.0, self.size.1))),
                 time: Some(self.t),
@@ -625,10 +632,25 @@ mod tests {
                 _ => false,
             })
         }
+        // Rig::demo ran 8 frames of 100 ms: frames that slow are the heavy start of a page load, so the scan
+        // waits for a smooth one rather than being found half played
         let mut r = Rig::demo();
-        // Rig::demo ran 8 frames: the scan starts on the third and is driven by capped frame times
+        assert!(!bar(&r), "no scan on slow frames");
+        // smooth frames (60 fps) start it, and it follows the clock: 1.6 s is about 96 of them
+        r.frames_at(30, 1.0 / 60.0);
         assert!(bar(&r), "the bar is crossing during the scan-in");
-        r.frames(80);
+        r.frames_at(80, 1.0 / 60.0);
+        assert!(!bar(&r), "the wordmark is at rest after the scan");
+        r.frames_at(120, 1.0 / 60.0);
+        assert!(!bar(&r), "it plays once");
+
+        // frames that never get smooth start it anyway (frame 40), and it still lasts 1.6 s of the clock
+        let mut r = Rig::demo();
+        r.frames(31);
+        assert!(!bar(&r), "still waiting on frame 39");
+        r.frames(5);
+        assert!(bar(&r), "started anyway on frame 40");
+        r.frames(20);
         assert!(!bar(&r), "the wordmark is at rest after the scan");
     }
 
