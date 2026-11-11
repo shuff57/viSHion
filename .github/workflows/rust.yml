@@ -3,23 +3,38 @@ name: rust
 on:
   push:
     branches: [rust-rewrite, main]
+    # Docs cannot reach a build, a test or the deploy (its asset dir is crates/app/dist, written by build.mjs).
+    paths-ignore: ['docs/**', '**/*.md']
   pull_request:
+    paths-ignore: ['docs/**', '**/*.md']
+
+# One run per branch: a newer push (or the PR run for the same branch) cancels the run it supersedes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
   WASM_BINDGEN_VERSION: 0.2.129
+  # CI builds once from a clean checkout: incremental state and debuginfo are only cost.
+  CARGO_INCREMENTAL: 0
+  CARGO_PROFILE_DEV_DEBUG: 0
+  CARGO_PROFILE_TEST_DEBUG: 0
 
 jobs:
-  test-and-web:
+  test:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: wasm32-unknown-unknown
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: native
+          # a red run still saves its dependency builds; otherwise one failure leaves every later run cold
+          cache-on-failure: true
 
       - name: Core stays pure (no egui / web-sys / tokio)
         run: |
@@ -30,6 +45,21 @@ jobs:
       - name: cargo test
         run: cargo test --workspace --locked
 
+  web:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: wasm
+          cache-on-failure: true
+
       # .cargo/config.toml passes --cfg=web_sys_unstable_apis to every wasm32 build (web clipboard).
       - name: wasm32 build
         run: cargo build -p vishion-app --lib --target wasm32-unknown-unknown --release --locked
@@ -37,8 +67,11 @@ jobs:
       - name: wasm32 workspace build (all crates, bin included)
         run: cargo build --workspace --target wasm32-unknown-unknown --locked
 
+      # prebuilt release binary instead of compiling it (~1 min)
       - name: Install wasm-bindgen-cli (must match Cargo.lock)
-        run: cargo install wasm-bindgen-cli --version "$WASM_BINDGEN_VERSION" --locked
+        uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-bindgen@${{ env.WASM_BINDGEN_VERSION }}
 
       - uses: actions/setup-node@v4
         with:
@@ -52,7 +85,14 @@ jobs:
           npm ci
           node build.mjs
 
-      - name: Deploy-leak check (the asset dir is the Rust build only: no JS app, sources or screenshots)
+      # for the parity job, before the checks below write their screenshots into dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-dist
+          path: crates/app/dist
+          retention-days: 1
+
+      - name: "Deploy-leak check (the asset dir is the Rust build only: no JS app, sources or screenshots)"
         working-directory: crates/app/web
         run: node check-assetsignore.mjs
 
@@ -62,18 +102,6 @@ jobs:
           CHROME: /usr/bin/google-chrome
         run: node check.mjs
 
-      # The native binary needs a GL context: software Mesa under Xvfb. Not yet proven on a hosted runner.
-      - name: Native vs web parity (same demo assignment, same controls, 44pt targets)
-        continue-on-error: true
-        working-directory: crates/app/web
-        env:
-          CHROME: /usr/bin/google-chrome
-          LIBGL_ALWAYS_SOFTWARE: "1"
-        run: |
-          sudo apt-get update && sudo apt-get install -y xvfb libgl1-mesa-dri libxkbcommon-x11-0
-          cargo build -p vishion-app --locked
-          xvfb-run -a node parity.mjs
-
       - name: Store oracle (JS writes -> Rust reads, rewrites -> JS reloads deep-equal; IDB + folder)
         working-directory: tools/store-oracle
         env:
@@ -82,3 +110,43 @@ jobs:
           npm ci
           node build.mjs
           node run.mjs
+
+  # The native binary needs a GL context: software Mesa under Xvfb. Not yet proven on a hosted runner, so it
+  # does not gate (it was a continue-on-error step after the CSP check; it still runs only when `web` passes).
+  parity:
+    needs: web
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      # reuses the test job's dependency builds; never saves, so it cannot replace that cache with a smaller one
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: native
+          save-if: false
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: web-dist
+          path: crates/app/dist
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: crates/app/web/package-lock.json
+
+      - name: Native vs web parity (same demo assignment, same controls, 44pt targets)
+        working-directory: crates/app/web
+        env:
+          CHROME: /usr/bin/google-chrome
+          LIBGL_ALWAYS_SOFTWARE: "1"
+        run: |
+          npm ci
+          sudo apt-get update && sudo apt-get install -y xvfb libgl1-mesa-dri libxkbcommon-x11-0
+          cargo build -p vishion-app --locked
+          xvfb-run -a node parity.mjs
