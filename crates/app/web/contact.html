@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Send a question or a note to the maker of viSHion.">
+<title>Contact - viSHion</title>
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<!-- No inline script: the site's CSP (root _headers) allows only hashed inline scripts in index.html. The form
+     script comes from contact.lefthanddev.com, which the CSP lists in script-src and connect-src. -->
+<style>
+  @font-face { font-family: "Instrument Sans"; font-weight: 400; font-display: swap; src: url("fonts/instrument-sans-latin-400-normal.woff2") format("woff2"); }
+  @font-face { font-family: "Instrument Sans"; font-weight: 600; font-display: swap; src: url("fonts/instrument-sans-latin-600-normal.woff2") format("woff2"); }
+  @font-face { font-family: "Source Serif 4"; font-weight: 600; font-display: swap; src: url("fonts/source-serif-4-latin-600-normal.woff2") format("woff2"); }
+  /* css/tokens.css */
+  :root { color-scheme: light dark; --bg: #EEF1F5; --surface: #FFFFFF; --sunken: #F3F5F8; --ink: #141B2D; --on-ink: #FFFFFF;
+    --muted: #5A6477; --line: #D3D9E2; --line2: #8792A6; --bad: #A5221B; --accent: #26358F; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #0F131C; --surface: #171C28; --sunken: #1D2331; --ink: #E8ECF3; --on-ink: #0F131C;
+      --muted: #9AA5B8; --line: #2B3345; --line2: #6F7A90; --bad: #FF9C92; --accent: #9DB0FF; }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body { min-height: 100vh; background: var(--bg); color: var(--ink); font: 15px/1.5 "Instrument Sans", system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { display: flex; align-items: center; gap: 12px; min-height: 64px; padding: 8px 24px 9px; background: var(--surface); border-bottom: 1px solid var(--line); }
+  .brand { display: flex; align-items: center; gap: 10px; color: var(--ink); text-decoration: none; font: 600 22px/1 "Source Serif 4", Georgia, serif; }
+  .brand img { width: 30px; height: 30px; }
+  .back { margin-left: auto; display: inline-flex; align-items: center; min-height: 44px; padding: 0 12px; border-radius: 8px;
+    color: var(--ink); font-weight: 600; text-decoration: none; }
+  .back:hover { background: var(--sunken); }
+  a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 8px; }
+  main { width: 100%; max-width: 40rem; margin: 0 auto; padding: 40px 16px 56px; }
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 24px; }
+  h1 { margin: 0 0 8px; font: 600 30px/1.2 "Source Serif 4", Georgia, serif; }
+  .lede { margin: 0 0 20px; color: var(--muted); }
+  .contact { --lhd-cf-accent: var(--accent); --lhd-cf-field-bg: var(--surface); --lhd-cf-border: 1px solid var(--line2); --lhd-cf-radius: 8px;
+    --lhd-cf-btn-bg: var(--ink); --lhd-cf-btn-fg: var(--on-ink); --lhd-cf-error: var(--bad); --lhd-cf-max: none; }
+  @media (max-width: 480px) { header { padding: 8px 16px 9px; } main { padding-top: 24px; } .card { padding: 18px; } }
+</style>
+</head>
+<body>
+<header>
+  <a class="brand" href="./"><img src="favicon.svg" alt="">viSHion</a>
+  <a class="back" href="./">Back to viSHion</a>
+</header>
+<main>
+  <div class="card">
+    <h1>Contact</h1>
+    <p class="lede">A question, an idea or a problem with viSHion? Send it here and the reply comes to your email.</p>
+    <div class="contact" data-lhd-contact data-site="vishion"></div>
+  </div>
+</main>
+<script src="https://contact.lefthanddev.com/embed.js" defer></script>
+</body>
+</html>
