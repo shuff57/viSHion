@@ -13,7 +13,7 @@ const wranglerJs = path.join(here, 'node_modules/wrangler/bin/wrangler.js');
 const port = +(process.env.PORT || 8790);
 
 const dist = path.join(repo, 'crates/app/dist');
-const mustServe = ['index.html', 'favicon.svg', 'vishion_app.js', 'vishion_app_bg.wasm', 'katex.min.js'];
+const mustServe = ['index.html', 'favicon.svg', 'vishion_app.js', 'vishion_app_bg.wasm', 'katex.min.js', 'contact.html'];
 // the site is only what the build wrote: not the old JS app, not the sources, not screenshots from check runs
 const mustHide = [
   'js/main.js', 'css/base.css', 'tests/words.test.js', 'Cargo.toml', 'crates/README.md', 'crates/core/src/lib.rs',

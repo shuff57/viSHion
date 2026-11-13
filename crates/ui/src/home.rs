@@ -39,7 +39,14 @@ pub(crate) enum HomeAct {
     DownloadZip(String),
     Folder(&'static str),
     Settings,
+    /// The topbar's Contact: the contact page (`CONTACT_URL`) in a new tab.
+    Contact,
 }
+
+/// The contact page (the shared contact.lefthanddev.com form). The web build opens the copy next to the app
+/// (`contact.html`, so a preview stays on its own host); the desktop app opens the published site.
+pub(crate) const CONTACT_URL: &str =
+    if cfg!(target_arch = "wasm32") { "contact.html" } else { "https://vishion.lefthanddev.com/contact.html" };
 
 /// `OCR.fmtAgo` for a time in ms; older than a day is the date.
 pub fn ago(now_ms: i64, then_ms: f64) -> String {
@@ -97,8 +104,8 @@ fn text_box(ctl: &mut Ctl, ui: &mut Ui, t: &Tokens, id: &str, name: &str, hint: 
 
 pub(crate) fn show(ctx: &egui::Context, ctl: &mut Ctl, t: &Tokens, h: &mut Home, storage: &str, narrow: bool, now: i64) -> Vec<HomeAct> {
     let mut acts = vec![];
-    // header.js `forHome`: the wordmark (it scans in once as the page loads) and Settings on the topbar. The
-    // wordmark is not a link here.
+    // header.js `forHome`: the wordmark (it scans in once as the page loads) and Settings on the topbar, with
+    // Contact beside Settings. The wordmark is not a link here.
     let pad = if narrow { 16.0 } else { 24.0 };
     egui::TopBottomPanel::top("home-hdr")
         .min_height(64.0)
@@ -110,6 +117,9 @@ pub(crate) fn show(ctx: &egui::Context, ctl: &mut Ctl, t: &Tokens, h: &mut Home,
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if widgets::icon_button(ctl, ui, t, C::new("settings", "Settings", crate::twin::HEADER), widgets::Icon::Gear, false) {
                         acts.push(HomeAct::Settings);
+                    }
+                    if widgets::button(ctl, ui, t, C::new("contact", "Contact", crate::twin::HEADER), "Contact", Look::Ghost, 0.0) {
+                        acts.push(HomeAct::Contact);
                     }
                 });
             });

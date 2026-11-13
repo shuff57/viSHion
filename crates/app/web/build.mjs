@@ -67,6 +67,9 @@ for (const f of fs.readdirSync(path.join(here, 'vendor/katex/fonts'))) {
 }
 fs.copyFileSync(path.join(here, 'index.html'), path.join(dist, 'index.html'));
 fs.copyFileSync(path.join(repo, 'favicon.svg'), path.join(dist, 'favicon.svg'));
+// the contact page the home topbar's Contact button opens (the shared contact.lefthanddev.com form; no inline script,
+// so the CSP needs no hash for it)
+fs.copyFileSync(path.join(here, 'contact.html'), path.join(dist, 'contact.html'));
 // check and parity runs drop screenshots into dist; none of that is part of the site
 fs.writeFileSync(path.join(dist, '.assetsignore'), '*.png\n.assetsignore\n');
 

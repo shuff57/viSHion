@@ -422,6 +422,10 @@ pub(crate) fn show(app: &mut App, ctx: &egui::Context, t: &Tokens) {
     };
     for a in home_acts {
         use crate::home::HomeAct;
+        if matches!(a, HomeAct::Contact) {
+            ctx.open_url(egui::OpenUrl::new_tab(crate::home::CONTACT_URL));
+            continue;
+        }
         if matches!(a, HomeAct::Settings) {
             // Settings from the home screen: an open assignment's settings, or the settings alone, asked for first
             match session.as_mut() {
@@ -447,7 +451,7 @@ pub(crate) fn show(app: &mut App, ctx: &egui::Context, t: &Tokens) {
             HomeAct::ImportLegacy => Cmd::ImportLegacy,
             HomeAct::Folder(what) => Cmd::Folder(what.to_string()),
             HomeAct::DownloadZip(slug) => Cmd::DownloadZip { slug },
-            HomeAct::Settings => unreachable!("handled above"),
+            HomeAct::Settings | HomeAct::Contact => unreachable!("handled above"),
         });
         // the list is asked for again after a change
         home.cards = None;
